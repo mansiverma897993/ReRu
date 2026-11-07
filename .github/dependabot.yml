@@ -14,3 +14,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(ci)"
+    ignore:
+      # The pinned version is the minimum supported Rust, not the latest.
+      - dependency-name: dtolnay/rust-toolchain

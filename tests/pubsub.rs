@@ -6,6 +6,7 @@ mod common;
 
 use client::{array, integer, ok, Client, Reply};
 use common::Server;
+use std::time::{Duration, Instant};
 
 fn bulk(value: &[u8]) -> Reply {
     Reply::Bulk(Some(value.to_vec()))
@@ -129,6 +130,15 @@ fn disconnect_releases_subscriptions() {
         );
         assert_eq!(listener.call(&[b"QUIT"]), ok());
     }
-    assert_eq!(publisher.call(&[b"PUBSUB", b"CHANNELS"]), array(vec![]));
+    // The listener thread unregisters after it replies to QUIT, so give the
+    // cleanup a bounded window before asserting the final state.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while publisher.call(&[b"PUBSUB", b"CHANNELS"]) != array(vec![]) {
+        assert!(
+            Instant::now() < deadline,
+            "subscription was not released after the client disconnected"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(publisher.call(&[b"PUBLISH", b"gone", b"x"]), integer(0));
 }

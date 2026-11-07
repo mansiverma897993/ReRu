@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="ReRu — a Redis-compatible data server written in Rust">
+  <title>ReRu — a Redis-compatible data server written in Rust</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#080b10"/>
+      <stop offset="0.6" stop-color="#0c1118"/>
+      <stop offset="1" stop-color="#121a26"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ef4444"/>
+      <stop offset="0.55" stop-color="#f97316"/>
+      <stop offset="1" stop-color="#fbbf24"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.1" r="0.7">
+      <stop offset="0" stop-color="#ef4444" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#ef4444" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.85" cy="0.95" r="0.6">
+      <stop offset="0" stop-color="#f59e0b" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#f59e0b" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#ffffff" stroke-opacity="0.04" stroke-width="1"/>
+    </pattern>
+    <clipPath id="frame">
+      <rect width="1280" height="640" rx="24"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect width="1280" height="640" fill="url(#bg)"/>
+    <rect width="1280" height="640" fill="url(#grid)"/>
+    <rect width="1280" height="640" fill="url(#glow)"/>
+    <rect width="1280" height="640" fill="url(#glow2)"/>
+
+    <g opacity="0.16" stroke="url(#accent)" fill="none" stroke-width="1.5">
+      <circle cx="640" cy="300" r="220"/>
+      <circle cx="640" cy="300" r="290"/>
+      <circle cx="640" cy="300" r="360"/>
+    </g>
+
+    <rect x="558" y="96" width="164" height="164" rx="38" fill="#0e1520" stroke="url(#accent)" stroke-width="3"/>
+    <g stroke="url(#accent)" stroke-width="5" fill="none" stroke-linecap="round">
+      <ellipse cx="640" cy="140" rx="38" ry="13"/>
+      <path d="M602 140 V198 A38 13 0 0 0 678 198 V140"/>
+      <path d="M602 169 A38 13 0 0 0 678 169" opacity="0.55"/>
+    </g>
+
+    <text x="640" y="372" text-anchor="middle" font-family="'Inter','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif" font-size="124" font-weight="800" letter-spacing="-3" fill="#f8fafc">Re<tspan fill="url(#accent)">Ru</tspan></text>
+
+    <text x="640" y="424" text-anchor="middle" font-family="'Inter','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif" font-size="30" fill="#a8b3c4">A Redis-compatible data server, written in Rust.</text>
+
+    <g font-family="'Inter','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif" font-size="17" font-weight="700" fill="#7d8aa0" letter-spacing="1.6">
+      <text x="640" y="492" text-anchor="middle">RESP2   ·   203 COMMANDS   ·   204 TESTS   ·   MIT</text>
+    </g>
+
+    <text x="640" y="568" text-anchor="middle" font-family="'Inter','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif" font-size="18" fill="#5b6880">github.com/mansiverma897993/ReRu</text>
+
+    <rect x="80" y="612" width="1120" height="3" rx="1.5" fill="url(#accent)" opacity="0.55"/>
+  </g>
+
+  <rect x="1" y="1" width="1278" height="638" rx="23" fill="none" stroke="#ffffff" stroke-opacity="0.09"/>
+</svg>

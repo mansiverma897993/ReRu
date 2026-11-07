@@ -16,6 +16,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - Open-source project scaffolding: MIT license, contributing guide, code of
   conduct, security policy, changelog, architecture and interoperability docs,
   issue and pull request templates, and CI.
+- README banner, at-a-glance statistics, feature cards, architecture diagram,
+  and social preview assets.
 
 ### Fixed
 
@@ -24,6 +26,11 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - Integration tests no longer race for ports or temporary file names. Each
   server binds an operating-system-assigned port and reports it on startup, and
   temporary paths include a per-process sequence number.
+- Replaced the deprecated `AtomicUsize::fetch_update` with a compare-exchange
+  loop, so the client-limit check builds cleanly on both the MSRV and the
+  newest stable toolchain.
+- The pub/sub disconnect test allows a bounded window for the listener thread
+  to release its subscriptions, removing a Windows-only flake.
 
 ## [0.1.0-alpha.1] - 2026-10-28
 
