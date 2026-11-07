@@ -8,6 +8,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- SPDX license headers (`// SPDX-License-Identifier: AGPL-3.0-only`) added to all files under `src/` and `tests/`.
+
 ## [0.1.0-alpha.1] - 2026-11-07
 
 First public preview. Experimental; not a production Redis replacement.

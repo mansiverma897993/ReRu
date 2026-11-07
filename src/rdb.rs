@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Redis RDB wire-format interoperability. Encodings are implemented from the
 //! published format, with fixtures and cross-server tests as compatibility checks.
 use crate::{mark_modified, protocol, remove_expired, sorted_sets::SortedSet, Entry, Store, Value};
