@@ -1,53 +1,66 @@
-# ReRu
+<div align="center">
 
-**A Redis-compatible cache and data structure server written in Rust.**
+<img src="docs/assets/banner.svg" alt="ReRu — a Redis-compatible data server written in Rust" width="100%">
 
-[![CI](https://github.com/mansiverma897993/ReRu/actions/workflows/ci.yml/badge.svg)](https://github.com/mansiverma897993/ReRu/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
+<br>
 
-ReRu speaks the RESP2 protocol, so existing Redis clients connect without
-changes. It implements a growing subset of Redis commands and persistence
-formats in safe, dependency-light Rust — one small crate, one runtime
-dependency, no async executor.
+[![CI](https://img.shields.io/github/actions/workflow/status/mansiverma897993/ReRu/ci.yml?style=flat-square&label=CI&logo=githubactions&logoColor=white)](https://github.com/mansiverma897993/ReRu/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-3DA639?style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-DEA584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Status](https://img.shields.io/badge/status-experimental-F97316?style=flat-square)](docs/ROADMAP.md)
+[![PRs](https://img.shields.io/badge/PRs-welcome-6E56CF?style=flat-square)](CONTRIBUTING.md)
+![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macos%20%7C%20windows-2F81F7?style=flat-square)
 
-> **Status: experimental preview (`0.1.0-alpha.1`).** ReRu is built for
-> development, compatibility experiments, and learning. It is **not** a
-> production Redis replacement. See [Project status](#project-status).
+<p><b>ReRu speaks RESP2, so existing Redis clients connect without changes.</b><br>
+It reimplements a growing slice of Redis and its persistence formats in safe, dependency-light Rust.</p>
 
-[Compatibility](docs/COMPATIBILITY.md) ·
-[Roadmap](docs/ROADMAP.md) ·
-[Architecture](docs/ARCHITECTURE.md) ·
-[Release notes](docs/RELEASE_NOTES.md) ·
-[Changelog](CHANGELOG.md)
+[**Quick start**](#quick-start) ·
+[**Compatibility**](docs/COMPATIBILITY.md) ·
+[**Architecture**](docs/ARCHITECTURE.md) ·
+[**Roadmap**](docs/ROADMAP.md) ·
+[**Contributing**](CONTRIBUTING.md)
 
-## Contents
+</div>
 
-- [Why ReRu](#why-reru)
-- [Quick start](#quick-start)
-- [Connect a client](#connect-a-client)
-- [Features](#features)
-- [Server options](#server-options)
-- [Persistence](#persistence)
-- [Authentication](#authentication)
-- [Docker](#docker)
-- [Development](#development)
-- [Contributing](#contributing)
-- [Project status](#project-status)
-- [License](#license)
+> [!WARNING]
+> **Experimental preview (`0.1.0-alpha.1`).** ReRu is built for development,
+> compatibility experiments, and learning. It is **not** a production Redis
+> replacement. See [Project status](#project-status).
+
+## At a glance
+
+<table>
+  <tr>
+    <td align="center" width="25%"><strong>203</strong><br><sub>Redis command names wired</sub></td>
+    <td align="center" width="25%"><strong>204</strong><br><sub>tests passing</sub></td>
+    <td align="center" width="25%"><strong>1</strong><br><sub>runtime dependency</sub></td>
+    <td align="center" width="25%"><strong>10</strong><br><sub>eviction policies</sub></td>
+  </tr>
+</table>
+
+<p align="center"><sub>44.2% command-name coverage against Redis 8.10.2 metadata. Name presence, not complete behavior.</sub></p>
 
 ## Why ReRu
 
-- **Familiar protocol.** RESP2 over TCP. Use `redis-cli`, `redis-py`, `ioredis`,
-  Lettuce, or any Redis client that supports the commands listed in the
-  [compatibility inventory](docs/COMPATIBILITY.md).
-- **Small and readable.** About 21k lines of straight-line Rust with one
-  dependency. Every subsystem is a plain module with its own tests.
-- **Batteries included.** TTLs, eviction, transactions, pub/sub, streams with
-  consumer groups, persistence, replication, and geospatial queries.
-- **Research-friendly.** Each command is implemented against the pinned Redis
-  8.10.2 behavior reference, with differential tests against a live Redis where
-  possible.
+<table>
+  <tr>
+    <td align="center" width="33%" valign="top">
+      <h3>🧩</h3>
+      <strong>Familiar protocol</strong><br>
+      <sub>Binary-safe RESP2 over TCP. Works with <code>redis-cli</code>, <code>redis-py</code>, <code>ioredis</code>, Lettuce, and any client that supports the listed commands.</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <h3>🪶</h3>
+      <strong>Small and readable</strong><br>
+      <sub>About 21k lines of straight-line Rust with one dependency. Every subsystem is a plain module with its own tests.</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <h3>🔬</h3>
+      <strong>Research-friendly</strong><br>
+      <sub>Each command follows the pinned Redis 8.10.2 reference, with differential tests against a live Redis where possible.</sub>
+    </td>
+  </tr>
+</table>
 
 ## Quick start
 
@@ -93,23 +106,56 @@ print(client.get("greeting"))
 
 ## Features
 
-| Area | Implemented scope |
-| --- | --- |
-| Data structures | Strings, lists, hashes, sets, sorted sets, bitmaps, streams with consumer groups, geospatial commands |
-| Approximate counting | HyperLogLog distinct counts and unions, with Redis dense/sparse binary interchange |
-| Cache behavior | Conditional writes, TTLs, background expiry, ten eviction policies, configurable memory estimates |
-| Transactions | `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` |
-| Messaging | Local pub/sub, blocking reads, stream acknowledgements, pending-message recovery |
-| Persistence | ReRu snapshots, single-file AOF with background compaction, a subset of Redis RDB |
-| Replication | Read-only ReRu replicas using a snapshot-plus-stream protocol |
-| Client connections | `HELLO 2`, `SELECT 0`, connection IDs/names/library metadata, `RESET` |
-| Operations | Client limits, runtime memory configuration, partial `INFO` metrics |
-| Authentication | Default-user passwords, `AUTH`, `ACL WHOAMI`, authenticated replication |
+<table>
+  <tr>
+    <td align="center" width="33%" valign="top">
+      <h3>🧱</h3>
+      <strong>Data structures</strong><br>
+      <sub>Strings, lists, hashes, sets, sorted sets, bitmaps, streams with consumer groups, and geospatial queries.</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <h3>⚡</h3>
+      <strong>Cache behavior</strong><br>
+      <sub>Conditional writes, TTLs, background expiry, ten eviction policies, and configurable memory estimates.</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <h3>🔁</h3>
+      <strong>Transactions &amp; messaging</strong><br>
+      <sub><code>MULTI</code>, <code>EXEC</code>, <code>WATCH</code>, blocking reads, local pub/sub, stream acknowledgements, and pending-message recovery.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%" valign="top">
+      <h3>💾</h3>
+      <strong>Persistence</strong><br>
+      <sub>ReRu snapshots, a single-file AOF with online rewrite, and a tested subset of Redis RDB.</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <h3>🛰️</h3>
+      <strong>Replication</strong><br>
+      <sub>Read-only ReRu replicas using an authenticated snapshot-plus-stream protocol.</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <h3>🔐</h3>
+      <strong>Auth &amp; operations</strong><br>
+      <sub>Default-user <code>AUTH</code>, client limits, runtime memory configuration, and partial <code>INFO</code> metrics.</sub>
+    </td>
+  </tr>
+</table>
 
 **203 of 459 command metadata entries** from Redis 8.10.2 have implementation
 paths: **44.2% command-name coverage**. This counts command names, not complete
 behavior. Supported options, differences, and tests are listed in the
 [compatibility inventory](docs/COMPATIBILITY.md).
+
+## Architecture
+
+<img src="docs/assets/architecture.svg" alt="ReRu request path: clients, RESP2 parser, command dispatch, shared store, then snapshots, AOF, RDB, and replicas" width="100%">
+
+One connection thread per client. Writes are serialized by the command gate and
+fan out from a single write-out point. Read the full
+[architecture notes](docs/ARCHITECTURE.md) for the module map and the command
+path.
 
 ## Server options
 
@@ -179,6 +225,11 @@ beyond local development.
 
 ## Development
 
+<details>
+<summary><b>Commands, layout, and test setup</b></summary>
+
+<br>
+
 ```sh
 cargo build                    # debug build
 cargo test                     # 204 tests
@@ -201,11 +252,14 @@ and SHA-256 checksum under `target/releases`.
 src/            server modules (one per subsystem)
 tests/          integration tests, one file per area
 docs/           compatibility, roadmap, architecture, testing notes
+docs/assets/    banner, diagram, and social preview
 scripts/        packaging and Redis interoperability helpers
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit
 together.
+
+</details>
 
 ## Contributing
 
@@ -217,6 +271,23 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 - Report vulnerabilities privately per [SECURITY.md](SECURITY.md).
 - Claiming a command? Add it to the [compatibility inventory](docs/COMPATIBILITY.md)
   and cover it with an integration test in `tests/`.
+
+<table>
+  <tr>
+    <td align="center" width="33%" valign="top">
+      <strong>🐛 Found a bug?</strong><br>
+      <sub><a href="https://github.com/mansiverma897993/ReRu/issues/new?template=bug_report.yml">Open a bug report</a></sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <strong>💡 Have an idea?</strong><br>
+      <sub><a href="https://github.com/mansiverma897993/ReRu/issues/new?template=feature_request.yml">Request a feature</a></sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <strong>🔒 Found a vulnerability?</strong><br>
+      <sub><a href="https://github.com/mansiverma897993/ReRu/security/advisories/new">Report it privately</a></sub>
+    </td>
+  </tr>
+</table>
 
 ## Project status
 

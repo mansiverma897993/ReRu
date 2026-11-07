@@ -29,15 +29,21 @@ impl Limits {
 
     pub fn acquire(self: &Arc<Self>) -> Option<Permit> {
         self.received.fetch_add(1, Ordering::Relaxed);
-        match self
-            .active
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |active| {
-                (active < self.maximum()).then(|| active + 1)
-            }) {
-            Ok(_) => Some(Permit(Arc::clone(self))),
-            Err(_) => {
+        let maximum = self.maximum();
+        let mut active = self.active.load(Ordering::Relaxed);
+        loop {
+            if active >= maximum {
                 self.rejected.fetch_add(1, Ordering::Relaxed);
-                None
+                return None;
+            }
+            match self.active.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(Permit(Arc::clone(self))),
+                Err(current) => active = current,
             }
         }
     }
