@@ -267,7 +267,8 @@ together.
 ## Contributing
 
 Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[roadmap](docs/ROADMAP.md). Good first issues are labeled
+[roadmap](docs/ROADMAP.md). See who has helped in
+[CONTRIBUTORS.md](CONTRIBUTORS.md). Good first issues are labeled
 [`good first issue`](https://github.com/mansiverma897993/ReRu/labels/good%20first%20issue).
 
 - Read the [Code of Conduct](CODE_OF_CONDUCT.md).

@@ -8,6 +8,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Contributor recognition: `.all-contributorsrc` and `CONTRIBUTORS.md` seeded from existing commit authors, linked from the README and CONTRIBUTING.md.
+
 ## [0.1.0-alpha.1] - 2026-11-07
 
 First public preview. Experimental; not a production Redis replacement.
