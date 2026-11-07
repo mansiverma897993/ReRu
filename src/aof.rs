@@ -430,13 +430,20 @@ pub fn replay(path: &Path, store: &Store) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     fn paths() -> (PathBuf, PathBuf) {
+        // Include a sequence number so parallel test threads never share a
+        // timestamp, which would make one test read another test's file.
+        let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let base =
-            std::env::temp_dir().join(format!("reru-rewrite-{}-{unique}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(
+            "reru-rewrite-{}-{unique}-{sequence}",
+            std::process::id()
+        ));
         let temporary = base.with_extension("tmp");
         (base, temporary)
     }
