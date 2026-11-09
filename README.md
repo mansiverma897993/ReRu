@@ -152,6 +152,9 @@ path.
 
 ## Server options
 
+Defaults, valid values, valid combinations, and error text for every flag are in
+the [CLI reference](docs/CLI.md).
+
 | Option | Default | Description |
 | --- | --- | --- |
 | `--port PORT` | `6379` | TCP port to listen on |

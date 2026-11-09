@@ -8,6 +8,11 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- CLI reference: every startup flag documented in [docs/CLI.md](docs/CLI.md),
+  linked from the README and the architecture notes.
+
 ## [0.1.0-alpha.1] - 2026-11-07
 
 First public preview. Experimental; not a production Redis replacement.
