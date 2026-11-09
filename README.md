@@ -273,25 +273,8 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 
 - Read the [Code of Conduct](CODE_OF_CONDUCT.md).
 - Report vulnerabilities privately per [SECURITY.md](SECURITY.md).
-- Claiming a command? Add it to the [compatibility inventory](docs/COMPATIBILITY.md)
-  and cover it with an integration test in `tests/`.
-
-<table>
-  <tr>
-    <td align="center" width="33%" valign="top">
-      <strong>🐛 Found a bug?</strong><br>
-      <sub><a href="https://github.com/mansiverma897993/ReRu/issues/new?template=bug_report.yml">Open a bug report</a></sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <strong>💡 Have an idea?</strong><br>
-      <sub><a href="https://github.com/mansiverma897993/ReRu/issues/new?template=feature_request.yml">Request a feature</a></sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <strong>🔒 Found a vulnerability?</strong><br>
-      <sub><a href="https://github.com/mansiverma897993/ReRu/security/advisories/new">Report it privately</a></sub>
-    </td>
-  </tr>
-</table>
+- Found a bug? [Open a bug report](https://github.com/mansiverma897993/ReRu/issues/new?template=bug_report.yml).
+- Have an idea? [Request a feature](https://github.com/mansiverma897993/ReRu/issues/new?template=feature_request.yml).
 
 ## Project status
 
