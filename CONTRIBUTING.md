@@ -132,6 +132,14 @@ Group related changes in one commit. Keep unrelated refactors separate.
 - A maintainer reviews for correctness, test coverage, and compatibility notes.
 - Do not force-push after review starts unless asked; add follow-up commits.
 
+## Getting credit for your work
+
+Contributors are listed in [CONTRIBUTORS.md](CONTRIBUTORS.md), maintained with
+the [all-contributors](https://allcontributors.org) spec (`.all-contributorsrc`).
+Once your first PR lands, a maintainer or the all-contributors bot can add you;
+comment `@all-contributors please add @<username> for <contributions>` on any
+issue or PR.
+
 ## Reporting bugs and security issues
 
 - Functional bugs: open an issue with the bug report template.
