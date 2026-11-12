@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use std::io::{self, Cursor, Read};
 
 const MAGIC: &[u8; 8] = b"RERUREP1";

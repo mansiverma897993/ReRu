@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
 use std::path::PathBuf;

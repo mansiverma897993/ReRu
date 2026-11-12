@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use std::io;
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

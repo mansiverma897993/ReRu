@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Consumer-group state and RESP2 command handling. All mutations use the server
 //! command gate, including pending-entry ownership and blocking delivery.
 use crate::{

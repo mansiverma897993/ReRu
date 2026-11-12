@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Per-socket RESP2 negotiation and client metadata. No dataset mutations.
 use crate::{protocol, Store};
 use std::io;

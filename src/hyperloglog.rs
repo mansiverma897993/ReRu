@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Redis HYLL string interchange and approximate distinct counting.
 //! The estimator follows Ertl, arXiv:1702.01284, equations 32, 33 and 37.
 //! New values use dense storage; sparse strings are accepted on import.

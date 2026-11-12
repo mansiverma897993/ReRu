@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use std::io::{self, BufRead, Read};
 
 const MAX_BULK: usize = 64 * 1024 * 1024;
