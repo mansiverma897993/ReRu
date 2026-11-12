@@ -1,7 +1,8 @@
 # Architecture
 
 This document explains how ReRu is put together, so a new contributor can find
-the right file before changing behavior.
+the right file before changing behavior. The startup flags of the binary are
+documented in [CLI.md](CLI.md).
 
 ## Process model
 
