@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use crate::{execute_command, protocol, Entry, Store, Value};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -403,7 +404,7 @@ pub fn replay(path: &Path, store: &Store) -> io::Result<()> {
                 .take()
                 .ok_or_else(|| invalid("AOF EXEC without MULTI"))?;
             for item in batch {
-                let reply = execute_command(&item, store, false);
+                let reply = execute_command(&item, store, false, None);
                 if reply.starts_with(b"-") {
                     return Err(invalid("AOF command failed during replay"));
                 }

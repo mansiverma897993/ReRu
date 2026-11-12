@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use crate::{mark_evicted, protocol, Entry, Store, Value};
 use std::collections::{hash_map::RandomState, HashMap};
 use std::hash::BuildHasher;

@@ -117,6 +117,10 @@ The index's memory overhead is not included in ReRu's logical maxmemory estimate
 `--maxclients COUNT` defaults to 10000 and requires a positive integer. Accepted
 connections, including replication and subscriptions, hold a slot until their
 handler exits. Excess clients receive `ERR max number of clients reached`.
+Blocking list, sorted-set and stream commands probe their TCP connection while
+waiting; a closed connection releases its client slot without waiting for a key
+change or command timeout. The probe does not consume pipelined request bytes.
+An OS-unreported half-open connection cannot be detected until TCP reports it.
 Lowering `CONFIG SET maxclients` keeps existing connections and rejects new ones
 until capacity becomes available. `INFO clients` reports `connected_clients`
 and `maxclients`; `INFO stats` adds `total_connections_received` and
@@ -235,8 +239,9 @@ Trimming does not advance the maximum explicitly deleted ID.
 
 Group writes participate in transactions, WATCH, memory limits, snapshots, AOF
 and ReRu replication. BLOCK is ignored inside EXEC. Competing consumers receive
-distinct new entries, but FIFO waiter order and disconnect cancellation remain
-pending. Group delivery is a mutation and is rejected on read-only replicas.
+distinct new entries. Closed blocking clients do not claim subsequent entries;
+FIFO waiter order remains pending. Group delivery is a mutation and is rejected
+on read-only replicas.
 New stream snapshot metadata preserves groups, ownership, retry counts and
 consumer/delivery timestamps. Old snapshots load without groups and approximate
 entries-added with the retained entry count. New snapshots require matching
@@ -414,7 +419,7 @@ returns the connection to ordinary RESP2 command mode.
 
 ## Verification for this increment
 
-The local suite has **204 tests**: 20 unit tests and 184 server integration tests.
+The local suite has **208 tests**: 20 unit tests and 188 server integration tests.
 It covers binary values, wrong types, score ordering and updates, bitmap ranges,
 SET conditions and expiry, multi-key atomicity, WATCH/MULTI/EXEC, snapshot
 restart, AOF replay and partial tails, replica updates, and malformed snapshot payloads. Earlier keyspace,

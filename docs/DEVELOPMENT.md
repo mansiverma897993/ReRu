@@ -66,7 +66,7 @@ documented in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) and in
 
 ## Tests
 
-The suite has 204 tests. One file per area:
+The suite has 208 tests. One file per area:
 
 ```
 tests/cache.rs          strings and cache commands

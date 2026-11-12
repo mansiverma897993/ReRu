@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use super::{integer, parse_score, protocol, score_text, wrong_type, Command, SortedSet};
 use crate::{mark_modified, remove_expired, Entry, Store, Value};
 use std::collections::{HashMap, HashSet};

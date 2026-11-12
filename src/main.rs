@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 mod aof;
 mod auth;
 mod bitmaps;
@@ -25,7 +26,7 @@ use std::io::{self, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
@@ -167,6 +168,42 @@ fn invalidate_watch(store: &Store, key: &[u8]) {
 
 type Store = Arc<SharedStore>;
 
+fn connection_closed(probe: Option<&clients::DisconnectProbe>) -> bool {
+    probe.is_some_and(clients::DisconnectProbe::disconnected)
+}
+
+// Keep the dataset lock in the Condvar wait, but wake often enough to detect
+// a disconnected blocking client even when no key changes. No monitor thread
+// or queued waiter survives the connection.
+fn wait_for_change<'a>(
+    store: &Store,
+    entries: MutexGuard<'a, HashMap<Vec<u8>, Entry>>,
+    deadline: Option<Instant>,
+    probe: Option<&clients::DisconnectProbe>,
+) -> Option<MutexGuard<'a, HashMap<Vec<u8>, Entry>>> {
+    if connection_closed(probe) {
+        return None;
+    }
+    let remaining = deadline.map(|end| end.saturating_duration_since(Instant::now()));
+    if remaining.is_some_and(|duration| duration.is_zero()) {
+        return None;
+    }
+    let timeout = if probe.is_some() {
+        Some(
+            remaining
+                .unwrap_or(Duration::from_millis(20))
+                .min(Duration::from_millis(20)),
+        )
+    } else {
+        remaining
+    };
+    let entries = match timeout {
+        Some(duration) => store.changed.wait_timeout(entries, duration).unwrap().0,
+        None => store.changed.wait(entries).unwrap(),
+    };
+    (!connection_closed(probe)).then_some(entries)
+}
+
 fn is_mutating(command: &[Vec<u8>]) -> bool {
     (command[0].eq_ignore_ascii_case(b"CONFIG")
         && command
@@ -283,12 +320,12 @@ fn execute_checked(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
         || settings.maxmemory == 0
         || command[0].eq_ignore_ascii_case(b"CONFIG")
     {
-        let response = execute_command(command, store, allow_blocking);
+        let response = execute_command(command, store, allow_blocking, None);
         record_write(store, command, &response);
         return response;
     }
     if settings.policy.is_allkeys() {
-        let response = execute_command(command, store, allow_blocking);
+        let response = execute_command(command, store, allow_blocking, None);
         record_write(store, command, &response);
         if !response.starts_with(b"-") {
             store.eviction.evict(store);
@@ -299,7 +336,7 @@ fn execute_checked(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
     let before = store.entries.lock().unwrap().clone();
     let before_bytes = eviction::dataset_bytes(&before);
     *store.staged_keys.lock().unwrap() = Some(HashSet::new());
-    let response = execute_command(command, store, allow_blocking);
+    let response = execute_command(command, store, allow_blocking, None);
     record_write(store, command, &response);
     let after_bytes = eviction::dataset_bytes(&store.entries.lock().unwrap());
     let failed = response.starts_with(b"-");
@@ -777,13 +814,21 @@ fn try_zpop(
     None
 }
 
-fn zpop_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> Vec<u8> {
+fn zpop_command(
+    command: &[Vec<u8>],
+    store: &Store,
+    allow_blocking: bool,
+    probe: Option<&clients::DisconnectProbe>,
+) -> Vec<u8> {
     let options = match parse_zpop(command) {
         Ok(options) => options,
         Err(error) => return error,
     };
     let blocking = command[0].eq_ignore_ascii_case(b"BZMPOP") || options.legacy;
     loop {
+        if connection_closed(probe) {
+            return b"*-1\r\n".to_vec();
+        }
         let gate = (blocking && allow_blocking).then(|| store.command_gate.lock().unwrap());
         let mut entries = store.entries.lock().unwrap();
         if let Some(response) = try_zpop(&mut entries, &options, store) {
@@ -793,21 +838,20 @@ fn zpop_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> Vec
             return b"*-1\r\n".to_vec();
         }
         drop(gate);
-        match options.deadline {
-            Some(deadline) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return b"*-1\r\n".to_vec();
-                }
-                entries = store.changed.wait_timeout(entries, remaining).unwrap().0;
-            }
-            None => entries = store.changed.wait(entries).unwrap(),
-        }
+        entries = match wait_for_change(store, entries, options.deadline, probe) {
+            Some(entries) => entries,
+            None => return b"*-1\r\n".to_vec(),
+        };
         drop(entries);
     }
 }
 
-fn blocking_move(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> Vec<u8> {
+fn blocking_move(
+    command: &[Vec<u8>],
+    store: &Store,
+    allow_blocking: bool,
+    probe: Option<&clients::DisconnectProbe>,
+) -> Vec<u8> {
     let legacy = command[0].eq_ignore_ascii_case(b"BRPOPLPUSH");
     if command.len() != if legacy { 4 } else { 6 } {
         return protocol::error(&format!(
@@ -837,6 +881,9 @@ fn blocking_move(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> Ve
         move_command
     };
     loop {
+        if connection_closed(probe) {
+            return b"$-1\r\n".to_vec();
+        }
         let gate = allow_blocking.then(|| store.command_gate.lock().unwrap());
         let mut entries = store.entries.lock().unwrap();
         remove_expired(&mut entries, &command[1]);
@@ -859,16 +906,10 @@ fn blocking_move(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> Ve
             return b"$-1\r\n".to_vec();
         }
         drop(gate);
-        match deadline {
-            Some(deadline) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return b"$-1\r\n".to_vec();
-                }
-                entries = store.changed.wait_timeout(entries, remaining).unwrap().0;
-            }
-            None => entries = store.changed.wait(entries).unwrap(),
-        }
+        entries = match wait_for_change(store, entries, deadline, probe) {
+            Some(entries) => entries,
+            None => return b"$-1\r\n".to_vec(),
+        };
         drop(entries);
     }
 }
@@ -981,7 +1022,12 @@ fn xread_ids(
         .collect()
 }
 
-fn execute_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> Vec<u8> {
+fn execute_command(
+    command: &[Vec<u8>],
+    store: &Store,
+    allow_blocking: bool,
+    probe: Option<&clients::DisconnectProbe>,
+) -> Vec<u8> {
     if let Some(response) = stream_groups::execute(command, store) {
         return response;
     }
@@ -1277,6 +1323,9 @@ fn execute_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
                 Ok(deadline) => {
                     let keys = &command[1..command.len() - 1];
                     loop {
+                        if connection_closed(probe) {
+                            break b"*-1\r\n".to_vec();
+                        }
                         let gate = allow_blocking.then(|| store.command_gate.lock().unwrap());
                         let mut entries = store.entries.lock().unwrap();
                         if let Some(response) = try_blocking_pop(
@@ -1291,16 +1340,10 @@ fn execute_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
                             break b"*-1\r\n".to_vec();
                         }
                         drop(gate);
-                        match deadline {
-                            Some(deadline) => {
-                                let remaining = deadline.saturating_duration_since(Instant::now());
-                                if remaining.is_zero() {
-                                    break b"*-1\r\n".to_vec();
-                                }
-                                entries = store.changed.wait_timeout(entries, remaining).unwrap().0;
-                            }
-                            None => entries = store.changed.wait(entries).unwrap(),
-                        }
+                        entries = match wait_for_change(store, entries, deadline, probe) {
+                            Some(entries) => entries,
+                            None => break b"*-1\r\n".to_vec(),
+                        };
                         drop(entries);
                     }
                 }
@@ -1309,7 +1352,7 @@ fn execute_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
     } else if command[0].eq_ignore_ascii_case(b"BLMOVE")
         || command[0].eq_ignore_ascii_case(b"BRPOPLPUSH")
     {
-        blocking_move(command, store, allow_blocking)
+        blocking_move(command, store, allow_blocking, probe)
     } else if command[0].eq_ignore_ascii_case(b"LMPOP")
         || command[0].eq_ignore_ascii_case(b"BLMPOP")
     {
@@ -1317,6 +1360,9 @@ fn execute_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
         match parse_multi_pop(command, blocking) {
             Err(error) => error,
             Ok(options) => loop {
+                if connection_closed(probe) {
+                    break b"*-1\r\n".to_vec();
+                }
                 let gate = (blocking && allow_blocking).then(|| store.command_gate.lock().unwrap());
                 let mut entries = store.entries.lock().unwrap();
                 if let Some(response) = try_multi_pop(&mut entries, &options, store) {
@@ -1326,16 +1372,10 @@ fn execute_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
                     break b"*-1\r\n".to_vec();
                 }
                 drop(gate);
-                match options.deadline {
-                    Some(deadline) => {
-                        let remaining = deadline.saturating_duration_since(Instant::now());
-                        if remaining.is_zero() {
-                            break b"*-1\r\n".to_vec();
-                        }
-                        entries = store.changed.wait_timeout(entries, remaining).unwrap().0;
-                    }
-                    None => entries = store.changed.wait(entries).unwrap(),
-                }
+                entries = match wait_for_change(store, entries, options.deadline, probe) {
+                    Some(entries) => entries,
+                    None => break b"*-1\r\n".to_vec(),
+                };
                 drop(entries);
             },
         }
@@ -1344,7 +1384,7 @@ fn execute_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
         || command[0].eq_ignore_ascii_case(b"BZPOPMIN")
         || command[0].eq_ignore_ascii_case(b"BZPOPMAX")
     {
-        zpop_command(command, store, allow_blocking)
+        zpop_command(command, store, allow_blocking, probe)
     } else if command[0].eq_ignore_ascii_case(b"TYPE") {
         if command.len() != 2 {
             protocol::error("wrong number of arguments for 'type' command")
@@ -1500,6 +1540,9 @@ fn execute_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
                             _ => None,
                         };
                         loop {
+                            if connection_closed(probe) {
+                                break b"*-1\r\n".to_vec();
+                            }
                             match try_xread(&mut entries, options.keys, &ids, options.count) {
                                 Err(error) => break error,
                                 Ok(Some(response)) => break response,
@@ -1514,17 +1557,17 @@ fn execute_command(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
                             match options.block {
                                 None => break b"*-1\r\n".to_vec(),
                                 Some(duration) if duration.is_zero() => {
-                                    entries = store.changed.wait(entries).unwrap()
+                                    entries = match wait_for_change(store, entries, None, probe) {
+                                        Some(entries) => entries,
+                                        None => break b"*-1\r\n".to_vec(),
+                                    }
                                 }
                                 Some(_) => {
-                                    let remaining = deadline.map_or(Duration::ZERO, |deadline| {
-                                        deadline.saturating_duration_since(Instant::now())
-                                    });
-                                    if remaining.is_zero() {
-                                        break b"*-1\r\n".to_vec();
-                                    }
-                                    entries =
-                                        store.changed.wait_timeout(entries, remaining).unwrap().0;
+                                    entries = match wait_for_change(store, entries, deadline, probe)
+                                    {
+                                        Some(entries) => entries,
+                                        None => break b"*-1\r\n".to_vec(),
+                                    };
                                 }
                             }
                             drop(entries);
@@ -1840,7 +1883,8 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                 }
             }
         } else if command[0].eq_ignore_ascii_case(b"XREADGROUP") {
-            stream_groups::blocking_read(&command, &store)?
+            let probe = clients::DisconnectProbe::new(&stream)?;
+            stream_groups::blocking_read(&command, &store, &probe)?
         } else if command[0].eq_ignore_ascii_case(b"BLPOP")
             || command[0].eq_ignore_ascii_case(b"BRPOP")
             || command[0].eq_ignore_ascii_case(b"BLMOVE")
@@ -1851,7 +1895,8 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             || command[0].eq_ignore_ascii_case(b"BZPOPMAX")
             || command[0].eq_ignore_ascii_case(b"XREAD")
         {
-            let response = execute_command(&command, &store, true);
+            let probe = clients::DisconnectProbe::new(&stream)?;
+            let response = execute_command(&command, &store, true, Some(&probe));
             record_write(&store, &command, &response);
             if is_mutating(&command) || hyperloglog::may_update_cache(&command) {
                 let _gate = store.command_gate.lock().unwrap();

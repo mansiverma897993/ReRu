@@ -15,7 +15,9 @@ ReRu is a single binary with a deliberately small runtime:
   serializes command execution. Redis executes commands one at a time; ReRu
   reproduces that property without an event loop.
 - **No async runtime.** Blocking commands park on a `Condvar`
-  (`SharedStore::changed`) instead of an async reactor.
+  (`SharedStore::changed`) instead of an async reactor. While waiting, a bounded
+  socket peek checks for disconnects without consuming request bytes or adding
+  monitor threads.
 
 The tradeoff is intentional: the code stays readable at the cost of one OS
 thread per connection. See [Project status](../README.md#project-status).
@@ -67,7 +69,7 @@ authentication settings, and the pub/sub hub.
 | `keyspace.rs` | `DEL`, `EXISTS`, `SCAN`, `RENAME`, `COPY`, expiry inspection |
 | `expiry.rs` | Deadline index and the background expiry thread |
 | `eviction.rs` | Logical memory estimate and the ten eviction policies |
-| `clients.rs` | Connection limit permits and connection counters |
+| `clients.rs` | Connection limit permits, counters and blocked-client disconnect probe |
 | `pubsub.rs` | Channel and pattern subscriptions, delivery hub |
 | `persistence.rs` | ReRu snapshot format (save, load, frames) |
 | `aof.rs` | Append-only file: replay, append, background rewrite |
