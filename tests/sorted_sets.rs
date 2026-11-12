@@ -660,3 +660,142 @@ fn range_store_rejects_bad_arity_syntax_and_wrong_types() {
         values(&[b"keep", b"5"])
     );
 }
+
+#[test]
+fn score_bounds_and_negative_limit_offsets_match_redis() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"ZADD", b"z", b"1", b"a", b"2", b"b", b"3", b"c", b"4", b"d",]),
+        integer(4)
+    );
+    assert_eq!(
+        c.call(&[b"ZADD", b"lex", b"0", b"a", b"0", b"b", b"0", b"c"]),
+        integer(3)
+    );
+
+    // A negative LIMIT offset selects nothing instead of failing.
+    for command in [
+        &[
+            b"ZRANGE".as_slice(),
+            b"z",
+            b"-inf",
+            b"+inf",
+            b"BYSCORE",
+            b"LIMIT",
+            b"-1",
+            b"2",
+        ] as &[&[u8]],
+        &[
+            b"ZRANGE", b"z", b"+inf", b"-inf", b"BYSCORE", b"REV", b"LIMIT", b"-1", b"2",
+        ],
+        &[
+            b"ZRANGEBYSCORE",
+            b"z",
+            b"-inf",
+            b"+inf",
+            b"LIMIT",
+            b"-3",
+            b"2",
+        ],
+        &[
+            b"ZRANGE", b"lex", b"-", b"+", b"BYLEX", b"LIMIT", b"-1", b"2",
+        ],
+        &[b"ZRANGEBYLEX", b"lex", b"-", b"+", b"LIMIT", b"-2", b"1"],
+    ] {
+        assert_eq!(c.call(command), array(vec![]), "{command:?}");
+    }
+    assert_eq!(
+        c.call(&[
+            b"ZRANGESTORE",
+            b"out",
+            b"z",
+            b"-inf",
+            b"+inf",
+            b"BYSCORE",
+            b"LIMIT",
+            b"-1",
+            b"2",
+        ]),
+        integer(0)
+    );
+
+    // ZRANGESTORE deletes the destination, as for any empty selection.
+    assert_eq!(c.call(&[b"ZADD", b"out", b"1", b"keep"]), integer(1));
+    assert_eq!(
+        c.call(&[
+            b"ZRANGESTORE",
+            b"out",
+            b"z",
+            b"-inf",
+            b"+inf",
+            b"BYSCORE",
+            b"LIMIT",
+            b"-1",
+            b"2",
+        ]),
+        integer(0)
+    );
+    assert_eq!(c.call(&[b"EXISTS", b"out"]), integer(0));
+
+    // Positive offsets and negative counts still work.
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"z", b"-inf", b"+inf", b"BYSCORE", b"LIMIT", b"1", b"2",]),
+        values(&[b"b", b"c"])
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"z", b"-inf", b"+inf", b"BYSCORE", b"LIMIT", b"2", b"-1",]),
+        values(&[b"c", b"d"])
+    );
+
+    // Score-bound errors use the Redis text on every command that takes them.
+    for command in [
+        &[b"ZRANGE".as_slice(), b"z", b"bad", b"3", b"BYSCORE"] as &[&[u8]],
+        &[b"ZRANGEBYSCORE", b"z", b"bad", b"3"],
+        &[b"ZREVRANGEBYSCORE", b"z", b"3", b"(bad"],
+        &[b"ZCOUNT", b"z", b"bad", b"3"],
+        &[b"ZREMRANGEBYSCORE", b"z", b"bad", b"3"],
+        &[b"ZRANGESTORE", b"out", b"z", b"bad", b"3", b"BYSCORE"],
+    ] {
+        assert_eq!(
+            c.call(command),
+            Reply::Error(b"ERR min or max is not a float".to_vec()),
+            "{command:?}"
+        );
+    }
+
+    // Score arguments keep their own message.
+    assert_eq!(
+        c.call(&[b"ZADD", b"z", b"bad", b"m"]),
+        Reply::Error(b"ERR value is not a valid float".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"ZINCRBY", b"z", b"bad", b"a"]),
+        Reply::Error(b"ERR value is not a valid float".to_vec())
+    );
+
+    // An empty bound reads as zero; an empty score argument does not.
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"z", b"", b"2", b"BYSCORE"]),
+        values(&[b"a", b"b"])
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"z", b"(", b"2", b"BYSCORE"]),
+        values(&[b"a", b"b"])
+    );
+    assert_eq!(c.call(&[b"ZCOUNT", b"z", b"", b"2"]), integer(2));
+    assert_eq!(
+        c.call(&[b"ZADD", b"z", b"", b"m"]),
+        Reply::Error(b"ERR value is not a valid float".to_vec())
+    );
+
+    // Non-integer LIMIT operands keep the integer message.
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"z", b"-inf", b"+inf", b"BYSCORE", b"LIMIT", b"x", b"1",]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"z", b"-inf", b"+inf", b"BYSCORE", b"LIMIT", b"0", b"x",]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+}

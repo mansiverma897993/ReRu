@@ -25,7 +25,7 @@ It reimplements a growing slice of Redis and its persistence formats in safe, de
 <table>
   <tr>
     <td align="center" width="25%"><strong>204</strong><br><sub>Redis command names wired</sub></td>
-    <td align="center" width="25%"><strong>218</strong><br><sub>tests passing</sub></td>
+    <td align="center" width="25%"><strong>219</strong><br><sub>tests passing</sub></td>
     <td align="center" width="25%"><strong>1</strong><br><sub>runtime dependency</sub></td>
     <td align="center" width="25%"><strong>10</strong><br><sub>eviction policies</sub></td>
   </tr>
@@ -266,7 +266,7 @@ docker compose down -v    # also deletes the data volume
 git clone https://github.com/mansiverma897993/ReRu.git
 cd ReRu
 make setup     # or: cargo fetch
-make test      # 218 tests
+make test      # 219 tests
 make run       # or: cargo run -- --port 6379
 make check     # fmt + clippy + tests
 ```

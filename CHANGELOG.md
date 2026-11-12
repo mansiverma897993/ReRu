@@ -27,6 +27,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Fixed
 
+- Sorted-set ranges now match Redis for a negative `LIMIT` offset (an empty
+  selection instead of an error), for unparsable score bounds
+  (`ERR min or max is not a float`), and for an empty score bound (read as zero).
 - Closed blocking list, sorted-set and stream clients stop waiting promptly and
   cannot consume later writes; client slots are released after disconnect.
 
