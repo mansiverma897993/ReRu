@@ -436,7 +436,11 @@ fn read_once(options: &ReadOptions<'_>, store: &Store) -> Result<Vec<u8>> {
         array(response)
     })
 }
-pub fn blocking_read(command: &[Vec<u8>], store: &Store) -> io::Result<Vec<u8>> {
+pub fn blocking_read(
+    command: &[Vec<u8>],
+    store: &Store,
+    probe: &crate::clients::DisconnectProbe,
+) -> io::Result<Vec<u8>> {
     let options = match parse_read(command) {
         Ok(options) => options,
         Err(error) => return Ok(error),
@@ -446,6 +450,9 @@ pub fn blocking_read(command: &[Vec<u8>], store: &Store) -> io::Result<Vec<u8>> 
         .filter(|duration| !duration.is_zero())
         .and_then(|duration| Instant::now().checked_add(duration));
     loop {
+        if probe.disconnected() {
+            return Ok(b"*-1\r\n".to_vec());
+        }
         let gate = store.command_gate.lock().unwrap();
         let response = crate::execute_checked(command, store, false);
         crate::save_and_publish(store)?;
@@ -457,19 +464,10 @@ pub fn blocking_read(command: &[Vec<u8>], store: &Store) -> io::Result<Vec<u8>> 
         }
         let entries = store.entries.lock().unwrap();
         drop(gate);
-        if let Some(deadline) = deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(response);
-            }
-            let (entries, timeout) = store.changed.wait_timeout(entries, remaining).unwrap();
-            drop(entries);
-            if timeout.timed_out() {
-                return Ok(response);
-            }
-        } else {
-            drop(store.changed.wait(entries).unwrap());
-        }
+        let Some(entries) = crate::wait_for_change(store, entries, deadline, Some(probe)) else {
+            return Ok(response);
+        };
+        drop(entries);
     }
 }
 
