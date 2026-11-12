@@ -55,6 +55,7 @@ authentication settings, and the pub/sub hub.
 | Module | Responsibility |
 | --- | --- |
 | `main.rs` | Core types, command dispatch, blocking helpers, client loop, startup |
+| `lib.rs` | Library root; exports `protocol` for out-of-tree tooling such as `fuzz/` |
 | `protocol.rs` | RESP2 reader and reply writers; size and argument limits |
 | `connection.rs` | `HELLO`, `SELECT`, `CLIENT`, `RESET`, per-socket metadata |
 | `cache.rs` | String and cache commands, conditional writes, expiry on access |
@@ -63,7 +64,7 @@ authentication settings, and the pub/sub hub.
 | `sorted_sets.rs` | Sorted sets, ranges, and blocking pops |
 | `sorted_sets/algebra.rs` | `ZUNION`, `ZINTER`, `ZDIFF` and store variants |
 | `bitmaps.rs` | Bit operations and `BITFIELD` |
-| `streams.rs` | Stream storage, IDs, ranges, trimming |
+| `streams.rs` | Stream storage, IDs, ranges, trimming, entry replies |
 | `stream_groups.rs` | Consumer groups, pending entries, claiming, `XINFO` |
 | `geo.rs` | Geohash encoding, distance, radius and box search |
 | `hyperloglog.rs` | HYLL interchange and approximate counting |

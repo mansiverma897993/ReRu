@@ -971,7 +971,7 @@ fn try_xread(
             Some(Value::Stream(stream)) => {
                 let found = stream.after(*id, count);
                 if !found.is_empty() {
-                    groups.push((key, protocol::stream_entries(&found)));
+                    groups.push((key, streams::stream_entries(&found)));
                 }
             }
             Some(_) => {
@@ -1431,7 +1431,7 @@ fn execute_command(
                             } else {
                                 stream.range(&command[2], &command[3], Some(count))
                             } {
-                                Ok(found) => protocol::stream_entries(&found),
+                                Ok(found) => streams::stream_entries(&found),
                                 Err(message) => protocol::error(message),
                             },
                             Some(_) => b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec(),

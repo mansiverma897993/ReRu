@@ -1,0 +1,25 @@
+[package]
+name = "reru-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+reru = { path = ".." }
+
+# Keep the fuzz crate out of the parent package so `cargo build --all-targets`,
+# `cargo clippy --all-targets`, and `cargo fmt --all` in the repository root
+# never compile it. Fuzzing needs nightly and is run by hand.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "resp_parser"
+path = "fuzz_targets/resp_parser.rs"
+test = false
+doc = false
+bench = false

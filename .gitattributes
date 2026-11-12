@@ -6,3 +6,7 @@
 *.zip binary
 *.gz binary
 Cargo.lock text
+
+# Fuzz seeds are raw wire bytes. CRLF is part of the protocol, so they must not
+# be line-ending normalized.
+fuzz/corpus/** -text
