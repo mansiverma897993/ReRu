@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 #[path = "common/client.rs"]
 mod client;
 mod common;

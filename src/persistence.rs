@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use crate::{streams, Entry, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};

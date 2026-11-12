@@ -10,8 +10,17 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Added
 
+- SPDX license headers (`// SPDX-License-Identifier: AGPL-3.0-only`) added to all files under `src/` and `tests/`.
+- Docker Compose quickstart with AOF persistence (`docker-compose.yml`),
+  documented in the README.
+- Contributor recognition: `.all-contributorsrc` and `CONTRIBUTORS.md` seeded from existing commit authors, linked from the README and CONTRIBUTING.md.
 - CLI reference: every startup flag documented in [docs/CLI.md](docs/CLI.md),
   linked from the README and the architecture notes.
+
+### Fixed
+
+- Closed blocking list, sorted-set and stream clients stop waiting promptly and
+  cannot consume later writes; client slots are released after disconnect.
 
 ## [0.1.0-alpha.1] - 2026-11-07
 

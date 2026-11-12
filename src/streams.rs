@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};

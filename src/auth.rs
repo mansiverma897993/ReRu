@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Startup-configured default-user authentication. ACL policies and runtime
 //! credential changes are intentionally outside this initial implementation.
 use crate::protocol;

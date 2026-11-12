@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use crate::{mark_modified, protocol, remove_expired, sorted_sets::SortedSet, Entry, Store, Value};
 use std::f64::consts::PI;
 

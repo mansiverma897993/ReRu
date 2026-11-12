@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use crate::{mark_modified, protocol, pubsub::glob_matches, remove_expired, Entry, Store, Value};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};

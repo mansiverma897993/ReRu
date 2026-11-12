@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use std::borrow::Cow;
 
 use crate::{mark_modified, protocol, remove_expired, Entry, Store, Value};

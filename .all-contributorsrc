@@ -1,0 +1,61 @@
+{
+  "files": [
+    "CONTRIBUTORS.md"
+  ],
+  "imageSize": 100,
+  "commit": true,
+  "commitConvention": "gitmoji",
+  "contributors": [
+    {
+      "login": "mansiverma897993",
+      "name": "Mansi Verma",
+      "avatar_url": "https://avatars.githubusercontent.com/u/183721285?v=4",
+      "profile": "https://github.com/mansiverma897993",
+      "contributions": [
+        "code",
+        "doc",
+        "test",
+        "maintenance"
+      ]
+    },
+    {
+      "login": "MohitGoyal09",
+      "name": "Mohit Goyal",
+      "avatar_url": "https://avatars.githubusercontent.com/u/135353689?v=4",
+      "profile": "https://github.com/MohitGoyal09",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "Mohitgoyal04",
+      "name": "Mohit Goyal",
+      "avatar_url": "https://avatars.githubusercontent.com/u/238540711?v=4",
+      "profile": "https://github.com/Mohitgoyal04",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "faris-sheikho",
+      "name": "Faris Sheikho",
+      "avatar_url": "https://avatars.githubusercontent.com/u/166221239?v=4",
+      "profile": "https://github.com/faris-sheikho",
+      "contributions": [
+        "code",
+        "doc"
+      ]
+    }
+  ],
+  "contributorsPerLine": 7,
+  "badgeTemplate": {
+    "altText": "All contributors",
+    "src": "https://img.shields.io/badge/all_contributors-4-orange.svg?style=flat-square",
+    "href": "#contributors"
+  },
+  "projectName": "ReRu",
+  "projectOwner": "mansiverma897993",
+  "repoType": "github",
+  "repoHost": "https://github.com"
+}

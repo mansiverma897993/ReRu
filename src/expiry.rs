@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Deadline-indexed expiry on primaries. One index record per expiring key keeps
 //! repeated TTL updates from accumulating stale timer records.
 use crate::{mark_evicted, save_and_publish, Entry, Store};

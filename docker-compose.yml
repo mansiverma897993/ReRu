@@ -1,0 +1,36 @@
+services:
+  init:
+    image: busybox
+    user: root
+    volumes:
+      - data:/home/reru/data
+    command: ["sh", "-c", "mkdir -p /home/reru/data && chown -R 10001:10001 /home/reru/data"]
+
+  reru:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - data:/home/reru/data
+    command: ["--bind", "0.0.0.0", "--port", "6379", "--appendonly", "/home/reru/data/reru.aof"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6379 && printf '*1\r\n$4\r\nPING\r\n' >&3 && head -c 7 <&3 | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  client:
+    image: redis:7
+    command: ["sleep", "infinity"]
+    depends_on:
+      reru:
+        condition: service_healthy
+
+volumes:
+  data:
