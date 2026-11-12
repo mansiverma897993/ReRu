@@ -216,6 +216,40 @@ The image binds to `0.0.0.0` inside the container so the port mapping works.
 Keep that exposure inside a trusted network and set a password for anything
 beyond local development.
 
+### Docker Compose (with persistence)
+
+For a one-command setup with AOF persistence across restarts:
+
+```sh
+docker compose up -d --build
+```
+
+This starts three services:
+
+- `init` — a one-off container that creates `/home/reru/data` on a named
+  volume and sets its ownership to the `reru` user (uid `10001`), since the
+  image runs as non-root.
+- `reru` — the server, built from the local `Dockerfile`, with
+  `--appendonly /home/reru/data/reru.aof` enabled so data survives restarts.
+- `client` — the official `redis:7` image, idle, for testing with
+  `redis-cli` against the `reru` service.
+
+Try it:
+
+```sh
+docker compose exec client redis-cli -h reru SET greeting "Hello from ReRu"
+docker compose exec client redis-cli -h reru GET greeting
+docker compose restart reru
+docker compose exec client redis-cli -h reru GET greeting   # still there
+```
+
+Stop everything:
+
+```sh
+docker compose down       # keeps the data volume
+docker compose down -v    # also deletes the data volume
+```
+
 ## Development
 
 <details>

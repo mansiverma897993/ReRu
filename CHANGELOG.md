@@ -8,6 +8,11 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Docker Compose quickstart with AOF persistence (`docker-compose.yml`),
+  documented in the README.
+
 ### Fixed
 
 - Closed blocking list, sorted-set and stream clients stop waiting promptly and
