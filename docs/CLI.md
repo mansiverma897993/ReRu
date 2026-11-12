@@ -13,8 +13,9 @@ usage: reru [--port PORT] [--bind ADDRESS] [--snapshot FILE] [--appendonly FILE]
 ```
 
 Flags are space-separated (`--port 6380`, not `--port=6380`). Every flag takes a
-value except `--help` and `--version`. Unknown flags, or a flag missing its
-value, abort startup with the usage text above.
+value except `--help` and `--version`, which are only recognized as the sole
+argument. Unknown flags, or a flag missing its value, abort startup with the
+usage text above.
 
 ## Quick reference
 
@@ -69,7 +70,8 @@ value, abort startup with the usage text above.
 - `--maxclients COUNT` — maximum concurrent connections; excess connections get
   `ERR max number of clients reached` and are closed.
 - `--help`, `-h`, `--version`, `-V` — print the version plus usage line and exit
-  without starting the server.
+  without starting the server. They are only recognized as the sole argument;
+  passed with any other flag they abort startup with the usage text.
 
 ## Notes
 
