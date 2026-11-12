@@ -80,36 +80,6 @@ impl SortedSet {
     pub fn entries(&self) -> impl DoubleEndedIterator<Item = (&Vec<u8>, f64)> {
         self.ordered.iter().map(|item| (&item.member, item.score))
     }
-    fn range_values(
-        &self,
-        from: usize,
-        count: usize,
-        reverse: bool,
-        withscores: bool,
-    ) -> Vec<Vec<u8>> {
-        let mut values = Vec::with_capacity(count.saturating_mul(if withscores { 2 } else { 1 }));
-        let mut append = |item: &ScoredMember| {
-            values.push(item.member.clone());
-            if withscores {
-                values.push(score_text(item.score));
-            }
-        };
-        if reverse {
-            self.ordered
-                .iter()
-                .rev()
-                .skip(from)
-                .take(count)
-                .for_each(&mut append);
-        } else {
-            self.ordered
-                .iter()
-                .skip(from)
-                .take(count)
-                .for_each(&mut append);
-        }
-        values
-    }
     pub fn scores(&self) -> impl Iterator<Item = f64> + '_ {
         self.by_member.values().copied()
     }
@@ -125,6 +95,7 @@ enum Command {
     RevRank,
     Range,
     RevRange,
+    RangeStore,
     RangeByScore,
     RevRangeByScore,
     Count,
@@ -159,6 +130,7 @@ fn parse(name: &[u8]) -> Option<Command> {
         (b"ZREVRANK", RevRank),
         (b"ZRANGE", Range),
         (b"ZREVRANGE", RevRange),
+        (b"ZRANGESTORE", RangeStore),
         (b"ZRANGEBYSCORE", RangeByScore),
         (b"ZREVRANGEBYSCORE", RevRangeByScore),
         (b"ZCOUNT", Count),
@@ -195,6 +167,7 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
         Command::Range | Command::RevRange | Command::RangeByScore | Command::RevRangeByScore => {
             command.len() >= 4
         }
+        Command::RangeStore => command.len() >= 5,
         Command::Count => command.len() == 4,
         Command::LexCount | Command::RemoveRangeByLex => command.len() == 4,
         Command::RangeByLex | Command::RevRangeByLex => command.len() == 4 || command.len() == 7,
@@ -227,6 +200,7 @@ pub fn is_mutating(command: &[Vec<u8>]) -> bool {
                 | Command::UnionStore
                 | Command::IntersectStore
                 | Command::DifferenceStore
+                | Command::RangeStore
         )
     })
 }
@@ -437,134 +411,94 @@ fn lex_in_range(member: &[u8], min: LexBound<'_>, max: LexBound<'_>) -> bool {
     above_min && below_max
 }
 
-fn lex_values(
-    min: &[u8],
-    max: &[u8],
-    scores: Option<&SortedSet>,
-    reverse: bool,
+/// Ordered `(member, score)` pairs selected by a `ZRANGE`-style range, plus the
+/// `WITHSCORES` flag the caller asked for.
+struct Selection {
+    members: Vec<(Vec<u8>, f64)>,
     withscores: bool,
-    offset: usize,
-    count: usize,
-) -> Vec<u8> {
-    let min = match lex_bound(min) {
-        Ok(value) => value,
-        Err(error) => return error,
-    };
-    let max = match lex_bound(max) {
-        Ok(value) => value,
-        Err(error) => return error,
-    };
-    let mut members: Vec<_> = scores
-        .into_iter()
-        .flat_map(SortedSet::entries)
-        .filter(|(member, _)| lex_in_range(member, min, max))
-        .collect();
-    if reverse {
-        members.reverse();
-    }
-    let mut values = Vec::new();
-    for (member, score) in members.into_iter().skip(offset).take(count) {
-        values.push(member.clone());
-        if withscores {
-            values.push(score_text(score));
-        }
-    }
-    protocol::array(&values)
 }
 
-fn lex_range(command: &[Vec<u8>], scores: Option<&SortedSet>, reverse: bool) -> Vec<u8> {
-    let (offset, count) = if command.len() == 7 {
-        if !command[4].eq_ignore_ascii_case(b"LIMIT") {
-            return protocol::error("syntax error");
-        }
-        let offset = match parse_index(&command[5]) {
-            Ok(value) if value >= 0 => value as usize,
-            _ => return protocol::error("value is not an integer or out of range"),
-        };
-        let count = match parse_index(&command[6]) {
-            Ok(value) if value >= 0 => value as usize,
-            Ok(_) => usize::MAX,
-            Err(error) => return error,
-        };
-        (offset, count)
-    } else {
-        (0, usize::MAX)
-    };
-    if reverse {
-        lex_values(&command[3], &command[2], scores, true, false, offset, count)
-    } else {
-        lex_values(
-            &command[2],
-            &command[3],
-            scores,
-            false,
-            false,
-            offset,
-            count,
-        )
-    }
-}
-
-fn range(command: &[Vec<u8>], scores: Option<&SortedSet>, kind: Command) -> Vec<u8> {
-    let reverse_default = matches!(kind, Command::RevRange | Command::RevRangeByScore);
+/// Select the members of a `ZRANGE`-style query.
+///
+/// `first` is the index of the `min` argument: 2 for `ZRANGE`, 3 for
+/// `ZRANGESTORE`, whose destination comes first. Options start at `first + 2`.
+fn select(
+    command: &[Vec<u8>],
+    first: usize,
+    scores: Option<&SortedSet>,
+    kind: Command,
+    allow_withscores: bool,
+) -> Result<Selection, Vec<u8>> {
+    let reverse_default = matches!(
+        kind,
+        Command::RevRange | Command::RevRangeByScore | Command::RevRangeByLex
+    );
     let mut reverse = reverse_default;
     let mut byscore = matches!(kind, Command::RangeByScore | Command::RevRangeByScore);
-    let mut bylex = false;
+    let mut bylex = matches!(kind, Command::RangeByLex | Command::RevRangeByLex);
+    // Redis accepts options in any order, so a LIMIT before BYSCORE or BYLEX is
+    // still valid. Look ahead before rejecting it.
+    let mode_later = command[first + 2..].iter().any(|option| {
+        option.eq_ignore_ascii_case(b"BYSCORE") || option.eq_ignore_ascii_case(b"BYLEX")
+    });
     let mut withscores = false;
     let mut limit = None;
-    let mut at = 4;
+    let mut at = first + 2;
     while at < command.len() {
         let option = &command[at];
-        if option.eq_ignore_ascii_case(b"WITHSCORES") && !withscores {
+        if option.eq_ignore_ascii_case(b"WITHSCORES") && allow_withscores && !withscores {
             withscores = true;
             at += 1;
         } else if option.eq_ignore_ascii_case(b"REV") && !reverse_default && !reverse {
             reverse = true;
             at += 1;
         } else if option.eq_ignore_ascii_case(b"BYSCORE")
-            && matches!(kind, Command::Range)
+            && matches!(kind, Command::Range | Command::RangeStore)
             && !byscore
             && !bylex
         {
             byscore = true;
             at += 1;
         } else if option.eq_ignore_ascii_case(b"BYLEX")
-            && matches!(kind, Command::Range)
+            && matches!(kind, Command::Range | Command::RangeStore)
             && !byscore
             && !bylex
         {
             bylex = true;
             at += 1;
-        } else if option.eq_ignore_ascii_case(b"LIMIT")
-            && (byscore || bylex)
-            && limit.is_none()
-            && at + 2 < command.len()
-        {
+        } else if option.eq_ignore_ascii_case(b"LIMIT") {
+            if !(byscore || bylex || mode_later) {
+                return Err(protocol::error(
+                    "syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX",
+                ));
+            }
+            if limit.is_some() || at + 2 >= command.len() {
+                return Err(protocol::error("syntax error"));
+            }
             let offset = match parse_index(&command[at + 1]) {
                 Ok(value) if value >= 0 => value as usize,
-                _ => return protocol::error("value is not an integer or out of range"),
+                _ => return Err(protocol::error("value is not an integer or out of range")),
             };
-            let count = match parse_index(&command[at + 2]) {
-                Ok(value) => value,
-                Err(error) => return error,
-            };
+            let count = parse_index(&command[at + 2])?;
             limit = Some((offset, count));
             at += 3;
         } else {
-            return protocol::error("syntax error");
+            return Err(protocol::error("syntax error"));
         }
     }
+    let (min, max) = if reverse {
+        (first + 1, first)
+    } else {
+        (first, first + 1)
+    };
     if bylex {
         if withscores {
-            return protocol::error(
+            return Err(protocol::error(
                 "syntax error, WITHSCORES not supported in combination with BYLEX",
-            );
+            ));
         }
-        let (min, max) = if reverse {
-            (&command[3], &command[2])
-        } else {
-            (&command[2], &command[3])
-        };
+        let min = lex_bound(&command[min])?;
+        let max = lex_bound(&command[max])?;
         let (offset, count) = limit.map_or((0, usize::MAX), |(offset, count)| {
             (
                 offset,
@@ -575,19 +509,26 @@ fn range(command: &[Vec<u8>], scores: Option<&SortedSet>, kind: Command) -> Vec<
                 },
             )
         });
-        return lex_values(min, max, scores, reverse, withscores, offset, count);
+        let mut members: Vec<(Vec<u8>, f64)> = scores
+            .into_iter()
+            .flat_map(SortedSet::entries)
+            .filter(|(member, _)| lex_in_range(member, min, max))
+            .map(|(member, score)| (member.clone(), score))
+            .collect();
+        if reverse {
+            members.reverse();
+        }
+        return Ok(Selection {
+            members: members.into_iter().skip(offset).take(count).collect(),
+            withscores,
+        });
     }
     if byscore {
-        let (min, max) = if reverse {
-            (score_bound(&command[3]), score_bound(&command[2]))
-        } else {
-            (score_bound(&command[2]), score_bound(&command[3]))
-        };
-        let (min, max) = match (min, max) {
+        let (min, max) = match (score_bound(&command[min]), score_bound(&command[max])) {
             (Ok(min), Ok(max)) => (min, max),
-            (Err(error), _) | (_, Err(error)) => return error,
+            (Err(error), _) | (_, Err(error)) => return Err(error),
         };
-        let mut values = Vec::new();
+        let mut members = Vec::new();
         if let Some(scores) = scores {
             let in_range = |score: f64| {
                 (if min.1 { score >= min.0 } else { score > min.0 })
@@ -601,7 +542,7 @@ fn range(command: &[Vec<u8>], scores: Option<&SortedSet>, kind: Command) -> Vec<
                     count as usize
                 }
             });
-            let ordered: Vec<_> = if reverse {
+            let selected: Vec<_> = if reverse {
                 scores
                     .entries()
                     .rev()
@@ -617,25 +558,24 @@ fn range(command: &[Vec<u8>], scores: Option<&SortedSet>, kind: Command) -> Vec<
                     .take(count)
                     .collect()
             };
-            for (member, score) in ordered {
-                values.push(member.clone());
-                if withscores {
-                    values.push(score_text(score));
-                }
-            }
+            members.extend(
+                selected
+                    .into_iter()
+                    .map(|(member, score)| (member.clone(), score)),
+            );
         }
-        return protocol::array(&values);
+        return Ok(Selection {
+            members,
+            withscores,
+        });
     }
-    let start = match parse_index(&command[2]) {
-        Ok(value) => value,
-        Err(error) => return error,
-    };
-    let stop = match parse_index(&command[3]) {
-        Ok(value) => value,
-        Err(error) => return error,
-    };
+    let start = parse_index(&command[first])?;
+    let stop = parse_index(&command[first + 1])?;
     let Some(scores) = scores else {
-        return protocol::array(&[]);
+        return Ok(Selection {
+            members: Vec::new(),
+            withscores,
+        });
     };
     let len = scores.len() as i128;
     let index = |value: i64| {
@@ -647,12 +587,43 @@ fn range(command: &[Vec<u8>], scores: Option<&SortedSet>, kind: Command) -> Vec<
     };
     let from = index(start).max(0).min(len) as usize;
     let to = index(stop).max(-1).min(len - 1);
-    let values = if to >= from as i128 {
-        scores.range_values(from, to as usize - from + 1, reverse, withscores)
+    let members = if to >= from as i128 {
+        let count = to as usize - from + 1;
+        let selected: Vec<_> = if reverse {
+            scores.entries().rev().skip(from).take(count).collect()
+        } else {
+            scores.entries().skip(from).take(count).collect()
+        };
+        selected
+            .into_iter()
+            .map(|(member, score)| (member.clone(), score))
+            .collect()
     } else {
         Vec::new()
     };
+    Ok(Selection {
+        members,
+        withscores,
+    })
+}
+
+fn encode(members: Vec<(Vec<u8>, f64)>, withscores: bool) -> Vec<u8> {
+    let mut values =
+        Vec::with_capacity(members.len().saturating_mul(if withscores { 2 } else { 1 }));
+    for (member, score) in members {
+        values.push(member);
+        if withscores {
+            values.push(score_text(score));
+        }
+    }
     protocol::array(&values)
+}
+
+fn range(command: &[Vec<u8>], scores: Option<&SortedSet>, kind: Command) -> Vec<u8> {
+    match select(command, 2, scores, kind, true) {
+        Ok(selection) => encode(selection.members, selection.withscores),
+        Err(error) => error,
+    }
 }
 
 fn scan(command: &[Vec<u8>], scores: Option<&SortedSet>) -> Vec<u8> {
@@ -763,6 +734,47 @@ fn members_to_remove(
         .collect())
 }
 
+/// `ZRANGESTORE destination source min max [...]`. Selects from the source first,
+/// so a syntax error cannot leave a half-written destination.
+fn range_store(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
+    let destination = &command[1];
+    let source = &command[2];
+    let mut entries = store.entries.lock().unwrap();
+    remove_expired(&mut entries, source);
+    let members = {
+        let scores = match entries.get(source).map(|entry| &entry.value) {
+            Some(Value::SortedSet(scores)) => Some(scores),
+            Some(_) => return wrong_type(),
+            None => None,
+        };
+        match select(command, 3, scores, Command::RangeStore, false) {
+            Ok(selection) => selection.members,
+            Err(error) => return error,
+        }
+    };
+    remove_expired(&mut entries, destination);
+    let count = members.len();
+    if count == 0 {
+        if entries.remove(destination).is_some() {
+            mark_modified(store, destination);
+        }
+    } else {
+        let mut result = SortedSet::default();
+        for (member, score) in members {
+            result.insert(member, score);
+        }
+        entries.insert(
+            destination.clone(),
+            Entry {
+                value: Value::SortedSet(result),
+                expires_at: None,
+            },
+        );
+        mark_modified(store, destination);
+    }
+    integer(count)
+}
+
 pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
     let kind = parse(&command[0])?;
     if valid_arity(command) == Some(false) {
@@ -773,6 +785,9 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
     }
     if matches!(kind, Command::Add | Command::Increment) {
         return Some(add(command, store, matches!(kind, Command::Increment)));
+    }
+    if matches!(kind, Command::RangeStore) {
+        return Some(range_store(command, store));
     }
     if matches!(
         kind,
@@ -813,9 +828,6 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
                     .count(),
             )
         }
-        Command::RangeByLex | Command::RevRangeByLex => {
-            lex_range(command, scores, matches!(kind, Command::RevRangeByLex))
-        }
         Command::MultiScore => {
             let mut response = format!("*{}\r\n", command.len() - 2).into_bytes();
             for member in &command[2..] {
@@ -838,9 +850,12 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
                 .and_then(|scores| scores.rank(&command[2], matches!(kind, Command::RevRank)));
             found.map_or_else(|| b"$-1\r\n".to_vec(), integer)
         }
-        Command::Range | Command::RevRange | Command::RangeByScore | Command::RevRangeByScore => {
-            range(command, scores, kind)
-        }
+        Command::Range
+        | Command::RevRange
+        | Command::RangeByScore
+        | Command::RevRangeByScore
+        | Command::RangeByLex
+        | Command::RevRangeByLex => range(command, scores, kind),
         Command::Count => {
             let min = match score_bound(&command[2]) {
                 Ok(value) => value,
@@ -960,7 +975,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
             }
             protocol::array(&values)
         }
-        Command::Add | Command::Increment => unreachable!(),
+        Command::Add | Command::Increment | Command::RangeStore => unreachable!(),
         Command::Union
         | Command::UnionStore
         | Command::Intersect

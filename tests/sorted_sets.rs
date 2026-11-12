@@ -124,7 +124,9 @@ fn score_range_supports_exclusive_bounds_reverse_and_pagination() {
     );
     assert!(matches!(
         c.call(&[b"ZRANGE", b"z", b"0", b"-1", b"LIMIT", b"0", b"1"]),
-        Reply::Error(_)
+        Reply::Error(message)
+            if message
+                == b"ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX"
     ));
 }
 
@@ -358,5 +360,303 @@ fn sorted_sets_work_in_transactions_and_watch_tracks_real_changes() {
     assert_eq!(
         writer.call(&[b"EXEC"]),
         array(vec![integer(1), values(&[b"a", b"b"])])
+    );
+}
+
+#[test]
+fn range_store_mirrors_zrange_for_rank_score_and_lex_ranges() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"ZADD", b"src", b"1", b"a", b"2", b"b", b"2", b"c", b"3", b"d",]),
+        integer(4)
+    );
+    assert_eq!(
+        c.call(&[b"ZADD", b"lex", b"0", b"a", b"0", b"b", b"0", b"c", b"0", b"d"]),
+        integer(4)
+    );
+
+    // Rank range.
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"rank-out", b"src", b"1", b"2"]),
+        integer(2)
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"rank-out", b"0", b"-1", b"WITHSCORES"]),
+        c.call(&[b"ZRANGE", b"src", b"1", b"2", b"WITHSCORES"])
+    );
+
+    // Rank range, reversed: only the top ranks are stored.
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"rev-out", b"src", b"0", b"1", b"REV"]),
+        integer(2)
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"rev-out", b"0", b"-1", b"REV"]),
+        values(&[b"d", b"c"])
+    );
+
+    // Score range with pagination.
+    assert_eq!(
+        c.call(&[
+            b"ZRANGESTORE",
+            b"score-out",
+            b"src",
+            b"(1",
+            b"3",
+            b"BYSCORE",
+            b"LIMIT",
+            b"1",
+            b"2",
+        ]),
+        integer(2)
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"score-out", b"0", b"-1", b"WITHSCORES"]),
+        c.call(&[
+            b"ZRANGE",
+            b"src",
+            b"(1",
+            b"3",
+            b"BYSCORE",
+            b"LIMIT",
+            b"1",
+            b"2",
+            b"WITHSCORES",
+        ])
+    );
+
+    // Score range, reversed: the highest two scores are stored.
+    assert_eq!(
+        c.call(&[
+            b"ZRANGESTORE",
+            b"rev-score-out",
+            b"src",
+            b"+inf",
+            b"-inf",
+            b"BYSCORE",
+            b"REV",
+            b"LIMIT",
+            b"0",
+            b"2",
+        ]),
+        integer(2)
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"rev-score-out", b"0", b"-1", b"REV"]),
+        values(&[b"d", b"c"])
+    );
+
+    // Lex range with a count.
+    assert_eq!(
+        c.call(&[
+            b"ZRANGESTORE",
+            b"lex-out",
+            b"lex",
+            b"-",
+            b"+",
+            b"BYLEX",
+            b"LIMIT",
+            b"1",
+            b"2",
+        ]),
+        integer(2)
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"lex-out", b"0", b"-1"]),
+        values(&[b"b", b"c"])
+    );
+
+    // Lex range, reversed: the last two members are stored.
+    assert_eq!(
+        c.call(&[
+            b"ZRANGESTORE",
+            b"rev-lex-out",
+            b"lex",
+            b"+",
+            b"-",
+            b"BYLEX",
+            b"REV",
+            b"LIMIT",
+            b"0",
+            b"2",
+        ]),
+        integer(2)
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"rev-lex-out", b"0", b"-1", b"REV"]),
+        values(&[b"d", b"c"])
+    );
+}
+
+#[test]
+fn range_store_stores_atomically_and_does_not_inherit_the_source_ttl() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"ZADD", b"src", b"1", b"a", b"2", b"b", b"3", b"c"]),
+        integer(3)
+    );
+    assert_eq!(c.call(&[b"EXPIRE", b"src", b"100"]), integer(1));
+
+    // The destination is overwritten and keeps no TTL, unlike the source.
+    assert_eq!(c.call(&[b"ZADD", b"dst", b"9", b"old"]), integer(1));
+    assert_eq!(c.call(&[b"EXPIRE", b"dst", b"100"]), integer(1));
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"dst", b"src", b"0", b"0"]),
+        integer(1)
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"dst", b"0", b"-1", b"WITHSCORES"]),
+        values(&[b"a", b"1"])
+    );
+    assert_eq!(c.call(&[b"TTL", b"dst"]), integer(-1));
+
+    // The source is untouched, TTL included.
+    assert_eq!(c.call(&[b"ZCARD", b"src"]), integer(3));
+    assert_eq!(c.call(&[b"TTL", b"src"]), integer(100));
+
+    // Storing into the source itself keeps only the selected members.
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"src", b"src", b"0", b"0"]),
+        integer(1)
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"src", b"0", b"-1", b"WITHSCORES"]),
+        values(&[b"a", b"1"])
+    );
+}
+
+#[test]
+fn range_store_deletes_the_destination_when_nothing_matches() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"ZADD", b"src", b"1", b"a", b"2", b"b"]),
+        integer(2)
+    );
+    // A destination that had a TTL is deleted, not left expired.
+    assert_eq!(c.call(&[b"ZADD", b"dst", b"1", b"x"]), integer(1));
+    assert_eq!(c.call(&[b"EXPIRE", b"dst", b"100"]), integer(1));
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"dst", b"src", b"5", b"9"]),
+        integer(0)
+    );
+    assert_eq!(c.call(&[b"EXISTS", b"dst"]), integer(0));
+
+    // A missing source is the same as an empty result.
+    assert_eq!(c.call(&[b"ZADD", b"dst", b"1", b"x"]), integer(1));
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"dst", b"missing", b"0", b"-1"]),
+        integer(0)
+    );
+    assert_eq!(c.call(&[b"EXISTS", b"dst"]), integer(0));
+
+    // Nothing to delete is not a modification, so WATCH stays intact.
+    assert_eq!(c.call(&[b"WATCH", b"dst"]), ok());
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"dst", b"missing", b"0", b"-1"]),
+        integer(0)
+    );
+    assert_eq!(c.call(&[b"MULTI"]), ok());
+    assert_eq!(c.call(&[b"EXEC"]), array(vec![]));
+}
+
+#[test]
+fn range_store_runs_inside_transactions_and_accepts_options_in_any_order() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"ZADD", b"src", b"1", b"a", b"2", b"b", b"3", b"c"]),
+        integer(3)
+    );
+
+    // Redis accepts LIMIT before the BY* option; the result must not change.
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"src", b"-inf", b"+inf", b"LIMIT", b"1", b"2", b"BYSCORE"]),
+        c.call(&[b"ZRANGE", b"src", b"-inf", b"+inf", b"BYSCORE", b"LIMIT", b"1", b"2"])
+    );
+    assert_eq!(
+        c.call(&[
+            b"ZRANGESTORE",
+            b"out",
+            b"src",
+            b"-inf",
+            b"+inf",
+            b"LIMIT",
+            b"1",
+            b"2",
+            b"BYSCORE",
+        ]),
+        integer(2)
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"out", b"0", b"-1"]),
+        values(&[b"b", b"c"])
+    );
+
+    assert_eq!(c.call(&[b"MULTI"]), ok());
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"out", b"src", b"0", b"0"]),
+        queued()
+    );
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"out", b"0", b"-1", b"WITHSCORES"]),
+        queued()
+    );
+    assert_eq!(
+        c.call(&[b"EXEC"]),
+        array(vec![integer(1), values(&[b"a", b"1"])])
+    );
+}
+
+#[test]
+fn range_store_rejects_bad_arity_syntax_and_wrong_types() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"ZADD", b"src", b"1", b"a"]), integer(1));
+    assert_eq!(c.call(&[b"SET", b"string", b"value"]), ok());
+
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"dst", b"src", b"0"]),
+        Reply::Error(b"ERR wrong number of arguments for 'zrangestore' command".to_vec())
+    );
+    assert!(matches!(
+        c.call(&[
+            b"ZRANGESTORE",
+            b"dst",
+            b"src",
+            b"0",
+            b"-1",
+            b"LIMIT",
+            b"0",
+            b"1"
+        ]),
+        Reply::Error(message)
+            if message
+                == b"ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX"
+    ));
+    assert!(matches!(
+        c.call(&[b"ZRANGESTORE", b"dst", b"src", b"0", b"-1", b"WITHSCORES"]),
+        Reply::Error(_)
+    ));
+    assert!(matches!(
+        c.call(&[b"ZRANGESTORE", b"dst", b"src", b"0", b"-1", b"NOPE"]),
+        Reply::Error(_)
+    ));
+    assert_eq!(
+        c.call(&[b"ZRANGESTORE", b"dst", b"string", b"0", b"-1"]),
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    );
+
+    // A rejected command must leave an existing destination unchanged.
+    assert_eq!(c.call(&[b"ZADD", b"dst", b"5", b"keep"]), integer(1));
+    assert!(matches!(
+        c.call(&[b"ZRANGESTORE", b"dst", b"src", b"0", b"-1", b"NOPE"]),
+        Reply::Error(_)
+    ));
+    assert_eq!(
+        c.call(&[b"ZRANGE", b"dst", b"0", b"-1", b"WITHSCORES"]),
+        values(&[b"keep", b"5"])
     );
 }

@@ -13,7 +13,7 @@ tests; it does not certify complete compatibility with Redis.
 | Streams | `XADD`, `XRANGE`, `XREVRANGE`, `XREAD`, `XLEN`, `XDEL`, `XTRIM`, `XGROUP CREATE`, `XGROUP SETID`, `XGROUP DESTROY`, `XGROUP CREATECONSUMER`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`, `XAUTOCLAIM`, `XINFO GROUPS`, `XINFO CONSUMERS`, `XINFO STREAM`, `XSETID` | IDs, ranges, deletion, exact trimming, blocking reads, consumer groups, pending entries, acknowledgement, claiming and diagnostics; XADD NOMKSTREAM/MAXLEN/MINID |
 | Hashes | `HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HGETALL`, `HDEL`, `HEXISTS`, `HLEN`, `HKEYS`, `HVALS`, `HINCRBY`, `HINCRBYFLOAT`, `HSTRLEN`, `HRANDFIELD`, `HSCAN` | Binary fields/values, multiple field updates, missing-field nil replies, increments, random fields and cursor iteration |
 | Sets | `SADD`, `SREM`, `SISMEMBER`, `SMISMEMBER`, `SMEMBERS`, `SCARD`, `SMOVE`, `SPOP`, `SRANDMEMBER`, `SUNION`, `SINTER`, `SINTERCARD`, `SDIFF`, `SUNIONSTORE`, `SINTERSTORE`, `SDIFFSTORE`, `SSCAN` | Binary members, deduplication, membership, cardinality, random selection, atomic moves, set algebra and cursor iteration; SINTERCARD LIMIT |
-| Sorted sets | `ZADD`, `ZINCRBY`, `ZCARD`, `ZSCORE`, `ZRANK`, `ZREVRANK`, `ZRANGE`, `ZREVRANGE`, `ZRANGEBYSCORE`, `ZREVRANGEBYSCORE`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZCOUNT`, `ZLEXCOUNT`, `ZREM`, `ZREMRANGEBYSCORE`, `ZREMRANGEBYRANK`, `ZREMRANGEBYLEX`, `ZMSCORE`, `ZSCAN`, `ZPOPMIN`, `ZPOPMAX`, `ZMPOP`, `BZMPOP`, `BZPOPMIN`, `BZPOPMAX`, `ZUNION`, `ZUNIONSTORE`, `ZINTER`, `ZINTERSTORE`, `ZDIFF`, `ZDIFFSTORE`, `ZINTERCARD` | Score-ordered members, rank, score and lex ranges, ZADD NX/XX/GT/LT/CH/INCR, cursor iteration, range removal, ordered and multi-key blocking pops, weighted algebra and destination storing |
+| Sorted sets | `ZADD`, `ZINCRBY`, `ZCARD`, `ZSCORE`, `ZRANK`, `ZREVRANK`, `ZRANGE`, `ZREVRANGE`, `ZRANGESTORE`, `ZRANGEBYSCORE`, `ZREVRANGEBYSCORE`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZCOUNT`, `ZLEXCOUNT`, `ZREM`, `ZREMRANGEBYSCORE`, `ZREMRANGEBYRANK`, `ZREMRANGEBYLEX`, `ZMSCORE`, `ZSCAN`, `ZPOPMIN`, `ZPOPMAX`, `ZMPOP`, `BZMPOP`, `BZPOPMIN`, `BZPOPMAX`, `ZUNION`, `ZUNIONSTORE`, `ZINTER`, `ZINTERSTORE`, `ZDIFF`, `ZDIFFSTORE`, `ZINTERCARD` | Score-ordered members, rank, score and lex ranges, ZADD NX/XX/GT/LT/CH/INCR, cursor iteration, range removal, ordered and multi-key blocking pops, weighted algebra and destination storing |
 | Bitmaps | `SETBIT`, `GETBIT`, `BITCOUNT`, `BITOP`, `BITPOS`, `BITFIELD`, `BITFIELD_RO` | Bitmaps stored as strings, byte/bit count ranges, AND/OR/XOR/NOT; bitfield GET/SET/INCRBY, signed/unsigned widths, `#` offsets and WRAP/SAT/FAIL overflow modes |
 | HyperLogLog | `PFADD`, `PFCOUNT`, `PFMERGE` | Approximate distinct counts, multi-key unions, binary members, Redis dense/sparse interchange, cached cardinality |
 | Geospatial | `GEOADD`, `GEOPOS`, `GEOHASH`, `GEODIST`, `GEOSEARCH`, `GEOSEARCHSTORE` | Geo points use sorted-set scores; NX/XX/CH, positions and distances, radius/box search, sort/count, decorated results, and destination storing |
@@ -144,6 +144,13 @@ Sorted sets keep a member lookup map and a score-ordered index. Score changes
 update both indexes. Rank lookup is still linear in the number of members;
 range scans advance through the ordered index. `ZRANGE` supports rank indexes,
 `BYSCORE`, `BYLEX`, `REV`, `WITHSCORES`, and `LIMIT` on applicable ranges.
+`ZRANGESTORE` reuses that selection, replaces the destination with the result,
+clears its TTL, and deletes it when nothing matches. `LIMIT` without `BYSCORE` or
+`BYLEX` is rejected with the same error Redis returns; options may appear in any
+order. A negative `LIMIT` offset
+is rejected with `ERR value is not an integer or out of range`; Redis 8.8 treats
+it as an empty selection. That difference predates `ZRANGESTORE` and applies to
+`ZRANGE` as well.
 Lex ranges use the score-ordered index and should be used with equal scores,
 the ordering condition documented by Redis. Bitmap growth is capped at 64 MiB per value, below Redis's
 maximum; this is an explicit ReRu resource limit.
@@ -419,7 +426,11 @@ returns the connection to ordinary RESP2 command mode.
 
 ## Verification for this increment
 
-The local suite has **208 tests**: 20 unit tests and 188 server integration tests.
+The local suite has **218 tests**: 22 unit tests in `src/main.rs`, 3 in
+`src/lib.rs`, and 193 server integration tests.
+Sorted-set tests compare `ZRANGESTORE` output with the matching `ZRANGE` for rank,
+score and lex ranges, and cover destination replacement, cleared TTL, deletion on
+an empty result, and rejected arity, syntax and wrong types.
 It covers binary values, wrong types, score ordering and updates, bitmap ranges,
 SET conditions and expiry, multi-key atomicity, WATCH/MULTI/EXEC, snapshot
 restart, AOF replay and partial tails, replica updates, and malformed snapshot payloads. Earlier keyspace,

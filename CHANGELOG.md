@@ -16,6 +16,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - Contributor recognition: `.all-contributorsrc` and `CONTRIBUTORS.md` seeded from existing commit authors, linked from the README and CONTRIBUTING.md.
 - CLI reference: every startup flag documented in [docs/CLI.md](docs/CLI.md),
   linked from the README and the architecture notes.
+- `ZRANGESTORE`, which stores a rank, score or lex range from one sorted set into
+  another. The destination is replaced, loses any TTL, and is deleted when the
+  range is empty. `LIMIT` without `BYSCORE` or `BYLEX` now returns the Redis
+  error text.
 - `cargo-fuzz` target `resp_parser` that drives the RESP command parser with
   arbitrary bytes, plus a committed seed corpus. The crate now also builds as a
   library so the parser is reachable from `fuzz/`. Fuzzing needs a nightly

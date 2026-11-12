@@ -24,14 +24,14 @@ It reimplements a growing slice of Redis and its persistence formats in safe, de
 
 <table>
   <tr>
-    <td align="center" width="25%"><strong>203</strong><br><sub>Redis command names wired</sub></td>
-    <td align="center" width="25%"><strong>208</strong><br><sub>tests passing</sub></td>
+    <td align="center" width="25%"><strong>204</strong><br><sub>Redis command names wired</sub></td>
+    <td align="center" width="25%"><strong>218</strong><br><sub>tests passing</sub></td>
     <td align="center" width="25%"><strong>1</strong><br><sub>runtime dependency</sub></td>
     <td align="center" width="25%"><strong>10</strong><br><sub>eviction policies</sub></td>
   </tr>
 </table>
 
-<p align="center"><sub>44.2% command-name coverage against Redis 8.10.2 metadata. Name presence, not complete behavior.</sub></p>
+<p align="center"><sub>44.4% command-name coverage against Redis 8.10.2 metadata. Name presence, not complete behavior.</sub></p>
 
 ## Why ReRu
 
@@ -136,8 +136,8 @@ print(client.get("greeting"))
   </tr>
 </table>
 
-**203 of 459 command metadata entries** from Redis 8.10.2 have implementation
-paths: **44.2% command-name coverage**. This counts command names, not complete
+**204 of 459 command metadata entries** from Redis 8.10.2 have implementation
+paths: **44.4% command-name coverage**. This counts command names, not complete
 behavior. Supported options, differences, and tests are listed in the
 [compatibility inventory](docs/COMPATIBILITY.md).
 
@@ -266,7 +266,7 @@ docker compose down -v    # also deletes the data volume
 git clone https://github.com/mansiverma897993/ReRu.git
 cd ReRu
 make setup     # or: cargo fetch
-make test      # 208 tests
+make test      # 218 tests
 make run       # or: cargo run -- --port 6379
 make check     # fmt + clippy + tests
 ```
