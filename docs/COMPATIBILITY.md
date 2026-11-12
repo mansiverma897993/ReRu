@@ -147,10 +147,11 @@ range scans advance through the ordered index. `ZRANGE` supports rank indexes,
 `ZRANGESTORE` reuses that selection, replaces the destination with the result,
 clears its TTL, and deletes it when nothing matches. `LIMIT` without `BYSCORE` or
 `BYLEX` is rejected with the same error Redis returns; options may appear in any
-order. A negative `LIMIT` offset
-is rejected with `ERR value is not an integer or out of range`; Redis 8.8 treats
-it as an empty selection. That difference predates `ZRANGESTORE` and applies to
-`ZRANGE` as well.
+order. A negative `LIMIT` offset selects nothing and a negative count means all,
+both as in Redis. Score bounds report `ERR min or max is not a float`, and an
+empty bound reads as zero; `ZADD` and `ZINCRBY` still reject an empty or
+unparsable score with `ERR value is not a valid float`. Hex-float literals such
+as `0x1`, which Redis accepts through `strtod`, are rejected everywhere.
 Lex ranges use the score-ordered index and should be used with equal scores,
 the ordering condition documented by Redis. Bitmap growth is capped at 64 MiB per value, below Redis's
 maximum; this is an explicit ReRu resource limit.
@@ -426,8 +427,8 @@ returns the connection to ordinary RESP2 command mode.
 
 ## Verification for this increment
 
-The local suite has **218 tests**: 22 unit tests in `src/main.rs`, 3 in
-`src/lib.rs`, and 193 server integration tests.
+The local suite has **219 tests**: 22 unit tests in `src/main.rs`, 3 in
+`src/lib.rs`, and 194 server integration tests.
 Sorted-set tests compare `ZRANGESTORE` output with the matching `ZRANGE` for rank,
 score and lex ranges, and cover destination replacement, cleared TTL, deletion on
 an empty result, and rejected arity, syntax and wrong types.

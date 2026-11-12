@@ -377,7 +377,30 @@ fn score_bound(bytes: &[u8]) -> Result<(f64, bool), Vec<u8>> {
     } else {
         (true, bytes)
     };
-    parse_score(number).map(|score| (score, inclusive))
+    // Redis reads an empty bound as zero, but rejects an empty ZADD score.
+    if number.is_empty() {
+        return Ok((0.0, inclusive));
+    }
+    parse_score(number)
+        .map(|score| (score, inclusive))
+        .map_err(|_| protocol::error("min or max is not a float"))
+}
+
+/// A `LIMIT` window as `(offset, count)`. A negative offset selects nothing,
+/// and a negative count means "all", both matching Redis.
+fn limit_window(limit: Option<(i64, i64)>) -> (usize, usize) {
+    match limit {
+        Some((offset, _)) if offset < 0 => (0, 0),
+        Some((offset, count)) => (
+            offset as usize,
+            if count < 0 {
+                usize::MAX
+            } else {
+                count as usize
+            },
+        ),
+        None => (0, usize::MAX),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -475,10 +498,7 @@ fn select(
             if limit.is_some() || at + 2 >= command.len() {
                 return Err(protocol::error("syntax error"));
             }
-            let offset = match parse_index(&command[at + 1]) {
-                Ok(value) if value >= 0 => value as usize,
-                _ => return Err(protocol::error("value is not an integer or out of range")),
-            };
+            let offset = parse_index(&command[at + 1])?;
             let count = parse_index(&command[at + 2])?;
             limit = Some((offset, count));
             at += 3;
@@ -499,16 +519,7 @@ fn select(
         }
         let min = lex_bound(&command[min])?;
         let max = lex_bound(&command[max])?;
-        let (offset, count) = limit.map_or((0, usize::MAX), |(offset, count)| {
-            (
-                offset,
-                if count < 0 {
-                    usize::MAX
-                } else {
-                    count as usize
-                },
-            )
-        });
+        let (offset, count) = limit_window(limit);
         let mut members: Vec<(Vec<u8>, f64)> = scores
             .into_iter()
             .flat_map(SortedSet::entries)
@@ -534,14 +545,7 @@ fn select(
                 (if min.1 { score >= min.0 } else { score > min.0 })
                     && (if max.1 { score <= max.0 } else { score < max.0 })
             };
-            let offset = limit.map_or(0, |(offset, _)| offset);
-            let count = limit.map_or(usize::MAX, |(_, count)| {
-                if count < 0 {
-                    usize::MAX
-                } else {
-                    count as usize
-                }
-            });
+            let (offset, count) = limit_window(limit);
             let selected: Vec<_> = if reverse {
                 scores
                     .entries()
