@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use std::io::{self, BufRead, Read};
 
-const MAX_BULK: usize = 64 * 1024 * 1024;
-const MAX_ARGS: usize = 1024;
+/// Largest bulk string the parser accepts for a single argument and in total.
+pub const MAX_BULK: usize = 64 * 1024 * 1024;
+/// Largest number of arguments the parser accepts in one command.
+pub const MAX_ARGS: usize = 1024;
 
 fn line<R: BufRead>(reader: &mut R) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -98,16 +100,6 @@ pub fn array(values: &[Vec<u8>]) -> Vec<u8> {
     response
 }
 
-pub fn stream_entries(entries: &[&crate::streams::StreamEntry]) -> Vec<u8> {
-    let mut response = format!("*{}\r\n", entries.len()).into_bytes();
-    for entry in entries {
-        response.extend_from_slice(b"*2\r\n");
-        response.extend(bulk(entry.id.to_string().as_bytes()));
-        response.extend(array(&entry.fields));
-    }
-    response
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +112,59 @@ mod tests {
         let error = read_command(&mut reader).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(reader.position(), 65);
+    }
+
+    #[test]
+    fn rejects_a_command_whose_arguments_exceed_the_total_limit() {
+        // Each argument is under MAX_BULK; together they are over it. The parser
+        // must reject on the second header, before reading its payload.
+        const HALF: usize = MAX_BULK / 2 + 1;
+        let mut input = format!("*2\r\n${HALF}\r\n").into_bytes();
+        input.extend(std::iter::repeat_n(b'x', HALF));
+        input.extend_from_slice(b"\r\n");
+        input.extend(format!("${HALF}\r\n").into_bytes());
+        let mut reader = Cursor::new(input);
+        let error = read_command(&mut reader).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), "command too large");
+    }
+
+    #[test]
+    fn committed_fuzz_corpus_keeps_its_line_endings() {
+        // The seed corpus is raw RESP bytes. If `.gitattributes` ever normalizes
+        // CRLF to LF, these frames stop parsing. The corpus is not part of the
+        // published package, so skip the check when it is absent.
+        let corpus =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/corpus/resp_parser");
+        if !corpus.is_dir() {
+            return;
+        }
+        let read = |name: &str| std::fs::read(corpus.join(name)).unwrap();
+
+        for (name, commands) in [
+            ("array_ping", 1),
+            ("array_set", 1),
+            ("array_empty_bulk", 1),
+            ("two_frames", 2),
+        ] {
+            let frame = read(name);
+            let mut reader = Cursor::new(frame.as_slice());
+            for _ in 0..commands {
+                assert!(read_command(&mut reader).unwrap().is_some(), "{name}");
+            }
+            assert_eq!(reader.position() as usize, frame.len(), "{name}");
+            assert!(read_command(&mut reader).unwrap().is_none(), "{name}");
+        }
+
+        for name in [
+            "inline_ping",
+            "inline_arguments",
+            "truncated_bulk",
+            "too_many_arguments",
+        ] {
+            let frame = read(name);
+            let mut reader = Cursor::new(frame.as_slice());
+            assert!(read_command(&mut reader).is_err(), "{name}");
+        }
     }
 }

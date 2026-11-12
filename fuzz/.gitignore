@@ -1,0 +1,5 @@
+# Build output and crash artifacts from `cargo fuzz`. The seed corpus is
+# committed on purpose; new inputs found while fuzzing stay local.
+target/
+artifacts/
+coverage/

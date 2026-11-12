@@ -54,6 +54,19 @@ pub struct Stream {
     pub groups: BTreeMap<Vec<u8>, crate::stream_groups::Group>,
 }
 
+/// Encode stream entries as a RESP2 array of `[id, [field, value, ...]]` pairs.
+pub fn stream_entries(entries: &[&StreamEntry]) -> Vec<u8> {
+    use crate::protocol::{array, bulk};
+
+    let mut response = format!("*{}\r\n", entries.len()).into_bytes();
+    for entry in entries {
+        response.extend_from_slice(b"*2\r\n");
+        response.extend(bulk(entry.id.to_string().as_bytes()));
+        response.extend(array(&entry.fields));
+    }
+    response
+}
+
 enum IdInput {
     Automatic,
     Partial(u64),

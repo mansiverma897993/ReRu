@@ -1,13 +1,14 @@
 # Interoperability testing
 
-ReRu is validated in three ways:
+ReRu is validated in four ways:
 
 1. **Unit and integration tests** that run without external services.
 2. **Differential tests** that compare ReRu against a live Redis server.
 3. **File interoperability checks** that exchange RDB and AOF files with Redis.
+4. **Fuzzing** of the RESP parser, run by hand on a nightly toolchain.
 
-The first group is what CI runs. The other two need a local Redis install and
-are run by hand, or by a maintainer before a compatibility claim.
+The first group is what CI runs. The others need extra tooling and are run by
+hand, or by a maintainer before a compatibility claim.
 
 ## Differential tests
 
@@ -67,6 +68,62 @@ writes issued after rewrite began.
 
 ```sh
 python -B scripts/test_aof_rewrite_interop.py --reru target/debug/reru
+```
+
+## Fuzzing the RESP parser
+
+`src/protocol.rs` reads the first bytes a client sends, so it gets a fuzz target
+of its own. The target lives in `fuzz/`, a separate Cargo workspace that the
+repository build does not include. **CI does not run fuzzing**; it needs a
+nightly toolchain and runs for however long an operator lets it.
+
+Fuzzing uses [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz), which is
+not part of the repository:
+
+```sh
+rustup toolchain install nightly
+cargo install cargo-fuzz
+```
+
+Run the target from the `fuzz/` directory:
+
+```sh
+cd fuzz
+cargo +nightly fuzz run resp_parser
+
+# Or bound it, which is enough for a smoke check.
+cargo +nightly fuzz run resp_parser -- -max_total_time=60
+```
+
+The target parses up to eight commands per input and asserts the limits the
+server enforces: at most 1024 arguments, and at most 64 MiB per argument. The
+per-command total is not reachable from a fuzz input, so
+`protocol::tests::rejects_a_command_whose_arguments_exceed_the_total_limit`
+covers it instead. Any panic fails the run.
+
+`fuzz/corpus/resp_parser/` holds the seed corpus, which is committed and covers
+arrays, bulk-string lengths, two frames in one input, and truncated frames. It
+also holds inline commands and bad prefixes, which the parser rejects; ReRu has
+no inline command mode. `.gitattributes` marks the directory `-text`; CRLF is
+framing here, not a line ending, so the files must not be normalized. libFuzzer
+adds discovered inputs to the corpus as it runs; commit useful ones. A crash is
+written to `fuzz/artifacts/resp_parser/`; reproduce it with:
+
+```sh
+cd fuzz
+cargo +nightly fuzz run resp_parser artifacts/resp_parser/crash-<hash>
+```
+
+`cargo fuzz` builds with a sanitizer. On Linux and macOS the default address
+sanitizer finds overflows and use-after-free as well as panics.
+
+`fuzz/` is its own workspace, so the repository linters do not see it. Check it
+from inside the directory when changing the target:
+
+```sh
+cd fuzz
+cargo +nightly fmt --check
+cargo +nightly clippy --all-targets -- -D warnings
 ```
 
 ## Reference version
