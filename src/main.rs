@@ -890,7 +890,7 @@ fn blocking_move(
     };
     loop {
         if connection_closed(probe) {
-            return b"$-1\r\n".to_vec();
+            return b"*-1\r\n".to_vec();
         }
         let gate = allow_blocking.then(|| store.command_gate.lock().unwrap());
         let mut entries = store.entries.lock().unwrap();
@@ -916,7 +916,7 @@ fn blocking_move(
         drop(gate);
         entries = match wait_for_change(store, entries, deadline, probe) {
             Some(entries) => entries,
-            None => return b"$-1\r\n".to_vec(),
+            None => return b"*-1\r\n".to_vec(),
         };
         drop(entries);
     }
@@ -1285,15 +1285,13 @@ fn execute_command(
             protocol::error("wrong number of arguments for 'lpop' command")
         } else {
             let count = if command.len() == 3 {
-                std::str::from_utf8(&command[2])
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
+                list_ops::parse_count(&command[2])
             } else {
-                Some(1)
+                Ok(1)
             };
             match count {
-                None => protocol::error("value is not an integer or out of range"),
-                Some(count) => {
+                Err(error) => error,
+                Ok(count) => {
                     let mut store = store.entries.lock().unwrap();
                     remove_expired(&mut store, &command[1]);
                     match store.get_mut(&command[1]) {

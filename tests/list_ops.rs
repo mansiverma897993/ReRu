@@ -129,3 +129,143 @@ fn list_move_wrong_destination_is_atomic_and_lpos_options_work() {
         array(vec![bulk(b"a"), bulk(b"b"), bulk(b"a")])
     );
 }
+
+#[test]
+fn list_count_and_lpos_errors_match_redis() {
+    let server = Server::start();
+    let mut client = Client::new(&server);
+    assert_eq!(
+        client.call(&[b"RPUSH", b"list", b"a", b"b", b"c"]),
+        integer(3)
+    );
+
+    // Redis reports one message for every unusable count, including overflow, a
+    // sign, an empty value and a negative number.
+    for command in [
+        &[b"LPOP".as_slice(), b"list", b"x"] as &[&[u8]],
+        &[b"LPOP", b"list", b"-1"],
+        &[b"LPOP", b"list", b"+1"],
+        &[b"LPOP", b"list", b""],
+        &[b"LPOP", b"list", b"99999999999999999999"],
+        &[b"RPOP", b"list", b"-1"],
+        &[b"RPOP", b"list", b"x"],
+    ] {
+        assert_eq!(
+            client.call(command),
+            Reply::Error(b"ERR value is out of range, must be positive".to_vec()),
+            "{command:?}"
+        );
+    }
+
+    assert_eq!(
+        client.call(&[b"LPOS", b"list", b"a", b"RANK", b"x"]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"LPOS", b"list", b"a", b"RANK", b"+1"]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"LPOS", b"list", b"a", b"RANK", b"0"]),
+        Reply::Error(
+            b"ERR RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list".to_vec()
+        )
+    );
+    for command in [
+        &[b"LPOS".as_slice(), b"list", b"a", b"COUNT", b"-1"] as &[&[u8]],
+        &[b"LPOS", b"list", b"a", b"COUNT", b"x"],
+        &[b"LPOS", b"list", b"a", b"COUNT", b"+1"],
+    ] {
+        assert_eq!(
+            client.call(command),
+            Reply::Error(b"ERR COUNT can't be negative".to_vec()),
+            "{command:?}"
+        );
+    }
+    for command in [
+        &[b"LPOS".as_slice(), b"list", b"a", b"MAXLEN", b"-1"] as &[&[u8]],
+        &[b"LPOS", b"list", b"a", b"MAXLEN", b"x"],
+    ] {
+        assert_eq!(
+            client.call(command),
+            Reply::Error(b"ERR MAXLEN can't be negative".to_vec()),
+            "{command:?}"
+        );
+    }
+
+    // Redis's integer parser rejects a leading zero and a negative zero, and a
+    // count above i64::MAX must not be applied to the list.
+    for command in [
+        &[b"LPOP".as_slice(), b"list", b"00"] as &[&[u8]],
+        &[b"LPOP", b"list", b"01"],
+        &[b"LPOP", b"list", b"9223372036854775808"],
+        &[b"LPOP", b"list", b"18446744073709551615"],
+        &[b"RPOP", b"list", b"00"],
+    ] {
+        assert_eq!(
+            client.call(command),
+            Reply::Error(b"ERR value is out of range, must be positive".to_vec()),
+            "{command:?}"
+        );
+    }
+    assert_eq!(
+        client.call(&[b"LLEN", b"list"]),
+        integer(3),
+        "a rejected count must not consume elements"
+    );
+    assert_eq!(
+        client.call(&[b"LPOS", b"list", b"a", b"RANK", b"-0"]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"LPOS", b"list", b"a", b"RANK", b"01"]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"LPOS", b"list", b"a", b"COUNT", b"00"]),
+        Reply::Error(b"ERR COUNT can't be negative".to_vec())
+    );
+
+    assert_eq!(
+        client.call(&[b"LPOS", b"list", b"a", b"RANK", b"-9223372036854775808"]),
+        Reply::Error(
+            b"ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807".to_vec()
+        )
+    );
+
+    // Options are validated before the key is read, as Redis does.
+    assert_eq!(client.call(&[b"SET", b"string", b"value"]), ok());
+    assert_eq!(
+        client.call(&[b"LPOS", b"string", b"a", b"RANK"]),
+        Reply::Error(b"ERR syntax error".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"LPOS", b"string", b"a", b"RANK", b"0"]),
+        Reply::Error(
+            b"ERR RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list".to_vec()
+        )
+    );
+
+    // An option without a value is a syntax error, not an arity error.
+    for command in [
+        &[b"LPOS".as_slice(), b"list", b"a", b"RANK"] as &[&[u8]],
+        &[b"LPOS", b"list", b"a", b"BOGUS"],
+    ] {
+        assert_eq!(
+            client.call(command),
+            Reply::Error(b"ERR syntax error".to_vec()),
+            "{command:?}"
+        );
+    }
+
+    // The successful forms keep working.
+    assert_eq!(client.call(&[b"LPOP", b"list", b"0"]), array(vec![]));
+    assert_eq!(
+        client.call(&[b"LPOS", b"list", b"a", b"RANK", b"-1"]),
+        integer(0)
+    );
+    assert_eq!(
+        client.call(&[b"LRANGE", b"list", b"0", b"-1"]),
+        array(vec![bulk(b"a"), bulk(b"b"), bulk(b"c")])
+    );
+}

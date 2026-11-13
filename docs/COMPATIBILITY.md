@@ -127,6 +127,12 @@ and `maxclients`; `INFO stats` adds `total_connections_received` and
 `rejected_connections`. Thread creation failures are logged. These limits do not
 bound transaction queues, Pub/Sub buffers, aggregate request memory or RSS.
 
+List counts are validated the way Redis validates them: an unusable count for
+`LPOP` or `RPOP`, and an unusable `RANK`, `COUNT` or `MAXLEN` for `LPOS`, return
+Redis's error text, and a rejected count does not touch the key. `BLMOVE` and
+`BRPOPLPUSH` return a nil array when their timeout expires, and a nil bulk inside
+`MULTI`, where they run without blocking.
+
 `COPY` supports same-database copy and `REPLACE`; `DB` selection is pending.
 `FLUSHDB` and `FLUSHALL` both clear ReRu's only database. `ASYNC` is accepted
 but deletion is currently synchronous; flush invalidates WATCH and is persisted
@@ -427,8 +433,8 @@ returns the connection to ordinary RESP2 command mode.
 
 ## Verification for this increment
 
-The local suite has **220 tests**: 22 unit tests in `src/main.rs`, 3 in
-`src/lib.rs`, and 195 server integration tests.
+The local suite has **221 tests**: 22 unit tests in `src/main.rs`, 3 in
+`src/lib.rs`, and 196 server integration tests.
 Sorted-set tests compare `ZRANGESTORE` output with the matching `ZRANGE` for rank,
 score and lex ranges, and cover destination replacement, cleared TTL, deletion on
 an empty result, and rejected arity, syntax and wrong types.

@@ -58,7 +58,18 @@ fn blocking_moves_wake_on_push_and_preserve_atomic_destination_updates() {
     );
     assert_eq!(
         writer.call(&[b"BRPOPLPUSH", b"queue", b"processing", b"0.02"]),
-        Reply::Bulk(None)
+        Reply::Array(None)
+    );
+    assert_eq!(
+        writer.call(&[
+            b"BLMOVE",
+            b"queue",
+            b"processing",
+            b"LEFT",
+            b"RIGHT",
+            b"0.02"
+        ]),
+        Reply::Array(None)
     );
     assert_eq!(writer.call(&[b"RPUSH", b"queue", b"second"]), integer(1));
     assert_eq!(
