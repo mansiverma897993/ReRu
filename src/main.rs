@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+#![forbid(unsafe_code)]
+
 mod aof;
 mod auth;
 mod bitmaps;

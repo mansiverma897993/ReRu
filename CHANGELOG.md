@@ -28,6 +28,11 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   library so the parser is reachable from `fuzz/`. Fuzzing needs a nightly
   toolchain and is run by hand; see `docs/INTEROP_TESTING.md`.
 
+### Changed
+
+- Both crates declare `#![forbid(unsafe_code)]`. Adding an `unsafe` block now
+  fails the build instead of relying on review.
+
 ### Fixed
 
 - Lists use a `VecDeque`, so `LPUSH` and `LPOP` no longer copy the whole list. At
