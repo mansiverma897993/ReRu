@@ -3,7 +3,7 @@
 One file with everything needed to take ReRu from a private repository to a
 project that outside people contribute to.
 
-Last updated: 7 November 2026.
+Last updated: 13 November 2026.
 
 ---
 
@@ -13,22 +13,25 @@ Last updated: 7 November 2026.
 | --- | --- |
 | Code | 21k lines of Rust, 204 tests, 1 runtime dependency |
 | License | AGPL-3.0-only, clean-room rule in `CONTRIBUTING.md` |
-| Governance | `CONTRIBUTING`, `CODE_OF_CONDUCT`, `SECURITY`, `CHANGELOG`, `AGENTS` |
+| Governance | `CONTRIBUTING`, `GOVERNANCE`, `CODE_OF_CONDUCT`, `SECURITY`, `CHANGELOG`, `AGENTS` |
 | CI | fmt, clippy, and tests on Linux/macOS/Windows, MSRV, rustdoc; weekly dependency audit |
 | Docs | README, architecture, compatibility, development guide, interop testing |
 | Issues | 20 scoped tasks created (#5–#24) |
-| **Blocker** | **Repository is private. Only the owner can make it public and set the description and topics.** |
+| **Blocker** | **Repository is private. Only the account with repository administration can make it public and set the description and topics.** |
 
 Repository: https://github.com/mansiverma897993/ReRu
 
-Ownership: `mansiverma897993` is the owner. `MohitGoyal09` has Write and can
-push, create issues, and create releases, but cannot change repository settings.
+Ownership: `mansiverma897993` and `MohitGoyal09` are both owners with equal
+authority; see [GOVERNANCE.md](GOVERNANCE.md). GitHub records one account with
+repository administration, currently `mansiverma897993`, and that is a hosting
+detail rather than extra decision-making weight.
 
 ---
 
-## 2. Step 0 — unblock (owner only)
+## 2. Step 0 — unblock (repository admin)
 
-Nothing below works while the repository is private. The owner must run:
+Nothing below works while the repository is private. The account with
+repository administration must run:
 
 ```sh
 # Make it public
@@ -124,7 +127,8 @@ criteria, test location, and the clean-room rule.
 1. Register for **SWOC** as a project before 15 December 2026.
 2. Run a **24 Pull Requests** push in December.
 3. Use **Hacktoberfest 2027** as the big annual growth event.
-4. Apply to **GSoC in 2028**, after 10+ merged external PRs and a second maintainer.
+4. Apply to **GSoC in 2028**, after 10+ merged external PRs and an additional
+   maintainer beyond the two owners.
 
 GSoC selects mentoring organizations with a community and a mentor bench. A
 project with zero outside contributors is unlikely to be accepted.
@@ -277,8 +281,8 @@ Submit the repository link with:
   Mohit Goyal. Keep their written agreement to the AGPL change on file.
 - **Clean-room rule:** never copy or translate Redis source. Redis is AGPLv3;
   ReRu must stay an independent implementation.
-- **DCO:** ask contributors to sign off (`git commit -s`) and enable the DCO
-  GitHub App.
+- **Sign-off:** there is no DCO or CLA. Opening a pull request is the
+  confirmation; see [GOVERNANCE.md](GOVERNANCE.md).
 - **No CLA:** contributions are accepted under AGPL-3.0 directly.
 - **Trademark:** the README states ReRu is independent and not affiliated with
   Redis Ltd. Keep that sentence.
@@ -291,7 +295,7 @@ Submit the repository link with:
 | --- | --- |
 | 30 days | Public repo, 20 issues, 5 external PRs, 3 contributors |
 | 90 days | 10 merged external PRs, 5 repeat contributors, 100 stars, 1 program accepted |
-| 6 months | 2 maintainers, monthly releases, 300 stars, 25 outside contributors |
+| 6 months | 2 maintainers beyond the owners, monthly releases, 300 stars, 25 outside contributors |
 
 Track weekly: stars, forks, open issues, merged PRs, unique contributors, and
 median time to first response.
@@ -306,7 +310,7 @@ median time to first response.
 - [ ] Set description and topics
 - [ ] Enable Discussions and private vulnerability reporting
 - [ ] Upload the social preview
-- [ ] Grant `MohitGoyal09` Admin (optional, simplifies future work)
+- [ ] Keep repository administration on one owner account (hosting detail only)
 
 **Maintainers**
 

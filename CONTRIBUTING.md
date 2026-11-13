@@ -129,7 +129,8 @@ Group related changes in one commit. Keep unrelated refactors separate.
 - Fill in the pull request template: what changed, how it was tested, and any
   known differences from Redis.
 - Keep the diff reviewable. Split large work into stacked pull requests.
-- A maintainer reviews for correctness, test coverage, and compatibility notes.
+- An owner reviews, or a maintainer once one joins the project, for correctness,
+  test coverage, and compatibility notes.
 - Do not force-push after review starts unless asked; add follow-up commits.
 
 ## Getting credit for your work
@@ -145,6 +146,11 @@ issue or PR.
 - Functional bugs: open an issue with the bug report template.
 - Security issues: **do not open a public issue.** Follow
   [SECURITY.md](SECURITY.md).
+
+## Who decides
+
+The owners, the decision rule, the no-CLA terms, and the release process are in
+[GOVERNANCE.md](GOVERNANCE.md).
 
 ## License
 
