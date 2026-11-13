@@ -42,7 +42,7 @@ It reimplements a growing slice of Redis and its persistence formats in safe, de
 - **Research-friendly.** Each command follows the pinned Redis 8.10.2
   reference, with differential tests against a live Redis where possible.
 
-Compared with Redis, Valkey, Dragonfly, KeyDB and Redka:
+Compared with Redis, Valkey, Dragonfly, KeyDB, Redka, KiviDB, Garnet and Kvrocks:
 [docs/COMPARISON.md](docs/COMPARISON.md).
 
 ## Quick start
