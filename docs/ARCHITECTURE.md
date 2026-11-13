@@ -30,13 +30,18 @@ thread per connection. See [Project status](../README.md#project-status).
 ```rust
 enum Value {
     String(Vec<u8>),
-    List(Vec<Vec<u8>>),
+    List(VecDeque<Vec<u8>>),
     Stream(streams::Stream),
     Hash(HashMap<Vec<u8>, Vec<u8>>),
     Set(HashSet<Vec<u8>>),
     SortedSet(sorted_sets::SortedSet),
 }
+```
 
+Lists use `VecDeque`, so `LPUSH` and `LPOP` are O(1) at both ends instead of
+copying the whole list.
+
+```rust
 struct Entry {
     value: Value,
     expires_at: Option<Instant>,

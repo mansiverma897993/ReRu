@@ -170,7 +170,7 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                 for _ in 0..count {
                     items.push(read_bytes(&mut cursor)?);
                 }
-                Value::List(items)
+                Value::List(items.into())
             }
             3 | 7 | 8 => {
                 let last_generated_id = if kind[0] >= 7 {

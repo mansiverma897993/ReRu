@@ -249,7 +249,7 @@ fn collection(kind: u8, items: Vec<Vec<u8>>) -> io::Result<Value> {
         return Err(invalid("invalid empty or oversized RDB collection"));
     }
     match kind {
-        1 => Ok(Value::List(items)),
+        1 => Ok(Value::List(items.into())),
         2 => {
             let count = items.len();
             let set: HashSet<_> = items.into_iter().collect();

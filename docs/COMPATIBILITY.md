@@ -427,8 +427,8 @@ returns the connection to ordinary RESP2 command mode.
 
 ## Verification for this increment
 
-The local suite has **219 tests**: 22 unit tests in `src/main.rs`, 3 in
-`src/lib.rs`, and 194 server integration tests.
+The local suite has **220 tests**: 22 unit tests in `src/main.rs`, 3 in
+`src/lib.rs`, and 195 server integration tests.
 Sorted-set tests compare `ZRANGESTORE` output with the matching `ZRANGE` for rank,
 score and lex ranges, and cover destination replacement, cleared TTL, deletion on
 an empty result, and rejected arity, syntax and wrong types.
