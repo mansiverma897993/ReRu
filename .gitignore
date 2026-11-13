@@ -35,3 +35,6 @@ __pycache__/
 *.profdata
 lcov.info
 tarpaulin-report.*
+
+# Maintainers' internal notes, never published
+/OSS_PLAYBOOK.md

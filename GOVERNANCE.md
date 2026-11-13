@@ -77,8 +77,7 @@ review of changes to it, and either owner can merge.
 ## Releases
 
 - Changes accumulate in [CHANGELOG.md](CHANGELOG.md) under `Unreleased`.
-- While pre-1.0 the owners cut a release at least monthly, as
-  [OSS_PLAYBOOK.md](OSS_PLAYBOOK.md) sets out.
+- While pre-1.0 the owners cut a release at least monthly.
 - Either owner can cut a release: move those entries under a dated version, bump
   the crate version, and tag the commit.
 - Pre-1.0 releases may include breaking changes. The changelog says so when they
@@ -91,7 +90,7 @@ review of changes to it, and either owner can merge.
 - Security reports follow [SECURITY.md](SECURITY.md); do not open a public issue.
 - An issue that needs information the reporter has not supplied is closed after
   30 days without a reply. It can be reopened. Stale claims close earlier, as
-  [OSS_PLAYBOOK.md](OSS_PLAYBOOK.md) sets out.
+  [CONTRIBUTING.md](CONTRIBUTING.md#claiming-an-issue) sets out.
 
 ## Code of conduct
 
