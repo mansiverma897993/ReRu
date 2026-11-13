@@ -12,7 +12,6 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 - `docs/COMPARISON.md`: a sourced table of how ReRu differs from Redis, Valkey,
   Dragonfly, KeyDB and Redka, including where ReRu is weaker.
-
 - `GOVERNANCE.md`: the owners, the lazy-consensus decision rule, the no-CLA
   contribution terms, and the release and response-time commitments.
 - SPDX license headers (`// SPDX-License-Identifier: AGPL-3.0-only`) added to all files under `src/` and `tests/`.

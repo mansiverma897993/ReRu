@@ -291,8 +291,8 @@ thread.
 
 Measured against Redis on one machine, with the method and the limits of the
 numbers written down: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). ReRu is faster
-on a single connection with shallow pipelining, and slower with several
-connections or deep pipelines.
+on a single connection with shallow pipelining, and slower at 64 connections or
+with a deep pipeline.
 
 See the [roadmap](docs/ROADMAP.md) and
 [release notes](docs/RELEASE_NOTES.md) for details.
