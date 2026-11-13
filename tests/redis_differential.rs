@@ -107,6 +107,28 @@ fn representative_resp2_sequences_match_a_real_redis_server() {
         &[b"BRPOP", b"reru-diff:list2", b"0.1"],
         &[b"LRANGE", b"reru-diff:list", b"0", b"-1"],
         &[b"LRANGE", b"reru-diff:list2", b"0", b"-1"],
+        &[b"LPOP", b"reru-diff:list", b"00"],
+        &[b"LPOP", b"reru-diff:list", b"9223372036854775808"],
+        &[b"RPOP", b"reru-diff:list2", b"-1"],
+        &[b"LPOS", b"reru-diff:list", b"a", b"RANK", b"0"],
+        &[b"LPOS", b"reru-diff:list", b"a", b"RANK", b"01"],
+        &[b"LPOS", b"reru-diff:list", b"a", b"COUNT", b"-1"],
+        &[b"LPOS", b"reru-diff:list", b"a", b"RANK"],
+        &[
+            b"BLMOVE",
+            b"reru-diff:missing-list",
+            b"reru-diff:list2",
+            b"LEFT",
+            b"RIGHT",
+            b"0.1",
+        ],
+        &[
+            b"BRPOPLPUSH",
+            b"reru-diff:missing-list",
+            b"reru-diff:list2",
+            b"0.1",
+        ],
+        &[b"LLEN", b"reru-diff:list"],
     ] {
         compare(&mut ours, &mut redis, command);
     }

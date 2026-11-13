@@ -35,6 +35,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Fixed
 
+- `BLMOVE` and `BRPOPLPUSH` return a nil array when they time out, as Redis does,
+  while keeping a nil bulk inside `MULTI` where they do not block. `LPOP`, `RPOP`
+  and the `LPOS` options now use Redis's error text for unusable counts.
 - Lists use a `VecDeque`, so `LPUSH` and `LPOP` no longer copy the whole list. At
   20,000 elements they are about 2.5x faster and p99 falls from about 12 ms to
   about 1.6 ms under load.
