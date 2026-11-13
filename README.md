@@ -308,7 +308,9 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [CONTRIBUTORS.md](CONTRIBUTORS.md). Good first issues are labeled
 [`good first issue`](https://github.com/mansiverma897993/ReRu/labels/good%20first%20issue).
 
-- Read the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Read the [Code of Conduct](CODE_OF_CONDUCT.md) and the
+  [governance policy](GOVERNANCE.md), which names the owners and the no-CLA
+  contribution terms.
 - Report vulnerabilities privately per [SECURITY.md](SECURITY.md).
 - Found a bug? [Open a bug report](https://github.com/mansiverma897993/ReRu/issues/new?template=bug_report.yml).
 - Have an idea? [Request a feature](https://github.com/mansiverma897993/ReRu/issues/new?template=feature_request.yml).
