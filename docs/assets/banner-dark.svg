@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" role="img" aria-label="ReRu: a Redis-compatible data server written in Rust">
+  <title>ReRu: a Redis-compatible data server written in Rust</title>
+  <style>
+    .bg{fill:#0F0E0C} .ink{fill:#EDE8DF} .muted{fill:#8F887C}
+    .dim{fill:#5C564E} .acc{fill:#F0703A}
+    .rule{stroke:#2C2925;stroke-width:1} .box{fill:none;stroke:#8F887C;stroke-width:1.25}
+    .box-acc{fill:none;stroke:#F0703A;stroke-width:1.75}
+    .wire{stroke:#8F887C;stroke-width:1.25;fill:none} .wire-acc{stroke:#F0703A;stroke-width:1.5;fill:none}
+    text{font-family:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace}
+  </style>
+  <rect class="bg" width="1280" height="340" rx="12"/>
+  <text class="muted" x="56" y="44" font-size="12" letter-spacing="1">RERU(1)</text><text class="muted" x="640.0" y="44" font-size="12" letter-spacing="1" text-anchor="middle">Redis-compatible data server</text><text class="muted" x="1224" y="44" font-size="12" letter-spacing="1" text-anchor="end">RERU(1)</text>
+  <line class="rule" x1="56" y1="60" x2="1224" y2="60"/>
+  <line class="rule" x1="56" y1="284" x2="1224" y2="284"/>
+  <text class="muted" x="56" y="310" font-size="12" letter-spacing="1">AGPL-3.0-only</text><text class="muted" x="640.0" y="310" font-size="12" letter-spacing="1" text-anchor="middle">RESP2 over TCP</text><text class="muted" x="1224" y="310" font-size="12" letter-spacing="1" text-anchor="end">github.com/mansiverma897993/ReRu</text>
+  <path class="ink" shape-rendering="crispEdges" d="M56 100h48v12h-48zM56 112h12v12h-12zM104 112h12v12h-12zM56 124h12v12h-12zM104 124h12v12h-12zM56 136h48v12h-48zM56 148h12v12h-12zM80 148h12v12h-12zM56 160h12v12h-12zM92 160h12v12h-12zM56 172h12v12h-12zM104 172h12v12h-12zM140 124h24v12h-24zM128 136h12v12h-12zM164 136h12v12h-12zM128 148h48v12h-48zM128 160h12v12h-12zM140 172h36v12h-36zM188 100h48v12h-48zM188 112h12v12h-12zM236 112h12v12h-12zM188 124h12v12h-12zM236 124h12v12h-12zM188 136h48v12h-48zM188 148h12v12h-12zM212 148h12v12h-12zM188 160h12v12h-12zM224 160h12v12h-12zM188 172h12v12h-12zM236 172h12v12h-12zM260 124h12v12h-12zM296 124h12v12h-12zM260 136h12v12h-12zM296 136h12v12h-12zM260 148h12v12h-12zM296 148h12v12h-12zM260 160h12v12h-12zM296 160h12v12h-12zM272 172h36v12h-36z"/>
+    <rect class="acc" x="320" y="172" width="36" height="12"/>
+  <text class="ink" x="56" y="230" font-size="17">A Redis-compatible data server in safe Rust.</text>
+  <text class="muted" x="56" y="256" font-size="14">Speaks RESP2. Existing Redis clients connect unchanged.</text>
+  <line class="rule" x1="640" y1="88" x2="640" y2="260"/>
+  <text class="muted" x="680" y="104" font-size="11" letter-spacing="2">TRANSCRIPT · PORT 6379</text>
+  <text x="680" y="150" font-size="14.5"><tspan class="muted">C:  </tspan><tspan class="acc">*</tspan><tspan class="ink">3</tspan><tspan class="dim">\r\n</tspan><tspan class="acc">$</tspan><tspan class="ink">3</tspan><tspan class="dim">\r\n</tspan><tspan class="ink">SET</tspan><tspan class="dim">\r\n</tspan><tspan class="acc">$</tspan><tspan class="ink">5</tspan><tspan class="dim">\r\n</tspan><tspan class="ink">hello</tspan><tspan class="dim">\r\n</tspan><tspan class="acc">$</tspan><tspan class="ink">5</tspan><tspan class="dim">\r\n</tspan><tspan class="ink">world</tspan><tspan class="dim">\r\n</tspan></text>
+  <text x="680" y="182" font-size="14.5"><tspan class="muted">S:  </tspan><tspan class="acc">+</tspan><tspan class="ink">OK</tspan><tspan class="dim">\r\n</tspan></text>
+  <text x="680" y="214" font-size="14.5"><tspan class="muted">C:  </tspan><tspan class="acc">*</tspan><tspan class="ink">2</tspan><tspan class="dim">\r\n</tspan><tspan class="acc">$</tspan><tspan class="ink">3</tspan><tspan class="dim">\r\n</tspan><tspan class="ink">GET</tspan><tspan class="dim">\r\n</tspan><tspan class="acc">$</tspan><tspan class="ink">5</tspan><tspan class="dim">\r\n</tspan><tspan class="ink">hello</tspan><tspan class="dim">\r\n</tspan></text>
+  <text x="680" y="246" font-size="14.5"><tspan class="muted">S:  </tspan><tspan class="acc">$</tspan><tspan class="ink">5</tspan><tspan class="dim">\r\n</tspan><tspan class="ink">world</tspan><tspan class="dim">\r\n</tspan></text>
+</svg>
