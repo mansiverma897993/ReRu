@@ -153,4 +153,4 @@ Path examples in this repo use Unix separators; use `\` in PowerShell.
 5. Run `make check`.
 6. Open a pull request.
 
-The full backlog and contributor plan are in [`OSS_PLAYBOOK.md`](../OSS_PLAYBOOK.md).
+Open tasks are in the [issue tracker](https://github.com/mansiverma897993/ReRu/issues); start with `good first issue`.

@@ -20,8 +20,10 @@ This guide covers the workflow. By participating you agree to the
 
 If you plan a large change, open an issue first so we can agree on the design.
 
-The [open-source playbook](OSS_PLAYBOOK.md) lists the current backlog, the
-programs we take part in, and the launch plan.
+Open tasks are in the
+[issue tracker](https://github.com/mansiverma897993/ReRu/issues). Start with
+the `good first issue` label, and read [Claiming an issue](#claiming-an-issue)
+first.
 
 ## Claiming an issue
 
