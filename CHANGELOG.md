@@ -20,6 +20,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   another. The destination is replaced, loses any TTL, and is deleted when the
   range is empty. `LIMIT` without `BYSCORE` or `BYLEX` now returns the Redis
   error text.
+- `scripts/bench_vs_redis.py` and `docs/BENCHMARKS.md`: a reproducible
+  comparison against a running Redis with medians, p99 latency, and an explicit
+  list of what the numbers do not prove.
 - `cargo-fuzz` target `resp_parser` that drives the RESP command parser with
   arbitrary bytes, plus a committed seed corpus. The crate now also builds as a
   library so the parser is reachable from `fuzz/`. Fuzzing needs a nightly

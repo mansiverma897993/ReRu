@@ -26,6 +26,10 @@ password.txt
 *.pem
 *.key
 
+# Python bytecode from the helper scripts
+__pycache__/
+*.pyc
+
 # Coverage and profiling
 *.profraw
 *.profdata
