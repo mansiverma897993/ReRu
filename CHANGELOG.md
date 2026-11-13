@@ -10,6 +10,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Added
 
+- OpenSSF Scorecard workflow (`.github/workflows/scorecard.yml`), run weekly and
+  on pushes to `main`, with third-party actions pinned to commit SHAs.
+- "Claiming an issue" rules in `CONTRIBUTING.md` for program contributors
+  (SWoC, GSSoC, 24 Pull Requests).
 - `docs/COMPARISON.md`: a sourced table of how ReRu differs from Redis, Valkey,
   Dragonfly, KeyDB, Redka, KiviDB, Garnet and Kvrocks, including where ReRu is
   weaker.

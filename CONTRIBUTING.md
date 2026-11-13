@@ -23,6 +23,29 @@ If you plan a large change, open an issue first so we can agree on the design.
 The [open-source playbook](OSS_PLAYBOOK.md) lists the current backlog, the
 programs we take part in, and the launch plan.
 
+## Claiming an issue
+
+These rules apply to everyone, including contributors who join through a
+program such as SWOC, GSSoC, or 24 Pull Requests.
+
+1. **Ask first.** Comment on the issue and wait until a maintainer assigns it to
+   you. A pull request for an issue assigned to someone else is closed.
+2. **One at a time.** Hold at most one assigned `good first issue`. Finish it
+   before you ask for the next.
+3. **Show progress.** If an assigned issue has no comment, commit, or draft pull
+   request for 7 days, a maintainer may unassign it.
+4. **Link the issue.** Write `Closes #<number>` in the pull request description.
+5. **Pass the checks.** Run `make check` (or the three `cargo` commands under
+   [Before you open a pull request](#before-you-open-a-pull-request)) before
+   you ask for review.
+6. **Understand your change.** You may use tools, including AI assistants, but
+   you must be able to explain every line. Pull requests that change unrelated
+   files, or that the author cannot explain, are closed.
+
+Labels help you choose: `good first issue` and `difficulty: easy` for a first
+contribution, `difficulty: medium` and `difficulty: hard` after that, and
+`area: *` for the part of the code.
+
 ## Development setup
 
 Requirements:
