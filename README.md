@@ -45,7 +45,7 @@ It reimplements a growing slice of Redis and its persistence formats in safe, de
     <td align="center" width="33%" valign="top">
       <h3>🪶</h3>
       <strong>Small and readable</strong><br>
-      <sub>About 21k lines of straight-line Rust with one dependency. Every subsystem is a plain module with its own tests.</sub>
+      <sub>About 21k lines of straight-line Rust with one dependency, and no <code>unsafe</code> in the server, enforced by <code>#![forbid(unsafe_code)]</code>. Every subsystem is a plain module with its own tests.</sub>
     </td>
     <td align="center" width="33%" valign="top">
       <h3>🔬</h3>
