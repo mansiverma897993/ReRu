@@ -42,6 +42,9 @@ It reimplements a growing slice of Redis and its persistence formats in safe, de
 - **Research-friendly.** Each command follows the pinned Redis 8.10.2
   reference, with differential tests against a live Redis where possible.
 
+Compared with Redis, Valkey, Dragonfly, KeyDB and Redka:
+[docs/COMPARISON.md](docs/COMPARISON.md).
+
 ## Quick start
 
 Install a Rust toolchain (1.88 or newer), then build and run:
@@ -288,8 +291,8 @@ thread.
 
 Measured against Redis on one machine, with the method and the limits of the
 numbers written down: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). ReRu is faster
-on a single connection with shallow pipelining, and slower with several
-connections or deep pipelines.
+on a single connection with shallow pipelining, and slower at 64 connections or
+with a deep pipeline.
 
 See the [roadmap](docs/ROADMAP.md) and
 [release notes](docs/RELEASE_NOTES.md) for details.
