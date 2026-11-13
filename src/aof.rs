@@ -184,9 +184,14 @@ fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<(
     match &entry.value {
         Value::String(value) => command(output, &[b"SET", key, value]),
         Value::List(items) => {
-            for chunk in items.chunks(1022) {
+            let mut remaining = items.iter();
+            loop {
+                let chunk: Vec<&[u8]> = remaining.by_ref().take(1022).map(Vec::as_slice).collect();
+                if chunk.is_empty() {
+                    break;
+                }
                 let mut args: Vec<&[u8]> = vec![b"RPUSH", key];
-                args.extend(chunk.iter().map(|member| member.as_slice()));
+                args.extend(chunk);
                 command(output, &args);
             }
         }

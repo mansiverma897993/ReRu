@@ -21,7 +21,7 @@ mod sorted_sets;
 mod stream_groups;
 mod streams;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[derive(Clone)]
 enum Value {
     String(Vec<u8>),
-    List(Vec<Vec<u8>>),
+    List(VecDeque<Vec<u8>>),
     Stream(streams::Stream),
     Hash(HashMap<Vec<u8>, Vec<u8>>),
     Set(HashSet<Vec<u8>>),
@@ -494,7 +494,7 @@ fn remove_expired(store: &mut HashMap<Vec<u8>, Entry>, key: &[u8]) {
     }
 }
 
-fn list_range(items: &[Vec<u8>], start: i64, stop: i64) -> Vec<u8> {
+fn list_range(items: &VecDeque<Vec<u8>>, start: i64, stop: i64) -> Vec<u8> {
     let len = items.len() as i128;
     if len == 0 {
         return protocol::array(&[]);
@@ -509,10 +509,14 @@ fn list_range(items: &[Vec<u8>], start: i64, stop: i64) -> Vec<u8> {
     let start = normalize(start).max(0);
     let stop = normalize(stop).min(len - 1);
     if start >= len || stop < start {
-        protocol::array(&[])
-    } else {
-        protocol::array(&items[start as usize..=stop as usize])
+        return protocol::array(&[]);
     }
+    let count = (stop - start + 1) as usize;
+    let mut reply = format!("*{count}\r\n").into_bytes();
+    for value in items.range(start as usize..=stop as usize) {
+        reply.extend(protocol::bulk(value));
+    }
+    reply
 }
 
 fn try_blocking_pop(
@@ -532,9 +536,9 @@ fn try_blocking_pop(
                     continue;
                 }
                 let value = if from_right {
-                    items.pop().unwrap()
+                    items.pop_back().unwrap()
                 } else {
-                    items.remove(0)
+                    items.pop_front().unwrap()
                 };
                 if items.is_empty() {
                     entries.remove(key);
@@ -647,7 +651,9 @@ fn try_multi_pop(
                 }
                 let count = options.count.min(items.len());
                 let values = if options.from_right {
-                    (0..count).map(|_| items.pop().unwrap()).collect::<Vec<_>>()
+                    (0..count)
+                        .map(|_| items.pop_back().unwrap())
+                        .collect::<Vec<_>>()
                 } else {
                     items.drain(..count).collect::<Vec<_>>()
                 };
@@ -1179,7 +1185,7 @@ fn execute_command(
                     value: Value::List(items),
                     ..
                 }) => {
-                    items.extend_from_slice(&command[2..]);
+                    items.extend(command[2..].iter().cloned());
                     changed.notify_all();
                     format!(":{}\r\n", items.len()).into_bytes()
                 }
@@ -1191,7 +1197,7 @@ fn execute_command(
                     store.insert(
                         command[1].clone(),
                         Entry {
-                            value: Value::List(command[2..].to_vec()),
+                            value: Value::List(command[2..].iter().cloned().collect()),
                             expires_at: None,
                         },
                     );
@@ -1234,7 +1240,9 @@ fn execute_command(
                     value: Value::List(items),
                     ..
                 }) => {
-                    items.splice(0..0, command[2..].iter().rev().cloned());
+                    for value in &command[2..] {
+                        items.push_front(value.clone());
+                    }
                     changed.notify_all();
                     format!(":{}\r\n", items.len()).into_bytes()
                 }

@@ -30,6 +30,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Fixed
 
+- Lists use a `VecDeque`, so `LPUSH` and `LPOP` no longer copy the whole list. At
+  20,000 elements they are about 2.5x faster and p99 falls from about 12 ms to
+  about 1.6 ms under load.
 - Sorted-set ranges now match Redis for a negative `LIMIT` offset (an empty
   selection instead of an error), for unparsable score bounds
   (`ERR min or max is not a float`), and for an empty score bound (read as zero).

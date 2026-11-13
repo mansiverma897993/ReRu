@@ -132,6 +132,42 @@ fn writes_transactions_flush_and_expiry_survive_rewrite_and_restart() {
 }
 
 #[test]
+fn list_chunks_survive_aof_rewrite_and_restart() {
+    // The rewrite emits RPUSH in chunks of 1022 elements, so a list longer than
+    // one chunk must survive the boundary without losing or repeating members.
+    let path = path();
+    let filename = path.to_str().unwrap();
+    let members: Vec<Vec<u8>> = (0..2045).map(|i| format!("v{i}").into_bytes()).collect();
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut c = Client::new(&server);
+        let mut pushed = 0i64;
+        for batch in members.chunks(900) {
+            let mut command: Vec<&[u8]> = vec![b"RPUSH", b"list"];
+            command.extend(batch.iter().map(Vec::as_slice));
+            pushed += batch.len() as i64;
+            assert_eq!(c.call(&command), integer(pushed));
+        }
+        start(&mut c);
+        wait(&mut c, 1);
+    }
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut c = Client::new(&server);
+        assert_eq!(c.call(&[b"LLEN", b"list"]), integer(2045));
+        assert_eq!(
+            c.call(&[b"LRANGE", b"list", b"0", b"2"]),
+            array(vec![bulk(b"v0"), bulk(b"v1"), bulk(b"v2")])
+        );
+        assert_eq!(
+            c.call(&[b"LRANGE", b"list", b"-3", b"-1"]),
+            array(vec![bulk(b"v2042"), bulk(b"v2043"), bulk(b"v2044")])
+        );
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn rewrite_errors_preserve_data_and_allow_retry() {
     let disabled = Server::start();
     let mut c = Client::new(&disabled);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::{mark_modified, protocol, remove_expired, Entry, Store, Value};
+use std::collections::VecDeque;
 
 #[derive(Clone, Copy)]
 enum Command {
@@ -100,7 +101,7 @@ fn pop(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     };
     let mut values = Vec::new();
     for _ in 0..count.min(items.len()) {
-        values.push(items.pop().unwrap());
+        values.push(items.pop_back().unwrap());
     }
     if !values.is_empty() {
         if items.is_empty() {
@@ -159,14 +160,14 @@ fn move_item(command: &[Vec<u8>], store: &Store, legacy: bool) -> Vec<u8> {
             return b"$-1\r\n".to_vec();
         };
         let value = if from_left {
-            items.remove(0)
+            items.pop_front().unwrap()
         } else {
-            items.pop().unwrap()
+            items.pop_back().unwrap()
         };
         if to_left {
-            items.insert(0, value.clone());
+            items.push_front(value.clone());
         } else {
-            items.push(value.clone());
+            items.push_back(value.clone());
         }
         mark_modified(store, source);
         return protocol::bulk(&value);
@@ -177,9 +178,9 @@ fn move_item(command: &[Vec<u8>], store: &Store, legacy: bool) -> Vec<u8> {
             ..
         }) => {
             if from_left {
-                items.remove(0)
+                items.pop_front().unwrap()
             } else {
-                items.pop().unwrap()
+                items.pop_back().unwrap()
             }
         }
         _ => return b"$-1\r\n".to_vec(),
@@ -191,16 +192,16 @@ fn move_item(command: &[Vec<u8>], store: &Store, legacy: bool) -> Vec<u8> {
         entries.remove(source);
     }
     let destination_entry = entries.entry(destination.clone()).or_insert_with(|| Entry {
-        value: Value::List(Vec::new()),
+        value: Value::List(VecDeque::new()),
         expires_at: None,
     });
     let Value::List(items) = &mut destination_entry.value else {
         unreachable!()
     };
     if to_left {
-        items.insert(0, value.clone());
+        items.push_front(value.clone());
     } else {
-        items.push(value.clone());
+        items.push_back(value.clone());
     }
     mark_modified(store, source);
     mark_modified(store, destination);
@@ -208,7 +209,7 @@ fn move_item(command: &[Vec<u8>], store: &Store, legacy: bool) -> Vec<u8> {
     protocol::bulk(&value)
 }
 
-fn pos(command: &[Vec<u8>], items: Option<&[Vec<u8>]>) -> Vec<u8> {
+fn pos(command: &[Vec<u8>], items: Option<&VecDeque<Vec<u8>>>) -> Vec<u8> {
     let mut rank = 1i64;
     let mut count = None;
     let mut maxlen = 0usize;
@@ -309,7 +310,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
                 .and_then(|items| index(at, items.len()).map(|at| &items[at]))
                 .map_or_else(|| b"$-1\r\n".to_vec(), |value| protocol::bulk(value))
         }
-        Command::Pos => pos(command, items.map(Vec::as_slice)),
+        Command::Pos => pos(command, items),
         Command::Lpushx | Command::Rpushx => {
             let Some(Entry {
                 value: Value::List(items),
@@ -319,9 +320,11 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
                 return Some(integer(0));
             };
             if matches!(kind, Command::Lpushx) {
-                items.splice(0..0, command[2..].iter().rev().cloned());
+                for value in &command[2..] {
+                    items.push_front(value.clone());
+                }
             } else {
-                items.extend_from_slice(&command[2..]);
+                items.extend(command[2..].iter().cloned());
             }
             let len = items.len();
             mark_modified(store, key);

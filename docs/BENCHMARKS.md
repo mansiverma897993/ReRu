@@ -127,40 +127,76 @@ per connection.
 The result depends on how the client talks to the server, not only on the server:
 
 - **One connection, one command in flight.** ReRu is 3.5-3.7 times faster for
-  strings, hashes, sets and sorted sets, and 2.5x faster for lists. Part
-  of that is the design: one thread per connection blocks in `read`, so there is
-  no event-loop wakeup per command. Part of it is the host: a macOS `kqueue`
-  wakeup costs more than a Linux `epoll` wakeup, which penalises Redis here. Do
-  not expect this ratio on Linux.
-- **One connection, pipeline 16.** ReRu stays ahead by 1.45-1.85x for strings,
-  hashes, sets and sorted sets, and falls behind for lists (0.57-0.60x).
-- **Eight connections, pipeline 1.** ReRu stays ahead by about 2.2x, except for
-  lists (0.73x).
+  every type measured, lists included. Part of that is the design: one thread
+  per connection blocks in `read`, so there is no event-loop wakeup per command.
+  Part of it is the host: a macOS `kqueue` wakeup costs more than a Linux
+  `epoll` wakeup, which penalises Redis here. Do not expect this ratio on Linux.
+- **One connection, pipeline 16.** ReRu stays ahead by 1.45-1.85x, and lists are
+  in the same band (1.5x).
+- **Eight connections, pipeline 1.** ReRu stays ahead by about 2.2x, lists
+  included (2.0-2.3x).
 - **Eight connections, pipeline 16.** Redis pulls ahead: about 3-3.8x for
-  non-list types and 9x for lists.
+  non-list types, 3.5-4x for lists.
 - **64 connections, pipeline 1.** Roughly level for non-list types
-  (0.86-0.94x), with lists at 0.28x.
+  (0.86-0.94x); lists sit at 0.74-0.85x.
 - **64 connections, pipeline 16.** Redis wins by 6-10x for non-list types and
-  about 20x for lists.
+  about 8x for lists.
+
+The list ratios above come from
+[List representation change](#list-representation-change-39). The list rows in
+the reference run table were recorded before that change and are kept as
+before-change data.
 
 The shape follows the design. ReRu serialises every command through one
 `command_gate` mutex and spends one thread per connection, so it cannot use extra
 cores for I/O and cannot batch a pipeline as cheaply as an event loop.
 
-Lists are the outlier at every concurrency level. At 20,000 elements `LPUSH` and
-`LPOP` fall to 0.05x of Redis and p99 rises to 12-13 ms, while `SET` at the same
-settings reaches 0.16x. The cause is the representation: `Value::List` is a
-`Vec`, and front operations shift every element, so a push or pop costs O(n).
-This is tracked in
-[#39](https://github.com/mansiverma897993/ReRu/issues/39). Until it is fixed,
-list numbers at large sizes measure the data structure, not the server.
+Lists used to be the outlier at every concurrency level. `Value::List` was a
+`Vec`, so front operations shifted every element and a push or pop cost O(n).
+The list rows in the reference run above predate that change; lists now use a
+`VecDeque` and reach the same band as the other types. See
+[List representation change](#list-representation-change-39).
+
+## List representation change (#39)
+
+`LPUSH` and `LPOP` were O(n): the list was a `Vec`, so every front operation
+shifted the remaining elements. At 20,000 elements they measured 0.05x of Redis
+and p99 rose to 12-13 ms.
+
+`Value::List` is now a `VecDeque`. The table below was measured back to back on
+the reference host with the pre-change binary built from `main` at `c56a61d` and
+the changed binary, four harness executions alternating the order, medians of
+two executions per side. Redis was measured in the same windows.
+
+| Test | c | P | Redis req/s | Before req/s | After req/s | Before / Redis | After / Redis | Improvement |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| LPUSH | 1 | 1 | 17,723 | 43,480 | 63,227 | 2.45x | 3.57x | 1.45x |
+| LPUSH | 8 | 1 | 85,838 | 62,894 | 173,241 | 0.73x | 2.02x | 2.75x |
+| LPUSH | 64 | 1 | 219,780 | 59,888 | 162,645 | 0.27x | 0.74x | 2.72x |
+| LPUSH | 1 | 16 | 263,158 | 150,376 | 400,000 | 0.57x | 1.52x | 2.66x |
+| LPUSH | 8 | 16 | 934,783 | 107,824 | 267,857 | 0.12x | 0.29x | 2.48x |
+| LPUSH | 64 | 16 | 2,111,111 | 108,108 | 271,205 | 0.05x | 0.13x | 2.51x |
+| LPOP | 1 | 1 | 17,978 | 41,841 | 64,135 | 2.33x | 3.57x | 1.53x |
+| LPOP | 8 | 1 | 85,663 | 61,920 | 178,700 | 0.72x | 2.09x | 2.89x |
+| LPOP | 64 | 1 | 217,391 | 61,280 | 177,733 | 0.28x | 0.82x | 2.90x |
+| LPOP | 1 | 16 | 263,158 | 151,524 | 416,848 | 0.58x | 1.58x | 2.75x |
+| LPOP | 8 | 16 | 954,545 | 108,699 | 258,938 | 0.11x | 0.27x | 2.38x |
+| LPOP | 64 | 16 | 2,222,222 | 108,699 | 246,970 | 0.05x | 0.11x | 2.27x |
+
+At 64 connections with pipeline 16, p99 for `LPUSH` fell from 11.8-11.9 ms to
+1.6-1.8 ms, and for `LPOP` from 12.5-12.6 ms to 1.6-1.7 ms. At 64 connections
+with pipeline 1, p99 fell from about 4.3-5.5 ms to about 0.4 ms.
+
+The remaining gap against Redis at 64 connections is the same gap the other
+types show: one mutex serialises commands and each connection owns a thread. The
+list operations themselves are no longer the bottleneck.
 
 ## What this does not prove
 
-- **Not "ReRu is faster than Redis".** It loses at every multi-connection
-  setting measured here, and with pipelining it only leads on a single
-  connection and only for non-list types. Clients commonly use several
-  connections, where the gap is widest.
+- **Not "ReRu is faster than Redis".** It leads on one connection, and at eight
+  connections with one command in flight. It loses with eight connections when
+  the pipeline is deep, and is level or behind at 64 connections with either
+  pipeline. Clients commonly use several connections, where the gap is widest.
 - **Not "ReRu uses less memory".** The run holds almost no data. ReRu's
   `maxmemory` accounting is a logical estimate, not allocator RSS, so it cannot
   be compared with Redis's `used_memory`; this page compares process RSS only.
