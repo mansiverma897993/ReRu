@@ -322,6 +322,11 @@ performance tuning. Memory limits use a logical dataset estimate, not process
 RSS. Commands are serialized, and each connection uses an operating-system
 thread.
 
+Measured against Redis on one machine, with the method and the limits of the
+numbers written down: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). ReRu is faster
+on a single connection with shallow pipelining, and slower with several
+connections or deep pipelines.
+
 See the [roadmap](docs/ROADMAP.md) and
 [release notes](docs/RELEASE_NOTES.md) for details.
 
