@@ -24,6 +24,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   arbitrary bytes, plus a committed seed corpus. The crate now also builds as a
   library so the parser is reachable from `fuzz/`. Fuzzing needs a nightly
   toolchain and is run by hand; see `docs/INTEROP_TESTING.md`.
+- Redis-compatible `COMMAND`, `COMMAND COUNT`, and `COMMAND INFO` metadata
+  discovery, including nil entries for unknown command names.
 
 ### Fixed
 

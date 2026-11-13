@@ -26,8 +26,16 @@ tests; it does not certify complete compatibility with Redis.
 | Observability | `INFO` | Partial `memory`, `stats`, `clients`, and `persistence` sections |
 | Server time | `TIME` | Epoch seconds and microseconds as RESP2 bulk strings |
 | Persistence | `SAVE`, `BGSAVE`, `LASTSAVE`, `DUMP`, `RESTORE`, `BGREWRITEAOF` | Initial Redis RDB interoperability; supported values, key expiry, checksums, REPLACE/ABSTTL; manual single-file AOF compaction |
+| Command introspection | [`COMMAND`](https://redis.io/docs/latest/commands/command/), `COMMAND COUNT`, `COMMAND INFO` | Lists ReRu's implemented command metadata, counts entries, or looks up names |
 
-Total: **203 Redis command metadata entries**, or **44.2% name presence**
+`COMMAND` metadata entries contain the name, arity, flags, and first/last/step
+key positions. Arity is negative for variadic commands. ReRu does not track
+Redis command flags, so the flags array is empty; key positions for commands
+with dynamically selected keys may be zero. `COMMAND INFO` preserves the
+requested order and returns nil for unrecognized names. The table is also the
+dispatcher allowlist, so command support and introspection cannot drift.
+
+Total: **207 Redis command metadata entries**, or **45.1% name presence**
 against 459 entries in the pinned Redis 8.10.2 metadata. This is neither a
 behavior pass rate nor a percentage of Redis completed. Run
 `powershell -File scripts/command_coverage.ps1 -RedisSource PATH_TO_REDIS_8_10_2`

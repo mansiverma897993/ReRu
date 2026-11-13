@@ -38,6 +38,56 @@ fn info(c: &mut Client) -> String {
 }
 
 #[test]
+fn command_introspection_reports_dispatch_metadata_and_unknown_names_in_place() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+
+    let Reply::Array(Some(commands)) = c.call(&[b"COMMAND"]) else {
+        panic!("COMMAND must return an array")
+    };
+    assert_eq!(
+        c.call(&[b"COMMAND", b"COUNT"]),
+        integer(commands.len() as i64)
+    );
+    assert_eq!(
+        c.call(&[b"COMMAND", b"INFO", b"GET"]),
+        array(vec![array(vec![
+            bulk(b"get"),
+            integer(2),
+            array(vec![]),
+            integer(1),
+            integer(1),
+            integer(1),
+        ])])
+    );
+    assert_eq!(
+        c.call(&[b"COMMAND", b"INFO", b"GET", b"not-a-command", b"PING"]),
+        array(vec![
+            array(vec![
+                bulk(b"get"),
+                integer(2),
+                array(vec![]),
+                integer(1),
+                integer(1),
+                integer(1),
+            ]),
+            Reply::Bulk(None),
+            array(vec![
+                bulk(b"ping"),
+                integer(-1),
+                array(vec![]),
+                integer(0),
+                integer(0),
+                integer(0),
+            ]),
+        ])
+    );
+    assert!(commands
+        .iter()
+        .all(|command| { matches!(command, Reply::Array(Some(fields)) if fields.len() == 6) }));
+}
+
+#[test]
 fn connection_ids_names_library_metadata_and_resp2_handshake_are_isolated() {
     let server = Server::start();
     let mut c = Client::new(&server);
