@@ -1,14 +1,16 @@
 # ReRu roadmap
 
 ReRu implements Redis-compatible behavior incrementally. The current
-`0.1.0-alpha.1` preview covers strings and cache commands, lists, hashes,
+`0.1.0-alpha.2` preview covers strings and cache commands, lists, hashes,
 sets, sorted sets, bitmaps, HyperLogLog, geospatial queries, streams with
 consumer groups, transactions with `WATCH`, local Pub/Sub, TTLs, ten eviction
 policies, and a partial `INFO` surface.
 
 Optional persistence is in place: ReRu snapshots, a single-file AOF with
 manual background rewrite, and a subset of Redis RDB. ReRu-to-ReRu
-replication and default-user authentication are tested. RESP2 only.
+replication and default-user authentication are tested. A static two-node
+Cluster slot-routing milestone is available; gossip, migration and failover
+remain pending. RESP2 only.
 
 See the [compatibility status](COMPATIBILITY.md) for the command inventory and
 the known behavioral gaps.
@@ -24,7 +26,7 @@ from upstream documentation; the project does not translate Redis source.
 - Compare observable behavior against a real Redis server and keep regression
   tests for every command before marking it complete.
 - Track command-name presence separately from verified behavior and subsystem
-  coverage. The current 219/459 metadata entries (47.7%) do not establish
+  coverage. The current 222/459 metadata entries (48.4%) do not establish
   30–40% implementation of Redis.
 - Keep the server usable after every small, tested commit.
 
