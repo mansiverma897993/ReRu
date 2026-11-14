@@ -11,6 +11,56 @@ fn compare(ours: &mut Client, redis: &mut Client, command: &[&[u8]]) {
     assert_eq!(actual, expected, "reply mismatch for {command:?}");
 }
 
+fn compare_command_metadata(entry: &client::Reply, redis: &mut Client) {
+    let client::Reply::Array(Some(fields)) = entry else {
+        panic!("invalid COMMAND entry: {entry:?}")
+    };
+    let client::Reply::Bulk(Some(name)) = &fields[0] else {
+        panic!("missing command name: {entry:?}")
+    };
+    let response = redis.call(&[b"COMMAND", b"INFO", name]);
+    let client::Reply::Array(Some(entries)) = response else {
+        panic!("invalid Redis COMMAND INFO reply for {name:?}")
+    };
+    let client::Reply::Array(Some(expected)) = &entries[0] else {
+        panic!("Redis does not recognize {name:?}")
+    };
+    for index in [1, 3, 4, 5] {
+        assert_eq!(
+            fields[index], expected[index],
+            "metadata for {name:?}, field {index}"
+        );
+    }
+    let client::Reply::Array(Some(children)) = &fields[9] else {
+        panic!("missing subcommands for {name:?}")
+    };
+    for child in children {
+        compare_command_metadata(child, redis);
+    }
+}
+
+#[test]
+fn command_arity_and_key_positions_match_redis_8() {
+    let Ok(port) = std::env::var("RERU_REDIS_REFERENCE_PORT") else {
+        return;
+    };
+    let server = common::Server::start();
+    let mut ours = Client::new(&server);
+    let mut redis = Client::on_port(port.parse().unwrap());
+    let client::Reply::Array(Some(probe)) = redis.call(&[b"COMMAND", b"INFO", b"HSETEX"]) else {
+        panic!("invalid Redis COMMAND INFO probe")
+    };
+    if matches!(probe.first(), Some(client::Reply::Bulk(None))) {
+        return; // Older Redis releases do not expose the Redis 8 command set.
+    }
+    let client::Reply::Array(Some(entries)) = ours.call(&[b"COMMAND"]) else {
+        panic!("invalid ReRu COMMAND reply")
+    };
+    for entry in &entries {
+        compare_command_metadata(entry, &mut redis);
+    }
+}
+
 #[test]
 fn hash_field_expiration_matches_redis_8() {
     let Ok(port) = std::env::var("RERU_REDIS_REFERENCE_PORT") else {

@@ -11,7 +11,7 @@ if (-not (Test-Path -LiteralPath $metadataDirectory -PathType Container)) {
 
 $repo = Split-Path -Parent $PSScriptRoot
 $inventory = Join-Path $repo 'docs/COMPATIBILITY.md'
-$areaPattern = '^\| (Connection|Strings/cache|Lists|Streams|Hashes|Sets|Sorted sets|Bitmaps|HyperLogLog|Geospatial|Keyspace|Transactions|Pub/Sub|Connection close|Authentication|Configuration|Observability|Server time|Persistence) \|'
+$areaPattern = '^\| (Connection|Strings/cache|Lists|Streams|Hashes|Sets|Sorted sets|Bitmaps|HyperLogLog|Geospatial|Keyspace|Transactions|Pub/Sub|Connection close|Authentication|Configuration|Observability|Server time|Persistence|Command introspection) \|'
 $implemented = @(
     Get-Content -LiteralPath $inventory |
         Where-Object { $_ -match $areaPattern } |

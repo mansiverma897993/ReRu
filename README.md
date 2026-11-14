@@ -98,8 +98,8 @@ print(client.get("greeting"))
 | Replication | Read-only ReRu replicas over an authenticated snapshot-plus-stream protocol |
 | Auth and operations | Default-user `AUTH`, client limits, runtime memory configuration, partial `INFO` metrics |
 
-**215 of 459 command metadata entries** from Redis 8.10.2 have implementation
-paths: **46.8% command-name coverage**. This counts command names, not complete
+**219 of 459 command metadata entries** from Redis 8.10.2 have implementation
+paths: **47.7% command-name coverage**. This counts command names, not complete
 behavior. Supported options, differences, and tests are listed in the
 [compatibility inventory](docs/COMPATIBILITY.md).
 

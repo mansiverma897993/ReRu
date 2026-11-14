@@ -60,6 +60,7 @@ authentication settings, and the pub/sub hub.
 | Module | Responsibility |
 | --- | --- |
 | `main.rs` | Core types, command dispatch, blocking helpers, client loop, startup |
+| `command_table.rs` | Metadata for `COMMAND`, `COMMAND COUNT`, and `COMMAND INFO` |
 | `lib.rs` | Library root; exports `protocol` for out-of-tree tooling such as `fuzz/` |
 | `protocol.rs` | RESP2 reader and reply writers; size and argument limits |
 | `connection.rs` | `HELLO`, `SELECT`, `CLIENT`, `RESET`, per-socket metadata |

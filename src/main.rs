@@ -7,6 +7,7 @@ mod bitmaps;
 mod cache;
 mod clients;
 mod collections;
+mod command_table;
 mod connection;
 mod eviction;
 mod expiry;
@@ -1044,6 +1045,9 @@ fn execute_command(
     allow_blocking: bool,
     probe: Option<&clients::DisconnectProbe>,
 ) -> Vec<u8> {
+    if command[0].eq_ignore_ascii_case(b"COMMAND") {
+        return command_table::execute(command);
+    }
     if let Some(response) = stream_groups::execute(command, store) {
         return response;
     }
@@ -1624,6 +1628,8 @@ fn validate_queued(command: &[Vec<u8>]) -> Result<(), Vec<u8>> {
     } else if let Some(valid) = stream_groups::valid_arity(command) {
         valid
     } else if let Some(valid) = auth::valid_arity(command) {
+        valid
+    } else if let Some(valid) = command_table::valid_arity(command) {
         valid
     } else if let Some(valid) = eviction::valid_arity(command) {
         valid
