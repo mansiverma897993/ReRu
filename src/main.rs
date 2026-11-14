@@ -1048,9 +1048,6 @@ fn execute_command(
     if command[0].eq_ignore_ascii_case(b"COMMAND") {
         return command_table::execute(command);
     }
-    if !command_table::supports(command) {
-        return protocol::error("unknown command");
-    }
     if let Some(response) = stream_groups::execute(command, store) {
         return response;
     }

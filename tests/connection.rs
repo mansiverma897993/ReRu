@@ -24,6 +24,21 @@ fn command_entry(name: &[u8], arity: i64, keys: (i64, i64, i64), subcommands: Ve
         array(subcommands),
     ])
 }
+fn listed_commands(entries: &[Reply], names: &mut Vec<Vec<Vec<u8>>>) {
+    for entry in entries {
+        let Reply::Array(Some(fields)) = entry else {
+            panic!("invalid COMMAND entry: {entry:?}")
+        };
+        let Reply::Bulk(Some(name)) = &fields[0] else {
+            panic!("missing command name: {entry:?}")
+        };
+        names.push(name.split(|byte| *byte == b'|').map(Vec::from).collect());
+        let Reply::Array(Some(children)) = &fields[9] else {
+            panic!("missing subcommands: {entry:?}")
+        };
+        listed_commands(children, names);
+    }
+}
 fn reset() -> Reply {
     Reply::Simple(b"RESET".to_vec())
 }
@@ -100,6 +115,27 @@ fn command_introspection_reports_dispatch_metadata_and_unknown_names_in_place() 
         Reply::Error(b"ERR unknown subcommand 'FOO'. Try COMMAND HELP.".to_vec())
     );
     assert_eq!(c.call(&[b"CONFIG", b"RESETSTAT"]), ok());
+}
+
+#[test]
+fn every_advertised_command_reaches_a_dispatch_handler() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    let Reply::Array(Some(entries)) = c.call(&[b"COMMAND"]) else {
+        panic!("COMMAND must return an array")
+    };
+    let mut names = Vec::new();
+    listed_commands(&entries, &mut names);
+    for name in names {
+        let mut c = Client::new(&server);
+        let args: Vec<_> = name.iter().map(Vec::as_slice).collect();
+        let response = c.call(&args);
+        assert!(
+            !matches!(&response, Reply::Error(error) if error.starts_with(b"ERR unknown command")),
+            "{} was advertised but rejected by the dispatcher: {response:?}",
+            String::from_utf8_lossy(&name[0])
+        );
+    }
 }
 
 #[test]

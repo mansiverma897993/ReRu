@@ -31,9 +31,10 @@ tests; it does not certify complete compatibility with Redis.
 `COMMAND` entries use the ten-field Redis 8 reply shape: name, arity, flags,
 first/last/step key positions, ACL categories, tips, key specifications, and
 subcommands. ReRu does not track command flags, ACL categories, tips, or key
-specifications, so those fields are empty arrays. Commands whose keys are
-selected by a `STREAMS` marker (`XREAD` and `XREADGROUP`) report zero key
-positions. Subcommands are nested under their parent command. `COMMAND INFO`
+specifications, so those fields are empty arrays. Commands with dynamic key
+positions (including `XREAD`, `LMPOP`, and `ZINTERCARD`) report zero legacy key
+positions; clients cannot use this reply to discover their keys yet.
+Subcommands are nested under their parent command. `COMMAND INFO`
 with no names returns all entries; named lookups preserve order and return nil
 for unknown names. `COMMAND` and `COMMAND INFO` return the same top-level
 entries, and `COMMAND COUNT` counts those entries. Redis documents

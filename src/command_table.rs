@@ -234,21 +234,21 @@ struct Metadata {
 
 fn metadata(name: &str) -> Metadata {
     let arity = match name {
-        "command" | "hello" | "ping" | "info" | "flushdb" | "flushall" | "bgsave"
-        | "bgrewriteaof" | "quit" | "unsubscribe" | "punsubscribe" => -1,
+        "command" | "hello" | "ping" | "info" | "flushdb" | "flushall" | "bgsave" | "quit"
+        | "unsubscribe" | "punsubscribe" => -1,
+        "bgrewriteaof" | "lastsave" | "dbsize" | "randomkey" | "multi" | "exec" | "discard"
+        | "unwatch" | "save" | "time" | "reset" => 1,
         "command|count" | "client|getname" | "client|id" | "client|info" | "echo" | "select"
         | "get" | "getdel" | "incr" | "decr" | "strlen" | "hgetall" | "hlen" | "hkeys"
         | "hvals" | "scard" | "smembers" | "type" | "ttl" | "pttl" | "persist" | "dump"
-        | "xlen" | "zcard" | "expiretime" | "pexpiretime" | "lastsave" | "dbsize" | "randomkey"
-        | "multi" | "exec" | "discard" | "unwatch" | "save" | "time" | "reset" => 1,
+        | "xlen" | "zcard" | "expiretime" | "pexpiretime" | "keys" => 2,
         "client|setname" | "append" | "setnx" | "getset" | "decrby" | "incrby" | "incrbyfloat"
         | "hget" | "hstrlen" | "sismember" | "zscore" | "rpoplpush" | "rename" | "renamenx"
         | "lindex" | "hexists" => 3,
         "httl" | "hpttl" | "hexpiretime" | "hpexpiretime" | "hpersist" | "hgetex" => -5,
         "config|resetstat" => 2,
-        "client|setinfo" | "getbit" | "hincrby" | "hincrbyfloat" | "hsetnx" | "smove" | "lset"
-        | "lrem" | "zcount" | "zlexcount" | "zremrangebyrank" | "zremrangebyscore"
-        | "zremrangebylex" => 4,
+        "client|setinfo" | "hincrby" | "hincrbyfloat" | "hsetnx" | "smove" | "lset" | "lrem"
+        | "zcount" | "zlexcount" | "zremrangebyrank" | "zremrangebyscore" | "zremrangebylex" => 4,
         "linsert" | "lmove" | "xgroup|createconsumer" | "xgroup|delconsumer" => 5,
         "blmove" => 6,
         "brpoplpush" => 4,
@@ -260,7 +260,7 @@ fn metadata(name: &str) -> Metadata {
         "config|set" => -4,
         "acl|whoami" => 2,
         "auth" | "pubsub" | "getex" | "lpop" | "rpop" | "hrandfield" | "spop" | "srandmember"
-        | "zpopmin" | "zpopmax" | "pfadd" | "pfcount" | "keys" | "scan" | "touch" | "mget"
+        | "zpopmin" | "zpopmax" | "pfadd" | "pfcount" | "pfmerge" | "scan" | "touch" | "mget"
         | "del" | "unlink" | "exists" | "watch" | "sunion" | "sinter" | "sdiff" | "bitcount"
         | "bitfield" | "bitfield_ro" | "command|info" => -2,
         "set" | "mset" | "msetnx" => -3,
@@ -268,9 +268,8 @@ fn metadata(name: &str) -> Metadata {
         "hset" | "hmset" | "zadd" => -4,
         "hexpire" | "hpexpire" | "hexpireat" | "hpexpireat" | "hsetex" => -6,
         "hdel" | "hmget" | "smismember" | "zmscore" | "xdel" | "hscan" | "sscan" | "zscan"
-        | "sintercard" | "xpending" | "zrank" | "zrevrank" | "lpos" | "zunion" | "zinter"
-        | "zdiff" | "pfmerge" | "geohash" | "expire" | "pexpire" | "expireat" | "pexpireat"
-        | "copy" => -3,
+        | "sintercard" | "zintercard" | "xpending" | "zrank" | "zrevrank" | "lpos" | "zunion"
+        | "zinter" | "zdiff" | "expire" | "pexpire" | "expireat" | "pexpireat" | "copy" => -3,
         "sadd" | "srem" | "zrem" | "rpush" | "lpush" | "rpushx" | "lpushx" | "blpop" | "brpop"
         | "bzpopmin" | "bzpopmax" => -3,
         "subscribe" | "psubscribe" => -2,
@@ -279,7 +278,7 @@ fn metadata(name: &str) -> Metadata {
         "bitop" => -4,
         "bitpos" => -3,
         "xgroup|create" => -5,
-        "xgroup|setid" => -4,
+        "xgroup|setid" => -5,
         "xinfo|groups" => 3,
         "xinfo|consumers" => 4,
         "xinfo|stream" => -3,
@@ -298,9 +297,9 @@ fn metadata(name: &str) -> Metadata {
         "geosearchstore" => -8,
         "geoadd" => -5,
         "geodist" => -4,
-        "geopos" => -3,
+        "geopos" | "geohash" => -2,
         "publish" => 3,
-        "zintercard" => -3,
+        "getbit" => 3,
         "llen" => 2,
         _ => panic!("missing command arity metadata: {name}"),
     };
@@ -310,25 +309,21 @@ fn metadata(name: &str) -> Metadata {
         | "bgrewriteaof" | "bgsave" | "client" | "client|getname" | "client|id" | "client|info"
         | "client|setinfo" | "client|setname" | "config" | "config|get" | "config|resetstat"
         | "config|set" | "discard" | "dbsize" | "echo" | "exec" | "flushall" | "flushdb"
-        | "hello" | "info" | "lastsave" | "multi" | "ping" | "pubsub" | "punsubscribe"
+        | "hello" | "info" | "keys" | "lastsave" | "multi" | "ping" | "pubsub" | "punsubscribe"
         | "psubscribe" | "publish" | "quit" | "randomkey" | "reset" | "save" | "scan"
-        | "select" | "subscribe" | "time" | "unwatch" | "unsubscribe" | "xread" | "xreadgroup" => {
-            (0, 0, 0)
-        }
+        | "select" | "subscribe" | "time" | "unwatch" | "unsubscribe" | "xread" | "xreadgroup"
+        | "xgroup" | "xinfo" | "lmpop" | "blmpop" | "zmpop" | "bzmpop" | "sintercard"
+        | "zintercard" | "zdiff" | "zinter" | "zunion" => (0, 0, 0),
         "copy" | "rename" | "renamenx" | "smove" | "lmove" | "blmove" | "rpoplpush"
         | "brpoplpush" | "zrangestore" => (1, 2, 1),
         "geosearchstore" => (1, 2, 1),
-        "sunionstore" | "sinterstore" | "sdiffstore" | "zunionstore" | "zinterstore"
-        | "zdiffstore" => (1, -1, 1),
+        "sunionstore" | "sinterstore" | "sdiffstore" => (1, -1, 1),
+        "zunionstore" | "zinterstore" | "zdiffstore" => (1, 1, 1),
         "mset" | "msetnx" => (1, -1, 2),
         "mget" | "del" | "unlink" | "exists" | "watch" | "sunion" | "sinter" | "sdiff"
-        | "pfcount" | "pfmerge" => (1, -1, 1),
-        "zunion" | "zinter" | "zdiff" => (2, -1, 1),
+        | "pfcount" | "pfmerge" | "touch" => (1, -1, 1),
         "blpop" | "brpop" | "bzpopmin" | "bzpopmax" => (1, -2, 1),
-        "lmpop" | "zmpop" => (2, -1, 1),
-        "blmpop" | "bzmpop" => (3, -1, 1),
         "bitop" => (2, -1, 1),
-        "sintercard" => (2, -1, 1),
         "xgroup|create"
         | "xgroup|setid"
         | "xgroup|destroy"
@@ -417,27 +412,6 @@ fn lookup(name: &[u8]) -> Option<String> {
     root_commands()
         .into_iter()
         .find(|candidate| candidate == &name)
-}
-
-pub fn supports(command: &[Vec<u8>]) -> bool {
-    let Some(name) = command.first() else {
-        return false;
-    };
-    if name.eq_ignore_ascii_case(b"COMMAND") {
-        return true;
-    }
-    if lookup(name).is_some() {
-        return true;
-    }
-    let Some(subcommand) = command.get(1) else {
-        return lookup(name).is_some();
-    };
-    let name = format!(
-        "{}|{}",
-        String::from_utf8_lossy(name).to_ascii_lowercase(),
-        String::from_utf8_lossy(subcommand).to_ascii_lowercase()
-    );
-    lookup(name.as_bytes()).is_some()
 }
 
 pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
@@ -559,7 +533,7 @@ mod tests {
             ("config|set", (-4, 0, 0, 0)),
             ("quit", (-1, 0, 0, 0)),
             ("llen", (2, 1, 1, 1)),
-            ("zintercard", (-3, 2, -1, 1)),
+            ("zintercard", (-3, 0, 0, 0)),
             ("hexpire", (-6, 1, 1, 1)),
             ("hpexpire", (-6, 1, 1, 1)),
             ("hexpireat", (-6, 1, 1, 1)),
