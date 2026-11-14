@@ -3,7 +3,7 @@
 mod client;
 mod common;
 use client::{array, integer, ok, queued, Client, Reply};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn bulk(value: &[u8]) -> Reply {
     Reply::Bulk(Some(value.to_vec()))
@@ -13,6 +13,368 @@ fn members(values: &[&[u8]]) -> Reply {
 }
 fn wrong_type() -> Reply {
     Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+}
+
+#[test]
+fn hash_field_expiry_reports_per_field_results_and_errors() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"HSET", b"h", b"a\0", b"one", b"b", b"two"]),
+        integer(2)
+    );
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIRE",
+            b"h",
+            b"5000",
+            b"FIELDS",
+            b"3",
+            b"a\0",
+            b"b",
+            b"absent"
+        ]),
+        array(vec![integer(1), integer(1), integer(-2)])
+    );
+    assert!(matches!(
+        c.call(&[b"HPTTL", b"h", b"FIELDS", b"3", b"a\0", b"b", b"absent"]),
+        Reply::Array(Some(values)) if matches!(values.as_slice(), [Reply::Integer(0..=5000), Reply::Integer(0..=5000), Reply::Integer(-2)])
+    ));
+    assert_eq!(
+        c.call(&[b"HPERSIST", b"h", b"FIELDS", b"2", b"a\0", b"absent"]),
+        array(vec![integer(1), integer(-2)])
+    );
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"a\0"]),
+        array(vec![integer(-1)])
+    );
+    assert_eq!(
+        c.call(&[b"HPEXPIRE", b"h", b"0", b"FIELDS", b"1", b"b"]),
+        array(vec![integer(2)])
+    );
+    assert_eq!(c.call(&[b"HGET", b"h", b"b"]), Reply::Bulk(None));
+    assert_eq!(c.call(&[b"SET", b"string", b"v"]), ok());
+    for command in [
+        &[
+            b"HEXPIRE".as_slice(),
+            b"string",
+            b"5",
+            b"FIELDS",
+            b"1",
+            b"a",
+        ] as &[&[u8]],
+        &[b"HPEXPIRE", b"string", b"5", b"FIELDS", b"1", b"a"],
+        &[
+            b"HEXPIREAT",
+            b"string",
+            b"2000000000",
+            b"FIELDS",
+            b"1",
+            b"a",
+        ],
+        &[
+            b"HPEXPIREAT",
+            b"string",
+            b"2000000000000",
+            b"FIELDS",
+            b"1",
+            b"a",
+        ],
+        &[b"HTTL", b"string", b"FIELDS", b"1", b"a"],
+        &[b"HPTTL", b"string", b"FIELDS", b"1", b"a"],
+        &[b"HEXPIRETIME", b"string", b"FIELDS", b"1", b"a"],
+        &[b"HPEXPIRETIME", b"string", b"FIELDS", b"1", b"a"],
+        &[b"HPERSIST", b"string", b"FIELDS", b"1", b"a"],
+        &[b"HGETEX", b"string", b"FIELDS", b"1", b"a"],
+        &[b"HSETEX", b"string", b"FIELDS", b"1", b"a", b"x"],
+    ] {
+        assert_eq!(c.call(command), wrong_type(), "{command:?}");
+    }
+    assert!(matches!(
+        c.call(&[b"HEXPIRE", b"h", b"bad", b"FIELDS", b"1", b"a"]),
+        Reply::Error(_)
+    ));
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"NX", b"XX", b"FIELDS", b"1", b"a"]),
+        Reply::Error(b"ERR Multiple condition flags specified".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"PERSIST", b"EX", b"10", b"FIELDS", b"1", b"a"]),
+        Reply::Error(
+            b"ERR Only one of EX, PX, EXAT, PXAT or PERSIST arguments can be specified".to_vec()
+        )
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"FNX", b"FXX", b"FIELDS", b"1", b"a", b"x"]),
+        Reply::Error(b"ERR Only one of FXX or FNX arguments can be specified".to_vec())
+    );
+}
+
+#[test]
+fn hash_field_expiry_conditions_and_overwrite_rules() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"HSET", b"h", b"a", b"1", b"b", b"2"]), integer(2));
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"30", b"XX", b"FIELDS", b"2", b"a", b"b"]),
+        array(vec![integer(0), integer(0)])
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"30", b"NX", b"FIELDS", b"2", b"a", b"b"]),
+        array(vec![integer(1), integer(1)])
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"60", b"GT", b"FIELDS", b"1", b"a"]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"GT", b"FIELDS", b"1", b"a"]),
+        array(vec![integer(0)])
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"LT", b"FIELDS", b"1", b"a"]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(c.call(&[b"HINCRBY", b"h", b"a", b"2"]), integer(3));
+    assert!(
+        matches!(c.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"a"]), Reply::Array(Some(values)) if matches!(values[0], Reply::Integer(n) if (0..=10).contains(&n)))
+    );
+    assert_eq!(c.call(&[b"HSET", b"h", b"a", b"new"]), integer(0));
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"a"]),
+        array(vec![integer(-1)])
+    );
+    assert_eq!(
+        c.call(&[b"HPERSIST", b"h", b"FIELDS", b"2", b"a", b"b"]),
+        array(vec![integer(-1), integer(1)])
+    );
+}
+
+#[test]
+fn hash_field_absolute_expiry_is_reported_exactly() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    let at = (SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        + 100_000)
+        .to_string();
+    assert_eq!(c.call(&[b"HSET", b"h", b"field", b"value"]), integer(1));
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIREAT",
+            b"h",
+            at.as_bytes(),
+            b"FIELDS",
+            b"1",
+            b"field"
+        ]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(
+        c.call(&[b"HPEXPIRETIME", b"h", b"FIELDS", b"1", b"field"]),
+        array(vec![integer(at.parse().unwrap())])
+    );
+    let seconds = (at.parse::<i64>().unwrap() / 1000).to_string();
+    assert_eq!(
+        c.call(&[
+            b"HEXPIREAT",
+            b"h",
+            seconds.as_bytes(),
+            b"FIELDS",
+            b"1",
+            b"field",
+        ]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"field"]),
+        array(vec![integer(seconds.parse().unwrap())])
+    );
+}
+
+#[test]
+fn hgetex_and_hsetex_update_fields_atomically() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"50", b"FIELDS", b"2", b"a", b"one", b"b", b"two"]),
+        integer(1)
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"FNX", b"FIELDS", b"2", b"a", b"wrong", b"c", b"three"]),
+        integer(0)
+    );
+    assert_eq!(
+        c.call(&[
+            b"HSETEX", b"h", b"FXX", b"KEEPTTL", b"FIELDS", b"2", b"a", b"new", b"b", b"updated"
+        ]),
+        integer(1)
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"PERSIST", b"FIELDS", b"3", b"a", b"b", b"missing"]),
+        array(vec![bulk(b"new"), bulk(b"updated"), Reply::Bulk(None)])
+    );
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"2", b"a", b"b"]),
+        array(vec![integer(-1), integer(-1)])
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"PX", b"3000", b"FIELDS", b"1", b"a"]),
+        array(vec![bulk(b"new")])
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"FIELDS", b"1", b"a", b"overwritten"]),
+        integer(1)
+    );
+    assert_eq!(
+        c.call(&[b"HPTTL", b"h", b"FIELDS", b"1", b"a"]),
+        array(vec![integer(-1)])
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"missing"]),
+        array(vec![Reply::Bulk(None)])
+    );
+    assert!(matches!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"5", b"KEEPTTL", b"FIELDS", b"1", b"a", b"x"]),
+        Reply::Error(_)
+    ));
+}
+
+#[test]
+fn hash_field_expiry_survives_snapshot_and_aof_restarts() {
+    let directory = common::temp_path("reru-hfield", "");
+    std::fs::create_dir(&directory).unwrap();
+    for (mode, suffix) in [("--snapshot", "snap"), ("--appendonly", "aof")] {
+        let path = directory.join(suffix);
+        let filename = path.to_str().unwrap();
+        {
+            let server = common::Server::start_with(&[mode, filename]);
+            let mut c = Client::new(&server);
+            assert_eq!(
+                c.call(&[b"HSET", b"h", b"volatile", b"v", b"stable", b"s"]),
+                integer(2)
+            );
+            assert_eq!(
+                c.call(&[b"HPEXPIRE", b"h", b"100000", b"FIELDS", b"1", b"volatile"]),
+                array(vec![integer(1)])
+            );
+        }
+        {
+            let server = common::Server::start_with(&[mode, filename]);
+            let mut c = Client::new(&server);
+            assert!(
+                matches!(c.call(&[b"HPTTL", b"h", b"FIELDS", b"1", b"volatile"]), Reply::Array(Some(values)) if matches!(values[0], Reply::Integer(n) if (0..=100000).contains(&n)))
+            );
+            assert_eq!(
+                c.call(&[b"HPEXPIREAT", b"h", b"1", b"FIELDS", b"1", b"volatile"]),
+                array(vec![integer(2)])
+            );
+            assert_eq!(c.call(&[b"HGETALL", b"h"]), members(&[b"stable", b"s"]));
+        }
+        {
+            let server = common::Server::start_with(&[mode, filename]);
+            let mut c = Client::new(&server);
+            assert_eq!(c.call(&[b"HGETALL", b"h"]), members(&[b"stable", b"s"]));
+            assert_eq!(
+                c.call(&[b"HPTTL", b"h", b"FIELDS", b"1", b"volatile"]),
+                array(vec![integer(-2)])
+            );
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn idle_field_expiry_invalidates_watch_and_rewrites_aof() {
+    let path = common::temp_path("reru-hfield-active", ".aof");
+    let filename = path.to_str().unwrap();
+    {
+        let server = common::Server::start_with(&["--appendonly", filename]);
+        let mut writer = Client::new(&server);
+        let mut watcher = Client::new(&server);
+        assert_eq!(
+            writer.call(&[b"HSET", b"h", b"short", b"x", b"long", b"y"]),
+            integer(2)
+        );
+        assert_eq!(
+            writer.call(&[b"HPEXPIRE", b"h", b"100", b"FIELDS", b"1", b"short"]),
+            array(vec![integer(1)])
+        );
+        assert_eq!(watcher.call(&[b"WATCH", b"h"]), ok());
+        let before = std::fs::metadata(&path).unwrap().len();
+        let until = Instant::now() + Duration::from_secs(3);
+        while std::fs::metadata(&path).unwrap().len() == before && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            std::fs::metadata(&path).unwrap().len() > before,
+            "background expiry did not persist"
+        );
+        assert_eq!(watcher.call(&[b"MULTI"]), ok());
+        assert_eq!(watcher.call(&[b"HGET", b"h", b"long"]), queued());
+        assert_eq!(watcher.call(&[b"EXEC"]), Reply::Array(None));
+        assert_eq!(writer.call(&[b"HGETALL", b"h"]), members(&[b"long", b"y"]));
+        assert_eq!(
+            writer.call(&[b"BGREWRITEAOF"]),
+            Reply::Simple(b"Background append only file rewriting started".to_vec())
+        );
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            let Reply::Bulk(Some(info)) = writer.call(&[b"INFO", b"persistence"]) else {
+                panic!("missing INFO")
+            };
+            if info
+                .windows(b"aof_rewrites:1\r\n".len())
+                .any(|part| part == b"aof_rewrites:1\r\n")
+            {
+                break;
+            }
+            assert!(Instant::now() < until, "AOF rewrite did not complete");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    {
+        let server = common::Server::start_with(&["--appendonly", filename]);
+        let mut c = Client::new(&server);
+        assert_eq!(c.call(&[b"HGETALL", b"h"]), members(&[b"long", b"y"]));
+        assert_eq!(
+            c.call(&[b"HPTTL", b"h", b"FIELDS", b"1", b"short"]),
+            array(vec![integer(-2)])
+        );
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn field_expiry_respects_key_ttl_and_reaches_replicas() {
+    let primary = common::Server::start();
+    let mut c = Client::new(&primary);
+    assert_eq!(
+        c.call(&[b"HSET", b"h", b"soon", b"x", b"later", b"y"]),
+        integer(2)
+    );
+    assert_eq!(c.call(&[b"PEXPIRE", b"h", b"100000"]), integer(1));
+    assert_eq!(
+        c.call(&[b"HPEXPIRE", b"h", b"5000", b"FIELDS", b"1", b"soon"]),
+        array(vec![integer(1)])
+    );
+    let replica =
+        common::Server::start_with(&["--replicaof", "127.0.0.1", &primary.port.to_string()]);
+    let mut reader = Client::new(&replica);
+    let until = Instant::now() + Duration::from_secs(2);
+    while reader.call(&[b"HGET", b"h", b"soon"]) != bulk(b"x") && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(reader.call(&[b"HGET", b"h", b"soon"]), bulk(b"x"));
+    assert!(
+        matches!(reader.call(&[b"HPTTL", b"h", b"FIELDS", b"1", b"soon"]), Reply::Array(Some(values)) if matches!(values[0], Reply::Integer(n) if n > 0 && n <= 5000))
+    );
+    assert!(
+        matches!(reader.call(&[b"HPEXPIRE", b"h", b"10", b"FIELDS", b"1", b"soon"]), Reply::Error(e) if e.starts_with(b"READONLY"))
+    );
+    assert!(matches!(reader.call(&[b"PTTL", b"h"]), Reply::Integer(n) if n > 0 && n <= 100000));
 }
 
 #[test]

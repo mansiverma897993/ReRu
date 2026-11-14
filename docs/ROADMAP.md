@@ -24,7 +24,7 @@ from upstream documentation; the project does not translate Redis source.
 - Compare observable behavior against a real Redis server and keep regression
   tests for every command before marking it complete.
 - Track command-name presence separately from verified behavior and subsystem
-  coverage. The current 203/459 metadata entries (44.2%) do not establish
+  coverage. The current 215/459 metadata entries (46.8%) do not establish
   30–40% implementation of Redis.
 - Keep the server usable after every small, tested commit.
 
@@ -34,7 +34,7 @@ from upstream documentation; the project does not translate Redis source.
    trimming/deletion, IDMP, negative acknowledgements and CLAIM reads. Add FIFO
    waiter ordering and disconnect cancellation for blocking commands.
 2. Expand sorted sets, bitmaps, and geospatial indexing; extend hashes and
-   sets with field expiry and remaining command options. Existing scans, random
+   sets with remaining command options and Redis RDB field-TTL support. Existing scans, random
    access, moves and set algebra still need broader compatibility tests.
 3. Expand transaction compatibility testing, Pub/Sub coverage, scripting, and
    the remaining keyspace commands.

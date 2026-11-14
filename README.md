@@ -91,15 +91,15 @@ print(client.get("greeting"))
 
 | Area | What works |
 | --- | --- |
-| Data structures | Strings, lists, hashes, sets, sorted sets, bitmaps, streams with consumer groups, geospatial queries |
+| Data structures | Strings, lists, hashes with field TTLs, sets, sorted sets, bitmaps, streams with consumer groups, geospatial queries |
 | Cache behavior | Conditional writes, TTLs, background expiry, ten eviction policies, configurable memory estimates |
 | Transactions and messaging | `MULTI`, `EXEC`, `WATCH`, blocking reads, local Pub/Sub, stream acknowledgements, pending-message recovery |
 | Persistence | ReRu snapshots, single-file AOF with online rewrite, a tested subset of Redis RDB |
 | Replication | Read-only ReRu replicas over an authenticated snapshot-plus-stream protocol |
 | Auth and operations | Default-user `AUTH`, client limits, runtime memory configuration, partial `INFO` metrics |
 
-**204 of 459 command metadata entries** from Redis 8.10.2 have implementation
-paths: **44.4% command-name coverage**. This counts command names, not complete
+**215 of 459 command metadata entries** from Redis 8.10.2 have implementation
+paths: **46.8% command-name coverage**. This counts command names, not complete
 behavior. Supported options, differences, and tests are listed in the
 [compatibility inventory](docs/COMPATIBILITY.md).
 
