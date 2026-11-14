@@ -125,6 +125,7 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
         Some(name) if name.eq_ignore_ascii_case(b"SET") => {
             command.len() >= 4 && command.len().is_multiple_of(2)
         }
+        Some(name) if name.eq_ignore_ascii_case(b"RESETSTAT") => command.len() == 2,
         _ => false,
     })
 }
@@ -177,6 +178,12 @@ pub fn info(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
 pub fn execute_config(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     if valid_arity(command) != Some(true) {
         return protocol::error("wrong number of arguments for 'config' command");
+    }
+    if command[1].eq_ignore_ascii_case(b"RESETSTAT") {
+        store.eviction.evicted_keys.store(0, Ordering::Relaxed);
+        store.expiry.reset_stats();
+        store.clients.reset_stats();
+        return b"+OK\r\n".to_vec();
     }
     let settings = store.eviction.settings();
     if command[1].eq_ignore_ascii_case(b"GET") {

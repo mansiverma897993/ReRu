@@ -105,6 +105,11 @@ impl Limits {
             self.rejected.load(Ordering::Relaxed)
         )
     }
+
+    pub fn reset_stats(&self) {
+        self.received.store(0, Ordering::Relaxed);
+        self.rejected.store(0, Ordering::Relaxed);
+    }
 }
 
 // Covers QUIT, malformed input, disconnected clients and failed thread spawns.

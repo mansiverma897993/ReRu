@@ -22,20 +22,26 @@ tests; it does not certify complete compatibility with Redis.
 | Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `PUBSUB` | Binary channels/messages, glob patterns, RESP2 subscribed mode, CHANNELS/NUMSUB/NUMPAT; local process only |
 | Connection close | `QUIT` | Replies OK and closes the connection |
 | Authentication | `AUTH`, `ACL WHOAMI` | Startup-configured password for the default user, connection-local authentication and authenticated ReRu replication |
-| Configuration | `CONFIG GET`, `CONFIG SET` | Runtime `maxmemory`, `maxmemory-policy`, and `maxclients`; GET also reports AOF enabled/fsync mode and configured RDB dir/dbfilename |
+| Configuration | `CONFIG GET`, `CONFIG SET`, [`CONFIG RESETSTAT`](https://redis.io/docs/latest/commands/config-resetstat/) | Runtime `maxmemory`, `maxmemory-policy`, and `maxclients`; GET also reports AOF enabled/fsync mode and configured RDB dir/dbfilename; RESETSTAT clears counters exposed by INFO |
 | Observability | `INFO` | Partial `memory`, `stats`, `clients`, and `persistence` sections |
 | Server time | `TIME` | Epoch seconds and microseconds as RESP2 bulk strings |
 | Persistence | `SAVE`, `BGSAVE`, `LASTSAVE`, `DUMP`, `RESTORE`, `BGREWRITEAOF` | Initial Redis RDB interoperability; supported values, key expiry, checksums, REPLACE/ABSTTL; manual single-file AOF compaction |
 | Command introspection | [`COMMAND`](https://redis.io/docs/latest/commands/command/), `COMMAND COUNT`, `COMMAND INFO` | Lists ReRu's implemented command metadata, counts entries, or looks up names |
 
-`COMMAND` metadata entries contain the name, arity, flags, and first/last/step
-key positions. Arity is negative for variadic commands. ReRu does not track
-Redis command flags, so the flags array is empty; key positions for commands
-with dynamically selected keys may be zero. `COMMAND INFO` preserves the
-requested order and returns nil for unrecognized names. The table is also the
-dispatcher allowlist, so command support and introspection cannot drift.
+`COMMAND` entries use the ten-field Redis 8 reply shape: name, arity, flags,
+first/last/step key positions, ACL categories, tips, key specifications, and
+subcommands. ReRu does not track command flags, ACL categories, tips, or key
+specifications, so those fields are empty arrays. Commands whose keys are
+selected by a `STREAMS` marker (`XREAD` and `XREADGROUP`) report zero key
+positions. Subcommands are nested under their parent command. `COMMAND INFO`
+with no names returns all entries; named lookups preserve order and return nil
+for unknown names. `COMMAND` and `COMMAND INFO` return the same top-level
+entries, and `COMMAND COUNT` counts those entries. Redis documents
+[`COMMAND`](https://redis.io/docs/latest/commands/command/),
+[`COMMAND COUNT`](https://redis.io/docs/latest/commands/command-count/), and
+[`COMMAND INFO`](https://redis.io/docs/latest/commands/command-info/).
 
-Total: **207 Redis command metadata entries**, or **45.1% name presence**
+Total: **208 Redis command metadata entries**, or **45.3% name presence**
 against 459 entries in the pinned Redis 8.10.2 metadata. This is neither a
 behavior pass rate nor a percentage of Redis completed. Run
 `powershell -File scripts/command_coverage.ps1 -RedisSource PATH_TO_REDIS_8_10_2`

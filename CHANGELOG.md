@@ -38,6 +38,7 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   toolchain and is run by hand; see `docs/INTEROP_TESTING.md`.
 - Redis-compatible `COMMAND`, `COMMAND COUNT`, and `COMMAND INFO` metadata
   discovery, including nil entries for unknown command names.
+- `CONFIG RESETSTAT` to clear the statistics counters exposed by `INFO`.
 
 ### Changed
 

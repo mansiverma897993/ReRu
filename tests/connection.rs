@@ -10,6 +10,20 @@ use common::Server;
 fn bulk(bytes: &[u8]) -> Reply {
     Reply::Bulk(Some(bytes.to_vec()))
 }
+fn command_entry(name: &[u8], arity: i64, keys: (i64, i64, i64), subcommands: Vec<Reply>) -> Reply {
+    array(vec![
+        bulk(name),
+        integer(arity),
+        array(vec![]),
+        integer(keys.0),
+        integer(keys.1),
+        integer(keys.2),
+        array(vec![]),
+        array(vec![]),
+        array(vec![]),
+        array(subcommands),
+    ])
+}
 fn reset() -> Reply {
     Reply::Simple(b"RESET".to_vec())
 }
@@ -42,6 +56,8 @@ fn command_introspection_reports_dispatch_metadata_and_unknown_names_in_place() 
     let server = Server::start();
     let mut c = Client::new(&server);
 
+    let all_info = c.call(&[b"COMMAND", b"INFO"]);
+    assert_eq!(all_info, c.call(&[b"COMMAND"]));
     let Reply::Array(Some(commands)) = c.call(&[b"COMMAND"]) else {
         panic!("COMMAND must return an array")
     };
@@ -51,40 +67,39 @@ fn command_introspection_reports_dispatch_metadata_and_unknown_names_in_place() 
     );
     assert_eq!(
         c.call(&[b"COMMAND", b"INFO", b"GET"]),
-        array(vec![array(vec![
-            bulk(b"get"),
-            integer(2),
-            array(vec![]),
-            integer(1),
-            integer(1),
-            integer(1),
-        ])])
+        array(vec![command_entry(b"get", 2, (1, 1, 1), vec![])])
+    );
+    assert_eq!(
+        c.call(&[b"COMMAND", b"INFO", b"CLIENT"]),
+        array(vec![command_entry(
+            b"client",
+            -2,
+            (0, 0, 0),
+            vec![
+                command_entry(b"client|getname", 2, (0, 0, 0), vec![]),
+                command_entry(b"client|id", 2, (0, 0, 0), vec![]),
+                command_entry(b"client|info", 2, (0, 0, 0), vec![]),
+                command_entry(b"client|setinfo", 4, (0, 0, 0), vec![]),
+                command_entry(b"client|setname", 3, (0, 0, 0), vec![]),
+            ],
+        )])
     );
     assert_eq!(
         c.call(&[b"COMMAND", b"INFO", b"GET", b"not-a-command", b"PING"]),
         array(vec![
-            array(vec![
-                bulk(b"get"),
-                integer(2),
-                array(vec![]),
-                integer(1),
-                integer(1),
-                integer(1),
-            ]),
+            command_entry(b"get", 2, (1, 1, 1), vec![]),
             Reply::Bulk(None),
-            array(vec![
-                bulk(b"ping"),
-                integer(-1),
-                array(vec![]),
-                integer(0),
-                integer(0),
-                integer(0),
-            ]),
+            command_entry(b"ping", -1, (0, 0, 0), vec![]),
         ])
     );
     assert!(commands
         .iter()
-        .all(|command| { matches!(command, Reply::Array(Some(fields)) if fields.len() == 6) }));
+        .all(|command| { matches!(command, Reply::Array(Some(fields)) if fields.len() == 10) }));
+    assert_eq!(
+        c.call(&[b"COMMAND", b"FOO"]),
+        Reply::Error(b"ERR unknown subcommand 'FOO'. Try COMMAND HELP.".to_vec())
+    );
+    assert_eq!(c.call(&[b"CONFIG", b"RESETSTAT"]), ok());
 }
 
 #[test]

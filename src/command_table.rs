@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::protocol;
+use std::collections::BTreeSet;
 
 const COMMANDS: &[&str] = &[
     "acl|whoami",
@@ -29,6 +30,7 @@ const COMMANDS: &[&str] = &[
     "client|setinfo",
     "client|setname",
     "config|get",
+    "config|resetstat",
     "config|set",
     "copy",
     "decr",
@@ -211,7 +213,7 @@ const COMMANDS: &[&str] = &[
     "zunionstore",
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Metadata {
     arity: i64,
     first_key: i64,
@@ -221,126 +223,107 @@ struct Metadata {
 
 fn metadata(name: &str) -> Metadata {
     let arity = match name {
-        "get" | "getdel" | "incr" | "decr" | "strlen" | "hgetall" | "hexists" | "hlen"
-        | "hkeys" | "hvals" | "scard" | "smembers" | "type" | "ttl" | "pttl" | "persist"
-        | "touch" | "dump" | "xlen" | "zcard" | "dbsize" | "randomkey" | "multi" | "exec"
-        | "discard" | "unwatch" | "quit" | "client|id" | "client|getname" | "client|info" => 2,
-        "echo" | "append" | "setnx" | "getset" | "decrby" | "incrby" | "incrbyfloat" | "hget"
-        | "hstrlen" | "sismember" | "smove" | "zscore" | "zincrby" | "zrank" | "zrevrank"
-        | "zcount" | "zlexcount" | "expire" | "pexpire" | "expireat" | "pexpireat"
-        | "expiretime" | "pexpiretime" | "rename" | "renamenx" | "copy" | "restore" | "geodist"
-        | "lindex" | "lrem" | "rpoplpush" => 3,
-        "client|setname" => 3,
-        "client|setinfo" | "config|set" => 4,
+        "command" | "hello" | "ping" | "info" | "flushdb" | "flushall" | "bgsave"
+        | "bgrewriteaof" | "quit" | "unsubscribe" | "punsubscribe" => -1,
+        "command|count" | "client|getname" | "client|id" | "client|info" | "echo" | "select"
+        | "get" | "getdel" | "incr" | "decr" | "strlen" | "hgetall" | "hlen" | "hkeys"
+        | "hvals" | "scard" | "smembers" | "type" | "ttl" | "pttl" | "persist" | "dump"
+        | "xlen" | "zcard" | "expiretime" | "pexpiretime" | "lastsave" | "dbsize" | "randomkey"
+        | "multi" | "exec" | "discard" | "unwatch" | "save" | "time" | "reset" => 1,
+        "client|setname" | "append" | "setnx" | "getset" | "decrby" | "incrby" | "incrbyfloat"
+        | "hget" | "hstrlen" | "sismember" | "zscore" | "rpoplpush" | "rename" | "renamenx"
+        | "lindex" | "hexists" => 3,
+        "config|resetstat" => 2,
+        "client|setinfo" | "getbit" | "hincrby" | "hincrbyfloat" | "hsetnx" | "smove" | "lset"
+        | "lrem" | "zcount" | "zlexcount" | "zremrangebyrank" | "zremrangebyscore"
+        | "zremrangebylex" => 4,
+        "linsert" | "lmove" | "xgroup|createconsumer" | "xgroup|delconsumer" => 5,
+        "blmove" => 6,
+        "brpoplpush" => 4,
+        "getrange" | "lrange" | "ltrim" | "substr" => 4,
+        "restore" => -4,
+        "zincrby" => 4,
+        "client" | "config" | "acl" | "xgroup" | "xinfo" => -2,
         "config|get" => -3,
+        "config|set" => -4,
         "acl|whoami" => 2,
+        "auth" | "pubsub" | "getex" | "lpop" | "rpop" | "hrandfield" | "spop" | "srandmember"
+        | "zpopmin" | "zpopmax" | "pfadd" | "pfcount" | "keys" | "scan" | "touch" | "mget"
+        | "del" | "unlink" | "exists" | "watch" | "sunion" | "sinter" | "sdiff" | "bitcount"
+        | "bitfield" | "bitfield_ro" | "command|info" => -2,
+        "set" | "mset" | "msetnx" => -3,
+        "setex" | "psetex" | "setrange" | "setbit" | "xgroup|destroy" => 4,
+        "hset" | "hmset" | "zadd" => -4,
+        "hdel" | "hmget" | "smismember" | "zmscore" | "xdel" | "hscan" | "sscan" | "zscan"
+        | "sintercard" | "xpending" | "zrank" | "zrevrank" | "lpos" | "zunion" | "zinter"
+        | "zdiff" | "pfmerge" | "geohash" | "expire" | "pexpire" | "expireat" | "pexpireat"
+        | "copy" => -3,
+        "sadd" | "srem" | "zrem" | "rpush" | "lpush" | "rpushx" | "lpushx" | "blpop" | "brpop"
+        | "bzpopmin" | "bzpopmax" => -3,
+        "subscribe" | "psubscribe" => -2,
+        "lmpop" | "zmpop" => -4,
+        "blmpop" | "bzmpop" => -5,
+        "bitop" => -4,
+        "bitpos" => -3,
         "xgroup|create" => -5,
         "xgroup|setid" => -4,
-        "xgroup|destroy" => 4,
-        "xgroup|createconsumer" | "xgroup|delconsumer" => 5,
-        "xinfo|groups" | "xinfo|stream" => 3,
+        "xinfo|groups" => 3,
         "xinfo|consumers" => 4,
+        "xinfo|stream" => -3,
         "xack" => -4,
-        "xpending" => -3,
         "xreadgroup" => -7,
         "xclaim" | "xautoclaim" => -6,
         "xsetid" => -3,
         "xadd" => -5,
         "xtrim" => -4,
-        "xdel" => -3,
-        "xrange" | "xrevrange" => -4,
-        "xread" => -4,
-        "select" => 2,
-        "getbit" => 3,
-        "hsetnx" | "hincrby" | "hincrbyfloat" => 4,
-        "hset" => -4,
-        "lmove" | "blmove" => 6,
-        "set" => -3,
-        "getex" | "lpop" | "rpop" => -2,
-        "getrange" | "substr" | "lrange" | "ltrim" | "lset" | "linsert" => 4,
-        "setex" | "psetex" | "setrange" => 4,
-        "hmset" | "sadd" | "srem" | "zadd" | "zrem" | "pfadd" | "pfcount" | "pfmerge"
-        | "geoadd" | "geopos" | "geohash" | "geosearch" | "zmscore" | "zrange" | "zrevrange"
-        | "zrangebyscore" | "zrevrangebyscore" | "zrangebylex" | "zrevrangebylex"
-        | "zremrangebyrank" | "zremrangebyscore" | "zremrangebylex" | "hdel" | "hmget"
-        | "smismember" => -3,
-        "mget" | "del" | "unlink" | "exists" | "watch" | "sunion" | "sinter" | "sdiff" => -2,
-        "zunion" | "zinter" | "zdiff" => -3,
-        "mset" | "msetnx" => -3,
-        "rpush" | "lpush" | "rpushx" | "lpushx" | "blpop" | "brpop" | "bzpopmin" | "bzpopmax"
-        | "subscribe" | "unsubscribe" | "psubscribe" | "punsubscribe" | "sintercard" | "hscan"
-        | "sscan" | "zscan" | "hrandfield" | "spop" | "srandmember" => -3,
-        "brpoplpush" => 4,
-        "lmpop" | "zmpop" => -4,
-        "blmpop" | "bzmpop" => -5,
-        "bitop" => -4,
-        "bitcount" | "bitpos" | "bitfield" | "bitfield_ro" => -2,
-        "setbit" => 4,
-        "geosearchstore" => -8,
+        "xrange" | "xrevrange" | "xread" | "zrange" | "zrevrange" | "zrangebyscore"
+        | "zrevrangebyscore" | "zrangebylex" | "zrevrangebylex" => -4,
         "zrangestore" => -5,
-        "sunionstore" | "sinterstore" | "sdiffstore" => -3,
         "zunionstore" | "zinterstore" | "zdiffstore" => -4,
-        "command" | "hello" | "ping" | "info" | "flushdb" | "flushall" | "time" | "bgsave"
-        | "bgrewriteaof" | "pubsub" | "auth" => -1,
-        "command|count" => 2,
-        "command|info" => -2,
-        "save" => 1,
-        "reset" => 1,
-        _ => -1,
-    };
-    let arity = match name {
-        "echo" | "select" => 2,
-        "dbsize" | "randomkey" | "multi" | "exec" | "discard" | "unwatch" | "quit" | "lastsave"
-        | "save" | "time" => 1,
-        "touch" | "hrandfield" | "spop" | "srandmember" | "zpopmin" | "zpopmax" | "pfadd"
-        | "pfcount" | "geopos" | "geohash" => -2,
-        "lrem" | "copy" => -3,
-        "restore" => -4,
-        "zadd" => -4,
-        "zrank" | "zrevrank" | "lpos" => -3,
-        "zremrangebyrank" | "zremrangebyscore" | "zremrangebylex" => 4,
+        "sunionstore" | "sinterstore" | "sdiffstore" => -3,
         "geosearch" => -7,
+        "geosearchstore" => -8,
         "geoadd" => -5,
         "geodist" => -4,
-        "bitpos" => -3,
-        "publish" => 4,
-        "subscribe" | "psubscribe" => -2,
-        "unsubscribe" | "punsubscribe" => -1,
-        "scan" => -2,
-        "keys" => 2,
-        _ => arity,
+        "geopos" => -3,
+        "publish" => 3,
+        "zintercard" => -3,
+        "llen" => 2,
+        _ => panic!("missing command arity metadata: {name}"),
     };
 
     let (first_key, last_key, key_step) = match name {
-        "mget" | "del" | "unlink" | "exists" | "watch" | "sunion" | "sinter" | "sdiff" => {
-            (1, -1, 1)
+        "command" | "command|count" | "command|info" | "acl" | "acl|whoami" | "auth"
+        | "bgrewriteaof" | "bgsave" | "client" | "client|getname" | "client|id" | "client|info"
+        | "client|setinfo" | "client|setname" | "config" | "config|get" | "config|resetstat"
+        | "config|set" | "discard" | "dbsize" | "echo" | "exec" | "flushall" | "flushdb"
+        | "hello" | "info" | "lastsave" | "multi" | "ping" | "pubsub" | "punsubscribe"
+        | "psubscribe" | "publish" | "quit" | "randomkey" | "reset" | "save" | "scan"
+        | "select" | "subscribe" | "time" | "unwatch" | "unsubscribe" | "xread" | "xreadgroup" => {
+            (0, 0, 0)
         }
-        "mset" | "msetnx" => (1, -1, 2),
-        "blmove" | "lmove" | "rpoplpush" | "brpoplpush" => (1, 2, 1),
-        "blpop" | "brpop" | "bzpopmin" | "bzpopmax" => (1, -2, 1),
-        "lmpop" => (2, -1, 1),
-        "blmpop" => (3, -1, 1),
-        "zmpop" => (2, -1, 1),
-        "bzmpop" => (3, -1, 1),
-        "bitop" => (2, -1, 1),
+        "copy" | "rename" | "renamenx" | "smove" | "lmove" | "blmove" | "rpoplpush"
+        | "brpoplpush" | "zrangestore" => (1, 2, 1),
         "geosearchstore" => (1, 2, 1),
-        "zrangestore" => (1, 1, 1),
-        "sunionstore" | "sinterstore" | "sdiffstore" => (1, -1, 1),
+        "sunionstore" | "sinterstore" | "sdiffstore" | "zunionstore" | "zinterstore"
+        | "zdiffstore" => (1, -1, 1),
+        "mset" | "msetnx" => (1, -1, 2),
+        "mget" | "del" | "unlink" | "exists" | "watch" | "sunion" | "sinter" | "sdiff"
+        | "pfcount" | "pfmerge" => (1, -1, 1),
+        "zunion" | "zinter" | "zdiff" => (2, -1, 1),
+        "blpop" | "brpop" | "bzpopmin" | "bzpopmax" => (1, -2, 1),
+        "lmpop" | "zmpop" => (2, -1, 1),
+        "blmpop" | "bzmpop" => (3, -1, 1),
+        "bitop" => (2, -1, 1),
+        "sintercard" => (2, -1, 1),
         "xgroup|create"
         | "xgroup|setid"
         | "xgroup|destroy"
         | "xgroup|createconsumer"
-        | "xgroup|delconsumer" => (2, 2, 1),
-        "xinfo|groups" | "xinfo|consumers" | "xinfo|stream" => (2, 2, 1),
-        "zunion" | "zinter" | "zdiff" => (2, -1, 1),
-        "zunionstore" | "zinterstore" | "zdiffstore" => (1, -1, 1),
-        "xread" | "xreadgroup" => (0, 0, 0),
-        "command" | "command|count" | "command|info" | "ping" | "echo" | "hello" | "time"
-        | "info" | "save" | "bgsave" | "lastsave" | "multi" | "exec" | "discard" | "unwatch"
-        | "quit" | "auth" | "acl|whoami" | "client|id" | "client|getname" | "client|info"
-        | "client|setname" | "client|setinfo" | "config|get" | "config|set" | "pubsub"
-        | "subscribe" | "unsubscribe" | "psubscribe" | "punsubscribe" | "flushdb" | "flushall"
-        | "select" | "reset" | "bgrewriteaof" | "scan" | "keys" => (0, 0, 0),
+        | "xgroup|delconsumer"
+        | "xinfo|groups"
+        | "xinfo|consumers"
+        | "xinfo|stream" => (2, 2, 1),
         _ => (1, 1, 1),
     };
 
@@ -352,10 +335,52 @@ fn metadata(name: &str) -> Metadata {
     }
 }
 
-fn entry(name: &str) -> Vec<u8> {
+fn root_commands() -> Vec<String> {
+    COMMANDS
+        .iter()
+        .map(|name| {
+            name.split_once('|')
+                .map_or(*name, |(root, _)| root)
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn children(command: &str) -> Vec<&'static str> {
+    let mut children = COMMANDS
+        .iter()
+        .filter(|name| {
+            name.split_once('|')
+                .is_some_and(|(root, _)| root == command)
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    children.sort_unstable();
+    children
+}
+
+fn array(elements: &[Vec<u8>]) -> Vec<u8> {
+    let mut response = format!("*{}\r\n", elements.len()).into_bytes();
+    for element in elements {
+        response.extend_from_slice(element);
+    }
+    response
+}
+
+fn entry(name: &str, include_subcommands: bool) -> Vec<u8> {
     let info = metadata(name);
+    let subcommands = if include_subcommands {
+        children(name)
+            .iter()
+            .map(|command| entry(command, false))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let mut response = Vec::new();
-    response.extend_from_slice(b"*6\r\n");
+    response.extend_from_slice(b"*10\r\n");
     response.extend_from_slice(&protocol::bulk(name.as_bytes()));
     response.extend_from_slice(format!(":{}\r\n", info.arity).as_bytes());
     response.extend_from_slice(b"*0\r\n");
@@ -366,39 +391,40 @@ fn entry(name: &str) -> Vec<u8> {
         )
         .as_bytes(),
     );
+    response.extend_from_slice(b"*0\r\n*0\r\n*0\r\n");
+    response.extend_from_slice(&array(&subcommands));
     response
 }
 
-fn nested_array(values: &[Vec<u8>]) -> Vec<u8> {
-    let mut response = format!("*{}\r\n", values.len()).into_bytes();
-    for value in values {
-        response.extend_from_slice(value);
+fn lookup(name: &[u8]) -> Option<String> {
+    let name = String::from_utf8_lossy(name).to_ascii_lowercase();
+    if COMMANDS.contains(&name.as_str()) {
+        return Some(name);
     }
-    response
-}
-
-fn lookup(name: &[u8]) -> Option<&'static str> {
-    COMMANDS
-        .iter()
-        .copied()
-        .find(|candidate| candidate.as_bytes().eq_ignore_ascii_case(name))
+    root_commands()
+        .into_iter()
+        .find(|candidate| candidate == &name)
 }
 
 pub fn supports(command: &[Vec<u8>]) -> bool {
-    if command.is_empty() {
+    let Some(name) = command.first() else {
         return false;
-    }
-    if lookup(&command[0]).is_some() {
+    };
+    if name.eq_ignore_ascii_case(b"COMMAND") {
         return true;
     }
-    command.get(1).is_some_and(|subcommand| {
-        let candidate = format!(
-            "{}|{}",
-            String::from_utf8_lossy(&command[0]).to_ascii_lowercase(),
-            String::from_utf8_lossy(subcommand).to_ascii_lowercase()
-        );
-        COMMANDS.contains(&candidate.as_str())
-    })
+    if lookup(name).is_some() {
+        return true;
+    }
+    let Some(subcommand) = command.get(1) else {
+        return lookup(name).is_some();
+    };
+    let name = format!(
+        "{}|{}",
+        String::from_utf8_lossy(name).to_ascii_lowercase(),
+        String::from_utf8_lossy(subcommand).to_ascii_lowercase()
+    );
+    lookup(name.as_bytes()).is_some()
 }
 
 pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
@@ -417,37 +443,57 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
             None => command.len() == 1,
             Some(b"COUNT") => command.len() == 2,
             Some(b"INFO") => true,
-            _ => false,
+            _ => true,
         },
     )
 }
 
+fn unknown_subcommand(name: &[u8]) -> Vec<u8> {
+    let name = name
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_graphic() && *byte != b'\'' {
+                *byte as char
+            } else {
+                '?'
+            }
+        })
+        .collect::<String>();
+    protocol::error(&format!("unknown subcommand '{name}'. Try COMMAND HELP."))
+}
+
 pub fn execute(command: &[Vec<u8>]) -> Vec<u8> {
-    if !valid_arity(command).unwrap_or(false) {
-        return protocol::error("wrong number of arguments for 'command' command");
-    }
-    match command
-        .get(1)
-        .map(|name| name.to_ascii_uppercase())
-        .as_deref()
-    {
-        Some(b"COUNT") => format!(":{}\r\n", COMMANDS.len()).into_bytes(),
-        Some(b"INFO") => nested_array(
-            &command[2..]
+    let Some(subcommand) = command.get(1) else {
+        return array(
+            &root_commands()
                 .iter()
-                .map(|name| {
-                    lookup(name)
-                        .map(entry)
-                        .unwrap_or_else(|| b"$-1\r\n".to_vec())
-                })
+                .map(|name| entry(name, true))
                 .collect::<Vec<_>>(),
-        ),
-        _ => {
-            let mut names = COMMANDS.to_vec();
-            names.sort_unstable();
-            nested_array(&names.iter().map(|name| entry(name)).collect::<Vec<_>>())
-        }
+        );
+    };
+    if subcommand.eq_ignore_ascii_case(b"INFO") {
+        let names: Vec<Option<String>> = if command.len() == 2 {
+            root_commands().into_iter().map(Some).collect()
+        } else {
+            command[2..].iter().map(|name| lookup(name)).collect()
+        };
+        let infos = names
+            .iter()
+            .map(|name| {
+                name.as_ref()
+                    .map(|name| entry(name, !name.contains('|')))
+                    .unwrap_or_else(|| b"$-1\r\n".to_vec())
+            })
+            .collect::<Vec<_>>();
+        return array(&infos);
     }
+    if subcommand.eq_ignore_ascii_case(b"COUNT") {
+        if command.len() != 2 {
+            return protocol::error("wrong number of arguments for 'command|count' command");
+        }
+        return format!(":{}\r\n", root_commands().len()).into_bytes();
+    }
+    unknown_subcommand(subcommand)
 }
 
 #[cfg(test)]
@@ -455,18 +501,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_metadata_entry_is_accepted_by_the_dispatcher_registry() {
+    fn metadata_table_matches_documented_inventory() {
+        let inventory = include_str!("../docs/COMPATIBILITY.md");
+        let command_table = inventory
+            .lines()
+            .skip_while(|line| !line.starts_with("| Area | Commands |"))
+            .skip(1)
+            .take_while(|line| line.starts_with("| "))
+            .flat_map(|line| {
+                let column = line.split('|').nth(2).unwrap_or_default();
+                let mut names = Vec::new();
+                let mut parts = column.split('`');
+                while let (Some(_), Some(name)) = (parts.next(), parts.next()) {
+                    names.push(
+                        name.split_whitespace()
+                            .map(str::to_ascii_lowercase)
+                            .collect::<Vec<_>>()
+                            .join("|"),
+                    );
+                }
+                names
+            })
+            .collect::<BTreeSet<_>>();
+        let metadata_table: BTreeSet<String> =
+            COMMANDS.iter().map(|name| (*name).to_owned()).collect();
+        assert_eq!(metadata_table, command_table);
         for name in COMMANDS {
-            let parts: Vec<Vec<u8>> = name
-                .split('|')
-                .map(|part| part.as_bytes().to_vec())
-                .collect();
-            assert!(
-                supports(&parts),
-                "dispatcher command missing from table: {name}"
-            );
-            assert!(lookup(name.as_bytes()).is_some());
+            metadata(name);
         }
-        assert_eq!(COMMANDS.len(), 207);
+        for name in root_commands() {
+            metadata(&name);
+        }
+    }
+
+    #[test]
+    fn redis_documented_arity_and_key_position_examples_are_correct() {
+        for (name, expected) in [
+            ("lmove", (5, 1, 2, 1)),
+            ("linsert", (5, 1, 1, 1)),
+            ("hexists", (3, 1, 1, 1)),
+            ("zcount", (4, 1, 1, 1)),
+            ("zrange", (-4, 1, 1, 1)),
+            ("expire", (-3, 1, 1, 1)),
+            ("config|set", (-4, 0, 0, 0)),
+            ("quit", (-1, 0, 0, 0)),
+            ("llen", (2, 1, 1, 1)),
+            ("zintercard", (-3, 2, -1, 1)),
+            ("rename", (3, 1, 2, 1)),
+            ("renamenx", (3, 1, 2, 1)),
+            ("copy", (-3, 1, 2, 1)),
+            ("smove", (4, 1, 2, 1)),
+            ("zrangestore", (-5, 1, 2, 1)),
+            ("dbsize", (1, 0, 0, 0)),
+            ("randomkey", (1, 0, 0, 0)),
+            ("publish", (3, 0, 0, 0)),
+        ] {
+            let actual = metadata(name);
+            assert_eq!(
+                (
+                    actual.arity,
+                    actual.first_key,
+                    actual.last_key,
+                    actual.key_step
+                ),
+                expected,
+                "{name}"
+            );
+        }
     }
 }

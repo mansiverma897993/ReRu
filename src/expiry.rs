@@ -60,6 +60,10 @@ impl Expiry {
     pub fn active_expired_keys(&self) -> u64 {
         self.active_expired_keys.load(Ordering::Relaxed)
     }
+
+    pub fn reset_stats(&self) {
+        self.active_expired_keys.store(0, Ordering::Relaxed);
+    }
 }
 
 // The caller holds command_gate. Deletion and persistence follow the same
