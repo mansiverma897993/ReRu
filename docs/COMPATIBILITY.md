@@ -27,6 +27,7 @@ tests; it does not certify complete compatibility with Redis.
 | Server time | `TIME` | Epoch seconds and microseconds as RESP2 bulk strings |
 | Persistence | `SAVE`, `BGSAVE`, `LASTSAVE`, `DUMP`, `RESTORE`, `BGREWRITEAOF` | Initial Redis RDB interoperability; supported values, key expiry, checksums, REPLACE/ABSTTL; manual single-file AOF compaction |
 | Command introspection | [`COMMAND`](https://redis.io/docs/latest/commands/command/), `COMMAND COUNT`, `COMMAND INFO` | Lists ReRu's implemented command metadata, counts entries, or looks up names |
+| Static Cluster | `CLUSTER KEYSLOT`, `CLUSTER SHARDS`, `CLUSTER SLOTS` | Explicit two-node slot map, hash tags, RESP2 topology, local routing, MOVED/CROSSSLOT; no discovery or failover |
 
 `COMMAND` entries use the ten-field Redis 8 reply shape: name, arity, flags,
 first/last/step key positions, ACL categories, tips, key specifications, and
@@ -397,6 +398,8 @@ remain pending. Metadata is local to the connection and is never persisted.
 
 `SELECT 0` supports clients that explicitly select the default database. Nonzero
 databases fail explicitly; multiple logical databases remain unimplemented.
+With static Cluster enabled, `SELECT 0` is accepted, other valid database indexes
+are rejected, and `HELLO` reports cluster mode.
 Connection commands can be queued in MULTI and executed in order without
 invalidating dataset watches. They are usable on read-only replicas.
 
@@ -460,8 +463,8 @@ returns the connection to ordinary RESP2 command mode.
 
 ## Verification for this increment
 
-The local suite has **221 tests**: 22 unit tests in `src/main.rs`, 3 in
-`src/lib.rs`, and 196 server integration tests.
+The local suite has **243 tests**: 25 unit tests in `src/main.rs`, 3 in
+`src/lib.rs`, and 215 server integration tests.
 Sorted-set tests compare `ZRANGESTORE` output with the matching `ZRANGE` for rank,
 score and lex ranges, and cover destination replacement, cleared TTL, deletion on
 an empty result, and rejected arity, syntax and wrong types.
@@ -518,11 +521,39 @@ that variable, this reference-dependent test also skips comparisons.
 exchanges complete RDB files in both directions, and runs `redis-check-rdb`.
 Run instructions are in [interoperability testing](INTEROP_TESTING.md).
 
+## Static Cluster milestone
+
+Two `--cluster-node ID@IP:PORT@START-END` flags opt in to a fixed two-primary
+slot map. IDs are 40 hexadecimal characters; the ranges must partition all
+16,384 slots and one endpoint must match the local listener. `CLUSTER KEYSLOT`
+uses CRC16/XMODEM and Redis hash tags. `CLUSTER SHARDS` and `CLUSTER SLOTS`
+report both configured owners as RESP2 arrays. Keyed commands are served only
+by their slot owner; a request to the other node receives `MOVED`. Multi-key
+commands and queued transactions spanning slots receive `CROSSSLOT` before
+mutating data. Existing persisted keys outside the node's slots cause startup
+to fail. The two-node integration tests cover these replies, binary keys,
+topology, transaction atomicity, malformed maps, and standalone behavior.
+
+This is **not full Redis Cluster**: nodes do not exchange topology, migrate
+slots or data, detect failures, elect a new primary, or implement `ASK` and
+`ASKING`. Cluster replicas and multiple logical databases are unsupported.
+`CLUSTER SLOTS` includes an empty metadata field for each node; detailed
+endpoint metadata and dynamic replication offsets are not yet available.
+Only explicit, contiguous ranges are accepted. A two-node Redis 8.10.2
+comparison checked four slot vectors, the RESP2 topology shape, `MOVED`,
+`CROSSSLOT`, `WATCH`, `SELECT`, and transaction replies; broader Cluster
+interoperability remains untested.
+
+Behavior references: [cluster specification](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/),
+[CLUSTER KEYSLOT](https://redis.io/docs/latest/commands/cluster-keyslot/),
+[CLUSTER SHARDS](https://redis.io/docs/latest/commands/cluster-shards/), and
+[CLUSTER SLOTS](https://redis.io/docs/latest/commands/cluster-slots/).
+
 ## Remaining major work
 
 Additional sorted-set and bitmap commands, geo indexing, newer stream features,
 sharded Pub/Sub, scripting, broader command options, full Redis RDB/AOF, PSYNC,
-multi-user ACLs, TLS, RESP3, cluster/failover, Redis-exact eviction internals, bounded resource usage and performance engineering
+multi-user ACLs, TLS, RESP3, dynamic cluster/failover, Redis-exact eviction internals, bounded resource usage and performance engineering
 remain. Blocking clients do not yet receive Redis's FIFO waiter guarantees.
 Redis RDB hash-field expiry and broader hash, list and set command options are
 also pending.

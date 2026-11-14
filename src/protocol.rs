@@ -85,6 +85,20 @@ pub fn error(message: &str) -> Vec<u8> {
     format!("-ERR {message}\r\n").into_bytes()
 }
 
+pub fn unknown_subcommand(parent: &str, name: &[u8]) -> Vec<u8> {
+    let name = name
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_graphic() && *byte != b'\'' {
+                *byte as char
+            } else {
+                '?'
+            }
+        })
+        .collect::<String>();
+    error(&format!("unknown subcommand '{name}'. Try {parent} HELP."))
+}
+
 pub fn bulk(value: &[u8]) -> Vec<u8> {
     let mut response = format!("${}\r\n", value.len()).into_bytes();
     response.extend_from_slice(value);
