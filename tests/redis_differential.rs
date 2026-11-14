@@ -12,6 +12,78 @@ fn compare(ours: &mut Client, redis: &mut Client, command: &[&[u8]]) {
 }
 
 #[test]
+fn hash_field_expiration_matches_redis_8() {
+    let Ok(port) = std::env::var("RERU_REDIS_REFERENCE_PORT") else {
+        return;
+    };
+    let server = common::Server::start();
+    let mut ours = Client::new(&server);
+    let mut redis = Client::on_port(port.parse().unwrap());
+    let key = b"reru-diff:hash-field-expiry";
+    let probe = redis.call(&[b"HEXPIRE", key, b"1", b"FIELDS", b"1", b"missing"]);
+    if matches!(probe, client::Reply::Error(_)) {
+        return;
+    } // Redis 7 predates field TTL.
+    let _ = redis.call(&[b"DEL", key]);
+    let _ = ours.call(&[b"DEL", key]);
+    let at = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        + 100_000)
+        .to_string();
+    for command in [
+        &[b"HSET".as_slice(), key, b"a", b"1", b"b", b"2"] as &[&[u8]],
+        &[b"HPEXPIREAT", key, at.as_bytes(), b"FIELDS", b"1", b"a"],
+        &[b"HPEXPIRETIME", key, b"FIELDS", b"1", b"a"],
+        &[b"HEXPIRE", key, b"60", b"NX", b"FIELDS", b"2", b"a", b"b"],
+        &[b"HINCRBY", key, b"a", b"1"],
+        &[b"HPEXPIRETIME", key, b"FIELDS", b"1", b"a"],
+        &[b"HSET", key, b"a", b"new"],
+        &[b"HTTL", key, b"FIELDS", b"1", b"a"],
+        &[b"HPEXPIRE", key, b"0", b"FIELDS", b"1", b"b"],
+        &[b"HGETALL", key],
+        &[
+            b"HSETEX",
+            key,
+            b"EXAT",
+            b"2000000000",
+            b"FIELDS",
+            b"2",
+            b"c",
+            b"3",
+            b"d",
+            b"4",
+        ],
+        &[
+            b"HGETEX", key, b"PERSIST", b"FIELDS", b"3", b"c", b"d", b"missing",
+        ],
+        &[
+            b"HSETEX", key, b"FNX", b"FIELDS", b"2", b"c", b"wrong", b"e", b"5",
+        ],
+        &[
+            b"HSETEX", key, b"FXX", b"KEEPTTL", b"FIELDS", b"2", b"c", b"6", b"d", b"7",
+        ],
+        &[b"HPERSIST", key, b"FIELDS", b"2", b"c", b"absent"],
+        &[b"HDEL", key, b"c"],
+        &[b"HPTTL", key, b"FIELDS", b"1", b"c"],
+        &[b"HEXPIRE", key, b"bad", b"FIELDS", b"1", b"d"],
+        &[b"HEXPIRE", key, b"10", b"NX", b"XX", b"FIELDS", b"1", b"d"],
+        &[b"HEXPIRE", key, b"10", b"FIELDS", b"2", b"d"],
+        &[
+            b"HGETEX", key, b"PERSIST", b"EX", b"10", b"FIELDS", b"1", b"d",
+        ],
+        &[b"HSETEX", key, b"FNX", b"FXX", b"FIELDS", b"1", b"d", b"x"],
+        &[
+            b"HSETEX", key, b"EX", b"5", b"KEEPTTL", b"FIELDS", b"1", b"d", b"x",
+        ],
+        &[b"HGETEX", key, b"FIELDS", b"2", b"d"],
+    ] {
+        compare(&mut ours, &mut redis, command);
+    }
+}
+
+#[test]
 fn representative_resp2_sequences_match_a_real_redis_server() {
     let Ok(port) = std::env::var("RERU_REDIS_REFERENCE_PORT") else {
         return;

@@ -180,6 +180,19 @@ fn command(output: &mut Vec<u8>, args: &[&[u8]]) {
     }
 }
 
+fn deadline_millis(deadline: Instant) -> io::Result<String> {
+    let absolute = SystemTime::now()
+        .checked_add(deadline.saturating_duration_since(Instant::now()))
+        .ok_or_else(|| invalid("AOF expiry out of range"))?;
+    let millis = absolute
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| invalid("AOF expiry before epoch"))?
+        .as_millis();
+    Ok(i64::try_from(millis)
+        .map_err(|_| invalid("AOF expiry out of range"))?
+        .to_string())
+}
+
 fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<()> {
     match &entry.value {
         Value::String(value) => command(output, &[b"SET", key, value]),
@@ -195,8 +208,8 @@ fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<(
                 command(output, &args);
             }
         }
-        Value::Hash(fields) => {
-            let mut fields: Vec<_> = fields.iter().collect();
+        Value::Hash(hash) => {
+            let mut fields: Vec<_> = hash.iter().collect();
             fields.sort_by(|left, right| left.0.cmp(right.0));
             for chunk in fields.chunks(511) {
                 let mut args: Vec<&[u8]> = vec![b"HSET", key];
@@ -205,6 +218,22 @@ fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<(
                     args.push(value);
                 }
                 command(output, &args);
+            }
+            let mut deadlines: Vec<_> = hash.deadlines().iter().collect();
+            deadlines.sort_by_key(|(field, _)| *field);
+            for (field, deadline) in deadlines {
+                let millis = deadline.unix_ms.to_string();
+                command(
+                    output,
+                    &[
+                        b"HPEXPIREAT",
+                        key,
+                        millis.as_bytes(),
+                        b"FIELDS",
+                        b"1",
+                        field,
+                    ],
+                );
             }
         }
         Value::Set(members) => {
@@ -233,16 +262,7 @@ fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<(
         }
     }
     if let Some(deadline) = entry.expires_at {
-        let absolute = SystemTime::now()
-            .checked_add(deadline.saturating_duration_since(Instant::now()))
-            .ok_or_else(|| invalid("AOF expiry out of range"))?;
-        let milliseconds = absolute
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| invalid("AOF expiry before epoch"))?
-            .as_millis();
-        let time = i64::try_from(milliseconds)
-            .map_err(|_| invalid("AOF expiry out of range"))?
-            .to_string();
+        let time = deadline_millis(deadline)?;
         command(output, &[b"PEXPIREAT", key, time.as_bytes()]);
     }
     Ok(())

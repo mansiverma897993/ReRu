@@ -10,6 +10,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Added
 
+- Hash-field TTL commands (`HEXPIRE`, `HPEXPIRE`, `HEXPIREAT`, `HPEXPIREAT`,
+  `HTTL`, `HPTTL`, `HEXPIRETIME`, `HPEXPIRETIME`, `HPERSIST`, `HGETEX`, `HSETEX`),
+  with background expiry and ReRu snapshot/AOF preservation.
 - OpenSSF Scorecard workflow (`.github/workflows/scorecard.yml`), run weekly and
   on pushes to `main`, with third-party actions pinned to commit SHAs.
 - "Claiming an issue" rules in `CONTRIBUTING.md` for program contributors

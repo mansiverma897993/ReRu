@@ -1,6 +1,6 @@
 # ReRu compatibility status
 
-Updated: 28 October 2026. This inventory describes the implementation and local
+Updated: 14 November 2026. This inventory describes the implementation and local
 tests; it does not certify complete compatibility with Redis.
 
 ## Implemented commands
@@ -11,7 +11,7 @@ tests; it does not certify complete compatibility with Redis.
 | Strings/cache | `SET`, `GET`, `INCR`, `GETEX`, `GETDEL`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `STRLEN`, `SETNX`, `SETEX`, `PSETEX`, `GETSET`, `INCRBY`, `INCRBYFLOAT`, `DECR`, `DECRBY`, `GETRANGE`, `SUBSTR`, `SETRANGE` | Binary values; SET NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL; GETEX expiry/PERSIST; multi-key access, numeric arithmetic and byte ranges |
 | Lists | `RPUSH`, `LPUSH`, `LPUSHX`, `RPUSHX`, `LRANGE`, `LLEN`, `LINDEX`, `LSET`, `LINSERT`, `LTRIM`, `LREM`, `LPOS`, `LPOP`, `RPOP`, `RPOPLPUSH`, `LMOVE`, `BLPOP`, `BRPOP`, `BLMOVE`, `BRPOPLPUSH`, `LMPOP`, `BLMPOP` | Multiple elements, negative indexes, edits, moves, position search, single/multi-key blocking pops and moves with timeout |
 | Streams | `XADD`, `XRANGE`, `XREVRANGE`, `XREAD`, `XLEN`, `XDEL`, `XTRIM`, `XGROUP CREATE`, `XGROUP SETID`, `XGROUP DESTROY`, `XGROUP CREATECONSUMER`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`, `XAUTOCLAIM`, `XINFO GROUPS`, `XINFO CONSUMERS`, `XINFO STREAM`, `XSETID` | IDs, ranges, deletion, exact trimming, blocking reads, consumer groups, pending entries, acknowledgement, claiming and diagnostics; XADD NOMKSTREAM/MAXLEN/MINID |
-| Hashes | `HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HGETALL`, `HDEL`, `HEXISTS`, `HLEN`, `HKEYS`, `HVALS`, `HINCRBY`, `HINCRBYFLOAT`, `HSTRLEN`, `HRANDFIELD`, `HSCAN` | Binary fields/values, multiple field updates, missing-field nil replies, increments, random fields and cursor iteration |
+| Hashes | `HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HGETALL`, `HDEL`, `HEXISTS`, `HLEN`, `HKEYS`, `HVALS`, `HINCRBY`, `HINCRBYFLOAT`, `HSTRLEN`, `HRANDFIELD`, `HSCAN`, `HEXPIRE`, `HPEXPIRE`, `HEXPIREAT`, `HPEXPIREAT`, `HTTL`, `HPTTL`, `HEXPIRETIME`, `HPEXPIRETIME`, `HPERSIST`, `HGETEX`, `HSETEX` | Binary fields/values, multiple field updates, missing-field nil replies, increments, cursor iteration, per-field expiry and conditional TTL changes |
 | Sets | `SADD`, `SREM`, `SISMEMBER`, `SMISMEMBER`, `SMEMBERS`, `SCARD`, `SMOVE`, `SPOP`, `SRANDMEMBER`, `SUNION`, `SINTER`, `SINTERCARD`, `SDIFF`, `SUNIONSTORE`, `SINTERSTORE`, `SDIFFSTORE`, `SSCAN` | Binary members, deduplication, membership, cardinality, random selection, atomic moves, set algebra and cursor iteration; SINTERCARD LIMIT |
 | Sorted sets | `ZADD`, `ZINCRBY`, `ZCARD`, `ZSCORE`, `ZRANK`, `ZREVRANK`, `ZRANGE`, `ZREVRANGE`, `ZRANGESTORE`, `ZRANGEBYSCORE`, `ZREVRANGEBYSCORE`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZCOUNT`, `ZLEXCOUNT`, `ZREM`, `ZREMRANGEBYSCORE`, `ZREMRANGEBYRANK`, `ZREMRANGEBYLEX`, `ZMSCORE`, `ZSCAN`, `ZPOPMIN`, `ZPOPMAX`, `ZMPOP`, `BZMPOP`, `BZPOPMIN`, `BZPOPMAX`, `ZUNION`, `ZUNIONSTORE`, `ZINTER`, `ZINTERSTORE`, `ZDIFF`, `ZDIFFSTORE`, `ZINTERCARD` | Score-ordered members, rank, score and lex ranges, ZADD NX/XX/GT/LT/CH/INCR, cursor iteration, range removal, ordered and multi-key blocking pops, weighted algebra and destination storing |
 | Bitmaps | `SETBIT`, `GETBIT`, `BITCOUNT`, `BITOP`, `BITPOS`, `BITFIELD`, `BITFIELD_RO` | Bitmaps stored as strings, byte/bit count ranges, AND/OR/XOR/NOT; bitfield GET/SET/INCRBY, signed/unsigned widths, `#` offsets and WRAP/SAT/FAIL overflow modes |
@@ -27,7 +27,7 @@ tests; it does not certify complete compatibility with Redis.
 | Server time | `TIME` | Epoch seconds and microseconds as RESP2 bulk strings |
 | Persistence | `SAVE`, `BGSAVE`, `LASTSAVE`, `DUMP`, `RESTORE`, `BGREWRITEAOF` | Initial Redis RDB interoperability; supported values, key expiry, checksums, REPLACE/ABSTTL; manual single-file AOF compaction |
 
-Total: **203 Redis command metadata entries**, or **44.2% name presence**
+Total: **215 Redis command metadata entries**, or **46.8% name presence**
 against 459 entries in the pinned Redis 8.10.2 metadata. This is neither a
 behavior pass rate nor a percentage of Redis completed. Run
 `powershell -File scripts/command_coverage.ps1 -RedisSource PATH_TO_REDIS_8_10_2`
@@ -59,6 +59,18 @@ field/member is removed. No-op HSETNX, HDEL, SADD and SREM preserve watches;
 HSET/HMSET writes invalidate watches even when values are unchanged. Hash/set
 enumeration is sorted in ReRu for stable output; clients should treat ordering
 as unspecified. HMSET is supported for older clients; prefer HSET for new code.
+Hash fields can also expire independently. The four H*EXPIRE variants accept
+NX/XX/GT/LT and report a status for each field; HTTL/HPTTL and the absolute-time
+queries report -2 for missing fields and -1 for persistent fields. HGETEX and
+HSETEX support their Redis 8 expiry, persistence, and conditional options. A
+field's TTL is cleared by HSET/HMSET/HDEL and preserved by HINCRBY/HINCRBYFLOAT.
+Expired fields disappear on reads and through the background expiry worker,
+which indexes each hash by its next field deadline. Field deadlines survive ReRu
+snapshots, AOF replay and rewrite, and ReRu-to-ReRu replication. Redis RDB
+SAVE/BGSAVE and DUMP **reject hashes with live field TTLs** rather than silently
+dropping them; Redis RDB hash-field expiry encoding and RESTORE interoperability
+remain pending. Commands and error replies are covered by local integration tests
+and a Redis 8.10.2 differential test.
 `SINTERCARD` supports multiple keys and `LIMIT`. `SPOP` and `SRANDMEMBER` use a randomized member order; count replies are capped
 at one million elements to bound allocation. Set store variants replace the
 destination and clear its previous TTL.
@@ -497,8 +509,8 @@ Additional sorted-set and bitmap commands, geo indexing, newer stream features,
 sharded Pub/Sub, scripting, broader command options, full Redis RDB/AOF, PSYNC,
 multi-user ACLs, TLS, RESP3, cluster/failover, Redis-exact eviction internals, bounded resource usage and performance engineering
 remain. Blocking clients do not yet receive Redis's FIFO waiter guarantees.
-Hash field expiry and broader hash, list and set
-command options are also pending.
+Redis RDB hash-field expiry and broader hash, list and set command options are
+also pending.
 
 Behavior references: [HSET](https://redis.io/docs/latest/commands/hset/),
 [HINCRBY](https://redis.io/docs/latest/commands/hincrby/),

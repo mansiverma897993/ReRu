@@ -23,6 +23,39 @@ fn payload(reply: Reply) -> Vec<u8> {
     }
 }
 
+#[test]
+fn rdb_rejects_field_ttl_instead_of_silently_dropping_it() {
+    let dir = directory();
+    let server = Server::start_with(&["--dir", dir.to_str().unwrap(), "--dbfilename", "field.rdb"]);
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"HSET", b"hash", b"field", b"value"]), integer(1));
+    assert_eq!(
+        c.call(&[b"HPEXPIRE", b"hash", b"100000", b"FIELDS", b"1", b"field"]),
+        array(vec![integer(1)])
+    );
+    assert!(
+        matches!(c.call(&[b"SAVE"]), Reply::Error(e) if e.windows(b"field expiry".len()).any(|part| part == b"field expiry"))
+    );
+    assert!(
+        matches!(c.call(&[b"BGSAVE"]), Reply::Error(e) if e.windows(b"field expiry".len()).any(|part| part == b"field expiry"))
+    );
+    assert!(
+        matches!(c.call(&[b"DUMP", b"hash"]), Reply::Error(e) if e.windows(b"field expiry".len()).any(|part| part == b"field expiry"))
+    );
+    assert!(!dir.join("field.rdb").exists());
+    assert_eq!(
+        c.call(&[b"HGET", b"hash", b"field"]),
+        Reply::Bulk(Some(b"value".to_vec()))
+    );
+    assert_eq!(
+        c.call(&[b"HPERSIST", b"hash", b"FIELDS", b"1", b"field"]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(c.call(&[b"SAVE"]), ok());
+    drop(server);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn seed(c: &mut Client) {
     assert_eq!(c.call(&[b"SET", b"binary", b"\0\xff\r\n"]), ok());
     assert_eq!(

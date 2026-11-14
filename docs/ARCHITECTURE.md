@@ -32,7 +32,7 @@ enum Value {
     String(Vec<u8>),
     List(VecDeque<Vec<u8>>),
     Stream(streams::Stream),
-    Hash(HashMap<Vec<u8>, Vec<u8>>),
+    Hash(collections::HashValue),
     Set(HashSet<Vec<u8>>),
     SortedSet(sorted_sets::SortedSet),
 }
@@ -119,11 +119,10 @@ and appends them to the compacted file.
 
 ## Expiry
 
-`expiry.rs` keeps one deadline record per expiring key, so repeated `EXPIRE`
-calls replace the record instead of accumulating timers. A background thread
-wakes on the earliest deadline and deletes in bounded batches. Reads also check
-`expires_at` lazily, which covers keys whose background deletion has not run
-yet.
+`expiry.rs` keeps one deadline record per expiring key. A hash stores field
+deadlines beside its values; the index tracks the earliest key or field deadline
+for that hash. A background thread wakes on due deadlines and deletes in bounded
+batches. Reads also prune expired hash fields and check key `expires_at` lazily.
 
 ## Eviction
 

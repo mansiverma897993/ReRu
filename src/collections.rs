@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::{mark_modified, protocol, pubsub::glob_matches, remove_expired, Entry, Store, Value};
 use std::collections::hash_map::RandomState;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::BuildHasher;
+
+mod hash_expiry;
+pub(crate) use hash_expiry::{FieldDeadline, HashValue};
 
 #[derive(Clone, Copy)]
 enum Command {
@@ -124,11 +127,12 @@ impl Command {
 }
 
 pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
-    parse(&command[0]).map(|kind| kind.valid_arity(command.len()))
+    hash_expiry::valid_arity(command)
+        .or_else(|| parse(&command[0]).map(|kind| kind.valid_arity(command.len())))
 }
 
 pub fn is_mutating(command: &[Vec<u8>]) -> bool {
-    parse(&command[0]).is_some_and(Command::mutating)
+    hash_expiry::is_mutating(command) || parse(&command[0]).is_some_and(Command::mutating)
 }
 
 fn integer(value: i64) -> Vec<u8> {
@@ -207,6 +211,9 @@ fn scan_reply(cursor: usize, values: &[Vec<u8>]) -> Vec<u8> {
 }
 
 pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
+    if let Some(response) = hash_expiry::execute(command, store) {
+        return Some(response);
+    }
     let kind = parse(&command[0])?;
     if !kind.valid_arity(command.len()) {
         return Some(protocol::error(&format!(
@@ -360,7 +367,7 @@ fn execute_hash(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             };
             let mut removed = 0;
             for field in &command[2..] {
-                removed += i64::from(hash.remove(field).is_some());
+                removed += i64::from(hash.remove_field(field).is_some());
             }
             if hash.is_empty() {
                 entries.remove(key);
@@ -406,7 +413,7 @@ fn execute_hash(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
                 0.0
             };
             let entry = entries.entry(key.clone()).or_insert_with(|| Entry {
-                value: Value::Hash(HashMap::new()),
+                value: Value::Hash(HashValue::default()),
                 expires_at: None,
             });
             let Value::Hash(hash) = &mut entry.value else {
@@ -426,7 +433,10 @@ fn execute_hash(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             } else {
                 let mut added = 0;
                 for pair in command[2..].as_chunks::<2>().0 {
-                    added += i64::from(hash.insert(pair[0].clone(), pair[1].clone()).is_none());
+                    added += i64::from(
+                        hash.overwrite_field(pair[0].clone(), pair[1].clone())
+                            .is_none(),
+                    );
                 }
                 if matches!(kind, Hmset) {
                     b"+OK\r\n".to_vec()
