@@ -565,7 +565,9 @@ fn entry_bytes(key: &[u8], entry: &Entry) -> usize {
         }
         Value::Hash(fields) => fields
             .iter()
-            .map(|(field, value)| field.len() + value.len() + 32)
+            .map(|(field, value)| {
+                field.len() + value.len() + 32 + usize::from(fields.deadline(field).is_some()) * 32
+            })
             .sum(),
         Value::Set(members) => members.iter().map(|member| member.len() + 16).sum(),
         Value::SortedSet(members) => members

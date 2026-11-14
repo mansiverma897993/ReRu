@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-use crate::{streams, Entry, Value};
+use crate::{
+    collections::{FieldDeadline, HashValue},
+    streams, Entry, Value,
+};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Cursor, Read, Write};
@@ -12,6 +15,23 @@ const MAX_ITEMS: usize = 1_000_000;
 
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid ReRu snapshot")
+}
+
+fn absolute_millis(
+    deadline: Instant,
+    now_instant: Instant,
+    now_system: SystemTime,
+) -> io::Result<u64> {
+    let absolute = now_system
+        .checked_add(deadline.saturating_duration_since(now_instant))
+        .ok_or_else(invalid)?;
+    u64::try_from(
+        absolute
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| invalid())?
+            .as_millis(),
+    )
+    .map_err(|_| invalid())
 }
 
 pub(crate) fn put_u64(output: &mut Vec<u8>, value: u64) {
@@ -59,20 +79,11 @@ pub fn encode(entries: &HashMap<Vec<u8>, Entry>) -> io::Result<Vec<u8>> {
     let now_system = SystemTime::now();
     for (key, entry) in entries {
         put_bytes(&mut output, key)?;
-        let expiry = match entry.expires_at {
-            None => u64::MAX,
-            Some(deadline) => {
-                let remaining = deadline.saturating_duration_since(now_instant);
-                let absolute = now_system.checked_add(remaining).ok_or_else(invalid)?;
-                u64::try_from(
-                    absolute
-                        .duration_since(UNIX_EPOCH)
-                        .map_err(|_| invalid())?
-                        .as_millis(),
-                )
-                .map_err(|_| invalid())?
-            }
-        };
+        let expiry = entry
+            .expires_at
+            .map(|at| absolute_millis(at, now_instant, now_system))
+            .transpose()?
+            .unwrap_or(u64::MAX);
         put_u64(&mut output, expiry);
         match &entry.value {
             Value::String(value) => {
@@ -111,11 +122,20 @@ pub fn encode(entries: &HashMap<Vec<u8>, Entry>) -> io::Result<Vec<u8>> {
                 crate::stream_groups::encode_metadata(stream, &mut output)?;
             }
             Value::Hash(fields) => {
-                output.push(4);
+                let with_expiry = !fields.deadlines().is_empty();
+                output.push(if with_expiry { 9 } else { 4 });
                 put_u64(&mut output, fields.len() as u64);
                 for (field, value) in fields {
                     put_bytes(&mut output, field)?;
                     put_bytes(&mut output, value)?;
+                    if with_expiry {
+                        let deadline = fields
+                            .deadline_record(field)
+                            .map(|at| u64::try_from(at.unix_ms).map_err(|_| invalid()))
+                            .transpose()?
+                            .unwrap_or(u64::MAX);
+                        put_u64(&mut output, deadline);
+                    }
                 }
             }
             Value::Set(members) => {
@@ -224,18 +244,36 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                 }
                 Value::Stream(stream)
             }
-            4 => {
+            4 | 9 => {
                 let count = usize::try_from(read_u64(&mut cursor)?).map_err(|_| invalid())?;
                 if count == 0 || count > MAX_ITEMS {
                     return Err(invalid());
                 }
-                let mut fields = HashMap::new();
+                let mut fields = HashValue::default();
+                let mut seen = HashSet::new();
                 for _ in 0..count {
                     let field = read_bytes(&mut cursor)?;
                     let value = read_bytes(&mut cursor)?;
-                    if fields.insert(field, value).is_some() {
+                    let field_expiry = if kind[0] == 9 {
+                        read_u64(&mut cursor)?
+                    } else {
+                        u64::MAX
+                    };
+                    if !seen.insert(field.clone()) {
                         return Err(invalid());
                     }
+                    if field_expiry != u64::MAX {
+                        let absolute = UNIX_EPOCH
+                            .checked_add(Duration::from_millis(field_expiry))
+                            .ok_or_else(invalid)?;
+                        let Ok(remaining) = absolute.duration_since(now_system) else {
+                            continue;
+                        };
+                        let at = now_instant.checked_add(remaining).ok_or_else(invalid)?;
+                        let unix_ms = i64::try_from(field_expiry).map_err(|_| invalid())?;
+                        fields.set_deadline(&field, Some(FieldDeadline { at, unix_ms }));
+                    }
+                    fields.insert(field, value);
                 }
                 Value::Hash(fields)
             }
@@ -280,6 +318,9 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                 Err(_) => continue,
             }
         };
+        if matches!(&value, Value::Hash(hash) if hash.is_empty()) {
+            continue;
+        }
         if entries.insert(key, Entry { value, expires_at }).is_some() {
             return Err(invalid());
         }

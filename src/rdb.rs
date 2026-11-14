@@ -282,7 +282,7 @@ fn collection(kind: u8, items: Vec<Vec<u8>>) -> io::Result<Value> {
                 }
             }
             Ok(if kind == 4 {
-                Value::Hash(hash)
+                Value::Hash(hash.into())
             } else {
                 Value::SortedSet(sorted)
             })
@@ -432,6 +432,9 @@ fn put_value(out: &mut Vec<u8>, key: Option<&[u8]>, value: &Value) -> io::Result
         Value::String(_) => 0,
         Value::List(_) => 1,
         Value::Set(_) => 2,
+        Value::Hash(fields) if !fields.deadlines().is_empty() => {
+            return Err(invalid("RDB hash field expiry is not supported yet"));
+        }
         Value::Hash(_) => 4,
         Value::SortedSet(_) => 5,
         Value::Stream(_) => return Err(invalid("RDB streams are not supported yet")),
@@ -766,6 +769,13 @@ fn save(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     }
     // Clone while the command gate is held, so the worker saves one coherent point in time.
     let entries = store.entries.lock().unwrap().clone();
+    if entries
+        .values()
+        .any(|entry| matches!(&entry.value, Value::Hash(hash) if !hash.deadlines().is_empty()))
+    {
+        store.rdb.saving.store(false, Ordering::Release);
+        return protocol::error("RDB hash field expiry is not supported yet");
+    }
     let owned = store.clone();
     let write = move || {
         let result = encode(&entries).and_then(|bytes| save_file(&path, &bytes));

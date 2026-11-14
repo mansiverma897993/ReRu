@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Deadline-indexed expiry on primaries. One index record per expiring key keeps
 //! repeated TTL updates from accumulating stale timer records.
-use crate::{mark_evicted, save_and_publish, Entry, Store};
+use crate::{mark_evicted, save_and_publish, Entry, Store, Value};
 use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,7 +41,7 @@ impl Expiry {
     pub fn update(&self, entries: &HashMap<Vec<u8>, Entry>, keys: &[Vec<u8>]) {
         let mut index = self.index.lock().unwrap();
         for key in keys {
-            index.set(key, entries.get(key).and_then(|entry| entry.expires_at));
+            index.set(key, entries.get(key).and_then(next_deadline));
         }
     }
 
@@ -49,7 +49,7 @@ impl Expiry {
         let mut index = self.index.lock().unwrap();
         *index = Index::default();
         for (key, entry) in entries {
-            index.set(key, entry.expires_at);
+            index.set(key, next_deadline(entry));
         }
     }
 
@@ -63,6 +63,17 @@ impl Expiry {
 
     pub fn reset_stats(&self) {
         self.active_expired_keys.store(0, Ordering::Relaxed);
+    }
+}
+
+fn next_deadline(entry: &Entry) -> Option<Instant> {
+    let field_deadline = match &entry.value {
+        Value::Hash(hash) => hash.next_deadline(),
+        _ => None,
+    };
+    match (entry.expires_at, field_deadline) {
+        (Some(key), Some(field)) => Some(key.min(field)),
+        (key, field) => key.or(field),
     }
 }
 
@@ -81,32 +92,39 @@ fn expire_cycle(store: &Store) {
             {
                 break;
             }
-            let (deadline, key) = index.deadlines.pop_first().unwrap();
+            let (_, key) = index.deadlines.pop_first().unwrap();
             index.by_key.remove(&key);
-            match entries.get(&key) {
-                Some(entry) if entry.expires_at == Some(deadline) => {
-                    entries.remove(&key);
-                    removed += 1;
-                }
-                Some(entry) => {
-                    // Defensive reconciliation: a new value must never be deleted
-                    // by the deadline belonging to an older value.
-                    index.set(&key, entry.expires_at);
-                    continue;
-                }
-                // A passive read already removed this key; still persist and
-                // propagate its deletion and discard eviction bookkeeping.
-                None => {}
+            let missing = !entries.contains_key(&key);
+            let delete_key = match entries.get_mut(&key) {
+                Some(entry) if entry.expires_at.is_some_and(|at| at <= started) => true,
+                Some(entry) => match &mut entry.value {
+                    Value::Hash(hash) => {
+                        hash.prune(started);
+                        hash.is_empty()
+                    }
+                    _ => false,
+                },
+                None => false,
+            };
+            if delete_key {
+                entries.remove(&key);
+                removed += 1;
+            } else if let Some(entry) = entries.get(&key) {
+                index.set(&key, next_deadline(entry));
             }
-            changed.push(key);
+            // A passive read may have removed the expired field already. The
+            // deadline still marks a logical write for WATCH and persistence.
+            changed.push((key, delete_key || missing));
         }
     }
     store
         .expiry
         .active_expired_keys
         .fetch_add(removed, Ordering::Relaxed);
-    for key in changed {
-        store.eviction.forget(&key);
+    for (key, deleted) in changed {
+        if deleted {
+            store.eviction.forget(&key);
+        }
         mark_evicted(store, &key);
     }
 }

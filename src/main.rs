@@ -37,7 +37,7 @@ enum Value {
     String(Vec<u8>),
     List(VecDeque<Vec<u8>>),
     Stream(streams::Stream),
-    Hash(HashMap<Vec<u8>, Vec<u8>>),
+    Hash(collections::HashValue),
     Set(HashSet<Vec<u8>>),
     SortedSet(sorted_sets::SortedSet),
 }
@@ -494,6 +494,14 @@ fn remove_expired(store: &mut HashMap<Vec<u8>, Entry>, key: &[u8]) {
             .is_some_and(|expiry| Instant::now() >= expiry)
     }) {
         store.remove(key);
+    } else if let Some(Entry {
+        value: Value::Hash(hash),
+        ..
+    }) = store.get_mut(key)
+    {
+        if hash.prune(Instant::now()) > 0 && hash.is_empty() {
+            store.remove(key);
+        }
     }
 }
 
