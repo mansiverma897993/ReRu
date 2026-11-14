@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::{mark_modified, protocol, remove_expired, Entry, Store, Value};
+use std::collections::VecDeque;
 
 #[derive(Clone, Copy)]
 enum Command {
@@ -44,13 +45,16 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
         Command::Lpushx | Command::Rpushx => command.len() >= 3,
         Command::Insert | Command::Move => command.len() == 5,
         Command::Rpoplpush => command.len() == 3,
-        Command::Pos => command.len() >= 3 && command.len() % 2 == 1,
+        Command::Pos => command.len() >= 3,
     })
 }
 
 pub fn is_mutating(command: &[Vec<u8>]) -> bool {
     parse(&command[0]).is_some_and(|kind| !matches!(kind, Command::Index | Command::Pos))
 }
+
+const RANK_ZERO: &str = "RANK can't be zero: use 1 to start from the first match, 2 from \
+                            the second ... or use negative to start from the end of the list";
 
 fn wrong_type() -> Vec<u8> {
     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()
@@ -67,6 +71,42 @@ fn parse_i64(bytes: &[u8]) -> Result<i64, Vec<u8>> {
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
 
+/// Parse an integer the way Redis's `string2ll` does: an optional `-`, no `+`,
+/// no leading zeros unless the value is exactly `0`, and an `i64` range.
+fn parse_redis_int(bytes: &[u8]) -> Option<i64> {
+    if bytes == b"0" {
+        return Some(0);
+    }
+    let (negative, digits) = match bytes.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        _ => (false, bytes),
+    };
+    match digits.first() {
+        Some(first) if (b'1'..=b'9').contains(first) => {}
+        _ => return None,
+    }
+    let mut magnitude: i128 = 0;
+    for byte in digits {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        magnitude = magnitude
+            .checked_mul(10)?
+            .checked_add(i128::from(byte - b'0'))?;
+    }
+    i64::try_from(if negative { -magnitude } else { magnitude }).ok()
+}
+
+/// Redis reads a count that must not be negative with its own message: a value
+/// that is not a valid integer, a negative value or an overflow all get the
+/// same error.
+pub fn parse_count(bytes: &[u8]) -> Result<usize, Vec<u8>> {
+    match parse_redis_int(bytes) {
+        Some(value) if value >= 0 => Ok(value as usize),
+        _ => Err(protocol::error("value is out of range, must be positive")),
+    }
+}
+
 fn index(number: i64, len: usize) -> Option<usize> {
     let at = if number < 0 {
         len as i128 + i128::from(number)
@@ -78,9 +118,9 @@ fn index(number: i64, len: usize) -> Option<usize> {
 
 fn pop(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     let count = if command.len() == 3 {
-        match parse_i64(&command[2]) {
-            Ok(value) if value >= 0 => value as usize,
-            _ => return protocol::error("value is not an integer or out of range"),
+        match parse_count(&command[2]) {
+            Ok(value) => value,
+            Err(error) => return error,
         }
     } else {
         1
@@ -100,7 +140,7 @@ fn pop(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     };
     let mut values = Vec::new();
     for _ in 0..count.min(items.len()) {
-        values.push(items.pop().unwrap());
+        values.push(items.pop_back().unwrap());
     }
     if !values.is_empty() {
         if items.is_empty() {
@@ -159,14 +199,14 @@ fn move_item(command: &[Vec<u8>], store: &Store, legacy: bool) -> Vec<u8> {
             return b"$-1\r\n".to_vec();
         };
         let value = if from_left {
-            items.remove(0)
+            items.pop_front().unwrap()
         } else {
-            items.pop().unwrap()
+            items.pop_back().unwrap()
         };
         if to_left {
-            items.insert(0, value.clone());
+            items.push_front(value.clone());
         } else {
-            items.push(value.clone());
+            items.push_back(value.clone());
         }
         mark_modified(store, source);
         return protocol::bulk(&value);
@@ -177,9 +217,9 @@ fn move_item(command: &[Vec<u8>], store: &Store, legacy: bool) -> Vec<u8> {
             ..
         }) => {
             if from_left {
-                items.remove(0)
+                items.pop_front().unwrap()
             } else {
-                items.pop().unwrap()
+                items.pop_back().unwrap()
             }
         }
         _ => return b"$-1\r\n".to_vec(),
@@ -191,16 +231,16 @@ fn move_item(command: &[Vec<u8>], store: &Store, legacy: bool) -> Vec<u8> {
         entries.remove(source);
     }
     let destination_entry = entries.entry(destination.clone()).or_insert_with(|| Entry {
-        value: Value::List(Vec::new()),
+        value: Value::List(VecDeque::new()),
         expires_at: None,
     });
     let Value::List(items) = &mut destination_entry.value else {
         unreachable!()
     };
     if to_left {
-        items.insert(0, value.clone());
+        items.push_front(value.clone());
     } else {
-        items.push(value.clone());
+        items.push_back(value.clone());
     }
     mark_modified(store, source);
     mark_modified(store, destination);
@@ -208,30 +248,59 @@ fn move_item(command: &[Vec<u8>], store: &Store, legacy: bool) -> Vec<u8> {
     protocol::bulk(&value)
 }
 
-fn pos(command: &[Vec<u8>], items: Option<&[Vec<u8>]>) -> Vec<u8> {
-    let mut rank = 1i64;
-    let mut count = None;
-    let mut maxlen = 0usize;
-    for pair in command[3..].as_chunks::<2>().0 {
+struct PosOptions {
+    rank: i64,
+    count: Option<usize>,
+    maxlen: usize,
+}
+
+/// Redis validates `LPOS` options before it looks the key up, so a bad option
+/// wins over a wrong-type or missing key.
+fn pos_options(command: &[Vec<u8>]) -> Result<PosOptions, Vec<u8>> {
+    let mut options = PosOptions {
+        rank: 1,
+        count: None,
+        maxlen: 0,
+    };
+    let (pairs, remainder) = command[3..].as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err(protocol::error("syntax error"));
+    }
+    for pair in pairs {
         if pair[0].eq_ignore_ascii_case(b"RANK") {
-            rank = match parse_i64(&pair[1]) {
-                Ok(value) if value != 0 => value,
-                _ => return protocol::error("RANK can't be zero"),
+            options.rank = match parse_redis_int(&pair[1]) {
+                Some(i64::MIN) => {
+                    return Err(protocol::error(
+                        "value is out of range, value must between -9223372036854775807 and 9223372036854775807",
+                    ))
+                }
+                Some(0) => return Err(protocol::error(RANK_ZERO)),
+                Some(value) => value,
+                None => return Err(protocol::error("value is not an integer or out of range")),
             };
         } else if pair[0].eq_ignore_ascii_case(b"COUNT") {
-            count = match parse_i64(&pair[1]) {
-                Ok(value) if value >= 0 => Some(value as usize),
-                _ => return protocol::error("COUNT must be non-negative"),
+            options.count = match parse_redis_int(&pair[1]) {
+                Some(value) if value >= 0 => Some(value as usize),
+                _ => return Err(protocol::error("COUNT can't be negative")),
             };
         } else if pair[0].eq_ignore_ascii_case(b"MAXLEN") {
-            maxlen = match parse_i64(&pair[1]) {
-                Ok(value) if value >= 0 => value as usize,
-                _ => return protocol::error("MAXLEN must be non-negative"),
+            options.maxlen = match parse_redis_int(&pair[1]) {
+                Some(value) if value >= 0 => value as usize,
+                _ => return Err(protocol::error("MAXLEN can't be negative")),
             };
         } else {
-            return protocol::error("syntax error");
+            return Err(protocol::error("syntax error"));
         }
     }
+    Ok(options)
+}
+
+fn pos(command: &[Vec<u8>], items: Option<&VecDeque<Vec<u8>>>, options: PosOptions) -> Vec<u8> {
+    let PosOptions {
+        rank,
+        count,
+        maxlen,
+    } = options;
     let Some(items) = items else {
         return if count.is_some() {
             protocol::array(&[])
@@ -284,6 +353,21 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
     if matches!(kind, Command::Rpop) {
         return Some(pop(command, store));
     }
+    if matches!(kind, Command::Pos) {
+        let options = match pos_options(command) {
+            Ok(options) => options,
+            Err(error) => return Some(error),
+        };
+        let key = &command[1];
+        let mut entries = store.entries.lock().unwrap();
+        remove_expired(&mut entries, key);
+        let items = match entries.get(key).map(|entry| &entry.value) {
+            Some(Value::List(items)) => Some(items),
+            Some(_) => return Some(wrong_type()),
+            None => None,
+        };
+        return Some(pos(command, items, options));
+    }
     if matches!(kind, Command::Move | Command::Rpoplpush) {
         return Some(move_item(
             command,
@@ -309,7 +393,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
                 .and_then(|items| index(at, items.len()).map(|at| &items[at]))
                 .map_or_else(|| b"$-1\r\n".to_vec(), |value| protocol::bulk(value))
         }
-        Command::Pos => pos(command, items.map(Vec::as_slice)),
+        Command::Pos => unreachable!(),
         Command::Lpushx | Command::Rpushx => {
             let Some(Entry {
                 value: Value::List(items),
@@ -319,9 +403,11 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
                 return Some(integer(0));
             };
             if matches!(kind, Command::Lpushx) {
-                items.splice(0..0, command[2..].iter().rev().cloned());
+                for value in &command[2..] {
+                    items.push_front(value.clone());
+                }
             } else {
-                items.extend_from_slice(&command[2..]);
+                items.extend(command[2..].iter().cloned());
             }
             let len = items.len();
             mark_modified(store, key);

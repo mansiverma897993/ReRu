@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+#![forbid(unsafe_code)]
+
 //! Library surface for ReRu tooling.
 //!
 //! The server lives in `src/main.rs`. This crate exists so out-of-tree tools

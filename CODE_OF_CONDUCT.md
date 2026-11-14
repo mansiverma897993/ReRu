@@ -58,10 +58,11 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the maintainers privately through GitHub at
-[@mansiverma897993](https://github.com/mansiverma897993) or by using GitHub's
-**Report abuse** flow. All complaints will be reviewed and investigated promptly
-and fairly.
+reported to the owners privately through GitHub at
+[@mansiverma897993](https://github.com/mansiverma897993) or
+[@MohitGoyal09](https://github.com/MohitGoyal09), or by using GitHub's
+**Report abuse** flow. A report about one owner goes to the other. All
+complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
 reporter of any incident.

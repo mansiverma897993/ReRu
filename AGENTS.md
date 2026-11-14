@@ -21,12 +21,15 @@ repository. Human contributors should read [CONTRIBUTING.md](CONTRIBUTING.md).
    has one runtime dependency by design.
 3. **No async runtime.** Commands run under the shared `command_gate`; blocking
    commands wait on the `changed` condition variable.
-4. **Test before claiming done.** A command is not implemented until an
+4. **No `unsafe`.** Both crates declare `#![forbid(unsafe_code)]`, which an
+   `#[allow]` cannot relax. A change that needs `unsafe` needs a maintainer
+   decision to change the attribute first.
+5. **Test before claiming done.** A command is not implemented until an
    integration test in `tests/` asserts its exact RESP replies and at least one
    error case.
-5. **Update docs with the code.** `docs/COMPATIBILITY.md` for command changes,
+6. **Update docs with the code.** `docs/COMPATIBILITY.md` for command changes,
    `CHANGELOG.md` under `Unreleased` for user-visible changes.
-6. **Surgical diffs.** Do not refactor unrelated modules, rename public items, or
+7. **Surgical diffs.** Do not refactor unrelated modules, rename public items, or
    reformat files you did not change.
 
 ## Verification commands

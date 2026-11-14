@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560" role="img" aria-label="ReRu request path: clients, RESP2 parser and dispatch, shared store, then snapshots, AOF, RDB, and replicas">
+  <title>ReRu request path: clients, RESP2 parser and dispatch, shared store, then snapshots, AOF, RDB, and replicas</title>
+  <style>
+    .bg{fill:#0F0E0C} .ink{fill:#EDE8DF} .muted{fill:#8F887C}
+    .dim{fill:#5C564E} .acc{fill:#F0703A}
+    .rule{stroke:#2C2925;stroke-width:1} .box{fill:none;stroke:#8F887C;stroke-width:1.25}
+    .box-acc{fill:none;stroke:#F0703A;stroke-width:1.75}
+    .wire{stroke:#8F887C;stroke-width:1.25;fill:none} .wire-acc{stroke:#F0703A;stroke-width:1.5;fill:none}
+    text{font-family:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace}
+  </style>
+  <rect class="bg" width="1280" height="560" rx="12"/>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="muted"/></marker>
+    <marker id="ah-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="acc"/></marker>
+  </defs>
+  <text class="muted" x="56" y="44" font-size="12" letter-spacing="1">FIG. 1</text><text class="muted" x="640.0" y="44" font-size="12" letter-spacing="1" text-anchor="middle">REQUEST PATH</text><text class="muted" x="1224" y="44" font-size="12" letter-spacing="1" text-anchor="end">docs/ARCHITECTURE.md</text>
+  <line class="rule" x1="56" y1="60" x2="1224" y2="60"/>
+  <line class="rule" x1="56" y1="500" x2="1224" y2="500"/>
+  <text class="muted" x="56" y="526" font-size="12" letter-spacing="1"></text><text class="muted" x="640.0" y="526" font-size="12" letter-spacing="1" text-anchor="middle"></text><text class="muted" x="1224" y="526" font-size="12" letter-spacing="1" text-anchor="end"></text>
+  <text class="muted" x="56" y="128" font-size="12" letter-spacing="1.5">01  CONNECT</text>
+  <text class="muted" x="56" y="224" font-size="12" letter-spacing="1.5">02  PARSE</text>
+  <text class="muted" x="56" y="328" font-size="12" letter-spacing="1.5">03  EXECUTE</text>
+  <text class="muted" x="56" y="442" font-size="12" letter-spacing="1.5">04  PERSIST</text>
+  <rect class="box" x="340" y="92" width="600" height="64"/>
+  <text class="ink" x="640.0" y="122.0" font-size="17" font-weight="600" text-anchor="middle">Redis clients</text>
+  <text class="muted" x="640.0" y="144.0" font-size="13" text-anchor="middle">redis-cli · redis-py · ioredis · Lettuce</text>
+  <line class="wire" x1="640" y1="156" x2="640" y2="186" marker-end="url(#ah)"/>
+  <rect class="box" x="340" y="188" width="600" height="64"/>
+  <text class="ink" x="640.0" y="218.0" font-size="17" font-weight="600" text-anchor="middle">RESP2 parser + command dispatch</text>
+  <text class="muted" x="640.0" y="240.0" font-size="13" text-anchor="middle">MULTI queue · blocking commands · subscriptions</text>
+  <line class="wire" x1="640" y1="252" x2="640" y2="282" marker-end="url(#ah)"/>
+  <rect class="box-acc" x="340" y="284" width="600" height="80"/>
+  <text class="ink" x="640.0" y="322.0" font-size="19" font-weight="600" text-anchor="middle">Shared in-memory store</text>
+  <text class="muted" x="640.0" y="344.0" font-size="13" text-anchor="middle">command gate · TTL index · eviction · client limits</text>
+  <line class="wire-acc" x1="432" y1="364" x2="432" y2="402" marker-end="url(#ah-acc)"/>
+  <line class="wire-acc" x1="640" y1="364" x2="640" y2="402" marker-end="url(#ah-acc)"/>
+  <line class="wire-acc" x1="848" y1="364" x2="848" y2="402" marker-end="url(#ah-acc)"/>
+  <line class="wire-acc" x1="940" y1="324" x2="988" y2="324" marker-end="url(#ah-acc)"/>
+  <rect class="box" x="340" y="404" width="184" height="68"/>
+  <text class="ink" x="432.0" y="436.0" font-size="15" font-weight="600" text-anchor="middle">Snapshot</text>
+  <text class="muted" x="432.0" y="458.0" font-size="12" text-anchor="middle">.snap · ReRu format</text>
+  <rect class="box" x="548" y="404" width="184" height="68"/>
+  <text class="ink" x="640.0" y="436.0" font-size="15" font-weight="600" text-anchor="middle">Append-only file</text>
+  <text class="muted" x="640.0" y="458.0" font-size="12" text-anchor="middle">replay · online rewrite</text>
+  <rect class="box" x="756" y="404" width="184" height="68"/>
+  <text class="ink" x="848.0" y="436.0" font-size="15" font-weight="600" text-anchor="middle">Redis RDB</text>
+  <text class="muted" x="848.0" y="458.0" font-size="12" text-anchor="middle">subset · SAVE / BGSAVE</text>
+  <rect class="box" x="990" y="292" width="234" height="64"/>
+  <text class="ink" x="1107.0" y="322.0" font-size="15" font-weight="600" text-anchor="middle">Replicas</text>
+  <text class="muted" x="1107.0" y="344.0" font-size="12" text-anchor="middle">snapshot + stream</text>
+  <text class="muted" x="56" y="528" font-size="12.5">One thread per connection. The command gate serializes writes; one write-out point feeds every sink.</text>
+  <line class="wire-acc" x1="1080" y1="524" x2="1112" y2="524"/>
+  <text class="muted" x="1224" y="528" font-size="12.5" text-anchor="end">write path</text>
+</svg>

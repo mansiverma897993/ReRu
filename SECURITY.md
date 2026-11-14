@@ -16,8 +16,10 @@ release exists, in the newest published pre-release.
 
 Report privately using GitHub's
 [private vulnerability reporting](https://github.com/mansiverma897993/ReRu/security/advisories/new)
-or by contacting the maintainer at
-[@mansiverma897993](https://github.com/mansiverma897993).
+or by contacting an owner at
+[@mansiverma897993](https://github.com/mansiverma897993) or
+[@MohitGoyal09](https://github.com/MohitGoyal09). A report about one owner goes
+to the other.
 
 Please include:
 

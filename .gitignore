@@ -26,8 +26,15 @@ password.txt
 *.pem
 *.key
 
+# Python bytecode from the helper scripts
+__pycache__/
+*.pyc
+
 # Coverage and profiling
 *.profraw
 *.profdata
 lcov.info
 tarpaulin-report.*
+
+# Maintainers' internal notes, never published
+/OSS_PLAYBOOK.md

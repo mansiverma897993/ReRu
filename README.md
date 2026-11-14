@@ -1,59 +1,49 @@
 <div align="center">
 
-<img src="docs/assets/banner.svg" alt="ReRu — a Redis-compatible data server written in Rust" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img src="docs/assets/banner-light.svg" alt="ReRu: a Redis-compatible data server written in Rust" width="100%">
+</picture>
 
-<br>
+<br><br>
 
-[![License](https://img.shields.io/badge/license-AGPL--3.0-663399?style=flat-square)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.88%2B-DEA584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Status](https://img.shields.io/badge/status-experimental-F97316?style=flat-square)](docs/ROADMAP.md)
-![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macos%20%7C%20windows-667085?style=flat-square)
+[![CI](https://img.shields.io/github/actions/workflow/status/mansiverma897993/ReRu/ci.yml?branch=main&style=flat-square&label=CI&labelColor=1A1714)](https://github.com/mansiverma897993/ReRu/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mansiverma897993/ReRu?include_prereleases&style=flat-square&label=release&labelColor=1A1714&color=C2410C)](https://github.com/mansiverma897993/ReRu/releases)
+[![License](https://img.shields.io/badge/license-AGPL--3.0--only-C2410C?style=flat-square&labelColor=1A1714)](LICENSE)
+[![MSRV](https://img.shields.io/badge/rust-1.88%2B-6B645A?style=flat-square&logo=rust&logoColor=white&labelColor=1A1714)](https://www.rust-lang.org)
+[![unsafe](https://img.shields.io/badge/unsafe-forbidden-6B645A?style=flat-square&labelColor=1A1714)](https://github.com/rust-secure-code/safety-dance)
+[![Dependencies](https://img.shields.io/badge/runtime%20deps-1-6B645A?style=flat-square&labelColor=1A1714)](Cargo.toml)
+[![Redis reference](https://img.shields.io/badge/reference-Redis%208.10.2-6B645A?style=flat-square&labelColor=1A1714)](docs/COMPATIBILITY.md)
+[![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macos%20%7C%20windows-6B645A?style=flat-square&labelColor=1A1714)](#quick-start)
 
-<p><b>ReRu speaks RESP2, so existing Redis clients connect without changes.</b><br>
-It reimplements a growing slice of Redis and its persistence formats in safe, dependency-light Rust.</p>
+**ReRu speaks RESP2, so existing Redis clients connect without changes.**<br>
+It reimplements a growing slice of Redis and its persistence formats in safe, dependency-light Rust.
 
-[**Quick start**](#quick-start) ·
-[**Compatibility**](docs/COMPATIBILITY.md) ·
-[**Architecture**](docs/ARCHITECTURE.md) ·
-[**Roadmap**](docs/ROADMAP.md) ·
-[**Contributing**](CONTRIBUTING.md)
+[Quick start](#quick-start) ·
+[Compatibility](docs/COMPATIBILITY.md) ·
+[Architecture](docs/ARCHITECTURE.md) ·
+[Roadmap](docs/ROADMAP.md) ·
+[Contributing](CONTRIBUTING.md)
 
 </div>
 
-## At a glance
-
-<table>
-  <tr>
-    <td align="center" width="25%"><strong>204</strong><br><sub>Redis command names wired</sub></td>
-    <td align="center" width="25%"><strong>219</strong><br><sub>tests passing</sub></td>
-    <td align="center" width="25%"><strong>1</strong><br><sub>runtime dependency</sub></td>
-    <td align="center" width="25%"><strong>10</strong><br><sub>eviction policies</sub></td>
-  </tr>
-</table>
-
-<p align="center"><sub>44.4% command-name coverage against Redis 8.10.2 metadata. Name presence, not complete behavior.</sub></p>
+> [!WARNING]
+> ReRu is experimental. Use it for development and compatibility experiments,
+> not production. See [Project status](#project-status).
 
 ## Why ReRu
 
-<table>
-  <tr>
-    <td align="center" width="33%" valign="top">
-      <h3>🧩</h3>
-      <strong>Familiar protocol</strong><br>
-      <sub>Binary-safe RESP2 over TCP. Works with <code>redis-cli</code>, <code>redis-py</code>, <code>ioredis</code>, Lettuce, and any client that supports the listed commands.</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <h3>🪶</h3>
-      <strong>Small and readable</strong><br>
-      <sub>About 21k lines of straight-line Rust with one dependency. Every subsystem is a plain module with its own tests.</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <h3>🔬</h3>
-      <strong>Research-friendly</strong><br>
-      <sub>Each command follows the pinned Redis 8.10.2 reference, with differential tests against a live Redis where possible.</sub>
-    </td>
-  </tr>
-</table>
+- **Familiar protocol.** Binary-safe RESP2 over TCP. Works with `redis-cli`,
+  `redis-py`, `ioredis`, Lettuce, and any client that uses the supported
+  commands.
+- **Small and readable.** About 21k lines of straight-line Rust with one
+  runtime dependency and no `unsafe`, enforced by `#![forbid(unsafe_code)]`.
+  Every subsystem is a plain module with its own tests.
+- **Research-friendly.** Each command follows the pinned Redis 8.10.2
+  reference, with differential tests against a live Redis where possible.
+
+Compared with Redis, Valkey, Dragonfly, KeyDB, Redka, KiviDB, Garnet and Kvrocks:
+[docs/COMPARISON.md](docs/COMPARISON.md).
 
 ## Quick start
 
@@ -99,42 +89,14 @@ print(client.get("greeting"))
 
 ## Features
 
-<table>
-  <tr>
-    <td align="center" width="33%" valign="top">
-      <h3>🧱</h3>
-      <strong>Data structures</strong><br>
-      <sub>Strings, lists, hashes, sets, sorted sets, bitmaps, streams with consumer groups, and geospatial queries.</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <h3>⚡</h3>
-      <strong>Cache behavior</strong><br>
-      <sub>Conditional writes, TTLs, background expiry, ten eviction policies, and configurable memory estimates.</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <h3>🔁</h3>
-      <strong>Transactions &amp; messaging</strong><br>
-      <sub><code>MULTI</code>, <code>EXEC</code>, <code>WATCH</code>, blocking reads, local pub/sub, stream acknowledgements, and pending-message recovery.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="33%" valign="top">
-      <h3>💾</h3>
-      <strong>Persistence</strong><br>
-      <sub>ReRu snapshots, a single-file AOF with online rewrite, and a tested subset of Redis RDB.</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <h3>🛰️</h3>
-      <strong>Replication</strong><br>
-      <sub>Read-only ReRu replicas using an authenticated snapshot-plus-stream protocol.</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <h3>🔐</h3>
-      <strong>Auth &amp; operations</strong><br>
-      <sub>Default-user <code>AUTH</code>, client limits, runtime memory configuration, and partial <code>INFO</code> metrics.</sub>
-    </td>
-  </tr>
-</table>
+| Area | What works |
+| --- | --- |
+| Data structures | Strings, lists, hashes, sets, sorted sets, bitmaps, streams with consumer groups, geospatial queries |
+| Cache behavior | Conditional writes, TTLs, background expiry, ten eviction policies, configurable memory estimates |
+| Transactions and messaging | `MULTI`, `EXEC`, `WATCH`, blocking reads, local Pub/Sub, stream acknowledgements, pending-message recovery |
+| Persistence | ReRu snapshots, single-file AOF with online rewrite, a tested subset of Redis RDB |
+| Replication | Read-only ReRu replicas over an authenticated snapshot-plus-stream protocol |
+| Auth and operations | Default-user `AUTH`, client limits, runtime memory configuration, partial `INFO` metrics |
 
 **204 of 459 command metadata entries** from Redis 8.10.2 have implementation
 paths: **44.4% command-name coverage**. This counts command names, not complete
@@ -143,7 +105,10 @@ behavior. Supported options, differences, and tests are listed in the
 
 ## Architecture
 
-<img src="docs/assets/architecture.svg" alt="ReRu request path: clients, RESP2 parser, command dispatch, shared store, then snapshots, AOF, RDB, and replicas" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
+  <img src="docs/assets/architecture-light.svg" alt="ReRu request path: clients, RESP2 parser, command dispatch, shared store, then snapshots, AOF, RDB, and replicas" width="100%">
+</picture>
 
 One connection thread per client. Writes are serialized by the command gate and
 fan out from a single write-out point. Read the full
@@ -266,7 +231,7 @@ docker compose down -v    # also deletes the data volume
 git clone https://github.com/mansiverma897993/ReRu.git
 cd ReRu
 make setup     # or: cargo fetch
-make test      # 219 tests
+make test      # 221 tests
 make run       # or: cargo run -- --port 6379
 make check     # fmt + clippy + tests
 ```
@@ -290,7 +255,7 @@ and SHA-256 checksum under `target/releases`.
 src/            server modules (one per subsystem)
 tests/          integration tests, one file per area
 docs/           compatibility, roadmap, architecture, development, testing
-docs/assets/    banner, diagram, and social preview
+docs/assets/    banner, diagram, and social preview (scripts/gen_readme_assets.py)
 scripts/        packaging and Redis interoperability helpers
 .cargo/         cargo aliases used by the development guide
 .devcontainer/  container and Codespaces setup
@@ -308,7 +273,9 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [CONTRIBUTORS.md](CONTRIBUTORS.md). Good first issues are labeled
 [`good first issue`](https://github.com/mansiverma897993/ReRu/labels/good%20first%20issue).
 
-- Read the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Read the [Code of Conduct](CODE_OF_CONDUCT.md) and the
+  [governance policy](GOVERNANCE.md), which names the owners and the no-CLA
+  contribution terms.
 - Report vulnerabilities privately per [SECURITY.md](SECURITY.md).
 - Found a bug? [Open a bug report](https://github.com/mansiverma897993/ReRu/issues/new?template=bug_report.yml).
 - Have an idea? [Request a feature](https://github.com/mansiverma897993/ReRu/issues/new?template=feature_request.yml).
@@ -321,6 +288,11 @@ use. Remaining work includes multi-user ACLs, TLS, RESP3, Lua and functions, new
 performance tuning. Memory limits use a logical dataset estimate, not process
 RSS. Commands are serialized, and each connection uses an operating-system
 thread.
+
+Measured against Redis on one machine, with the method and the limits of the
+numbers written down: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). ReRu is faster
+on a single connection with shallow pipelining, and slower at 64 connections or
+with a deep pipeline.
 
 See the [roadmap](docs/ROADMAP.md) and
 [release notes](docs/RELEASE_NOTES.md) for details.
