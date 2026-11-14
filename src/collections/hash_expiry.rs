@@ -402,13 +402,17 @@ fn execute_inner(kind: Kind, command: &[Vec<u8>], store: &Store) -> Result<Vec<u
         if (condition == Some(Condition::Fnx)
             && existing.is_some_and(|hash| {
                 fields
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .any(|pair| hash.contains_key(&pair[0]))
             }))
             || (condition == Some(Condition::Fxx)
                 && existing.is_none_or(|hash| {
                     fields
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .any(|pair| !hash.contains_key(&pair[0]))
                 }))
         {
@@ -421,7 +425,7 @@ fn execute_inner(kind: Kind, command: &[Vec<u8>], store: &Store) -> Result<Vec<u
         let Value::Hash(hash) = &mut entry.value else {
             unreachable!()
         };
-        for pair in fields.chunks_exact(2) {
+        for pair in fields.as_chunks::<2>().0 {
             let previous = hash.deadline_record(&pair[0]);
             hash.overwrite_field(pair[0].clone(), pair[1].clone());
             match expiration {
