@@ -208,6 +208,10 @@ pub fn execute_config(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
                 b"maxmemory-policy".as_slice(),
                 settings.policy.name().to_string(),
             ),
+            (
+                b"latency-monitor-threshold".as_slice(),
+                store.latency.threshold_ms().to_string(),
+            ),
         ] {
             if command[2..]
                 .iter()
@@ -243,6 +247,7 @@ pub fn execute_config(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     }
     let mut updated = settings;
     let mut maxclients = store.clients.maximum();
+    let mut latency_threshold_ms = store.latency.threshold_ms();
     for pair in command[2..].as_chunks::<2>().0 {
         let value = match std::str::from_utf8(&pair[1]) {
             Ok(value) => value,
@@ -263,12 +268,18 @@ pub fn execute_config(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
                 Some(value) => value,
                 None => return protocol::error("Invalid maxclients value"),
             };
+        } else if pair[0].eq_ignore_ascii_case(b"latency-monitor-threshold") {
+            latency_threshold_ms = match value.parse::<u64>() {
+                Ok(value) => value,
+                Err(_) => return protocol::error("Invalid latency-monitor-threshold value"),
+            };
         } else {
             return protocol::error("Unsupported CONFIG parameter");
         }
     }
     store.eviction.update(updated, store);
     store.clients.set_maximum(maxclients);
+    store.latency.set_threshold_ms(latency_threshold_ms);
     b"+OK\r\n".to_vec()
 }
 

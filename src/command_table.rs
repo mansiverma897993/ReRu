@@ -96,6 +96,9 @@ const COMMANDS: &[&str] = &[
     "info",
     "keys",
     "lastsave",
+    "latency|history",
+    "latency|latest",
+    "latency|reset",
     "lindex",
     "linsert",
     "llen",
@@ -244,12 +247,12 @@ fn metadata(name: &str) -> Metadata {
         "cluster|shards" | "cluster|slots" => 2,
         "cluster|keyslot" => 3,
         "command|count" | "client|getname" | "client|id" | "client|info" | "echo" | "select"
-        | "get" | "getdel" | "incr" | "decr" | "strlen" | "hgetall" | "hlen" | "hkeys"
-        | "hvals" | "scard" | "smembers" | "type" | "ttl" | "pttl" | "persist" | "dump"
-        | "xlen" | "zcard" | "expiretime" | "pexpiretime" | "keys" => 2,
+        | "latency|latest" | "get" | "getdel" | "incr" | "decr" | "strlen" | "hgetall" | "hlen"
+        | "hkeys" | "hvals" | "scard" | "smembers" | "type" | "ttl" | "pttl" | "persist"
+        | "dump" | "xlen" | "zcard" | "expiretime" | "pexpiretime" | "keys" => 2,
         "client|setname" | "append" | "setnx" | "getset" | "decrby" | "incrby" | "incrbyfloat"
-        | "hget" | "hstrlen" | "sismember" | "zscore" | "rpoplpush" | "rename" | "renamenx"
-        | "lindex" | "hexists" => 3,
+        | "latency|history" | "hget" | "hstrlen" | "sismember" | "zscore" | "rpoplpush"
+        | "rename" | "renamenx" | "lindex" | "hexists" => 3,
         "httl" | "hpttl" | "hexpiretime" | "hpexpiretime" | "hpersist" | "hgetex" => -5,
         "config|resetstat" => 2,
         "client|setinfo" | "hincrby" | "hincrbyfloat" | "hsetnx" | "smove" | "lset" | "lrem"
@@ -260,7 +263,8 @@ fn metadata(name: &str) -> Metadata {
         "getrange" | "lrange" | "ltrim" | "substr" => 4,
         "restore" => -4,
         "zincrby" => 4,
-        "client" | "config" | "acl" | "xgroup" | "xinfo" | "cluster" => -2,
+        "client" | "config" | "acl" | "xgroup" | "xinfo" | "cluster" | "latency"
+        | "latency|reset" => -2,
         "config|get" => -3,
         "config|set" => -4,
         "acl|whoami" => 2,
@@ -318,8 +322,9 @@ fn metadata(name: &str) -> Metadata {
         | "hello" | "info" | "keys" | "lastsave" | "multi" | "ping" | "pubsub" | "punsubscribe"
         | "psubscribe" | "publish" | "quit" | "randomkey" | "reset" | "save" | "scan"
         | "select" | "subscribe" | "time" | "unwatch" | "unsubscribe" | "xread" | "xreadgroup"
-        | "xgroup" | "xinfo" | "lmpop" | "blmpop" | "zmpop" | "bzmpop" | "sintercard"
-        | "zintercard" | "zdiff" | "zinter" | "zunion" => (0, 0, 0),
+        | "latency" | "latency|history" | "latency|latest" | "latency|reset" | "xgroup"
+        | "xinfo" | "lmpop" | "blmpop" | "zmpop" | "bzmpop" | "sintercard" | "zintercard"
+        | "zdiff" | "zinter" | "zunion" => (0, 0, 0),
         "copy" | "rename" | "renamenx" | "smove" | "lmove" | "blmove" | "rpoplpush"
         | "brpoplpush" | "zrangestore" => (1, 2, 1),
         "geosearchstore" => (1, 2, 1),
