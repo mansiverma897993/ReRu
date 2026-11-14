@@ -1,6 +1,7 @@
 [package]
 name = "reru"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
+authors = ["Mansi Verma <vmansi756@gmail.com>"]
 edition = "2021"
 rust-version = "1.88"
 description = "An experimental Redis-compatible cache and data structure server written in Rust"

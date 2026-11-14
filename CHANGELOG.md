@@ -8,6 +8,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-11-14
+
 ### Added
 
 - Static two-node Cluster routing with CRC16/hash-tag slots, `CLUSTER KEYSLOT`,
@@ -136,5 +138,6 @@ First public preview. Experimental; not a production Redis replacement.
 - Blocking commands do not yet implement Redis FIFO waiter ordering.
 - Memory limits use a logical dataset estimate, not process RSS.
 
-[Unreleased]: https://github.com/mansiverma897993/ReRu/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/mansiverma897993/ReRu/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/mansiverma897993/ReRu/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/mansiverma897993/ReRu/releases/tag/v0.1.0-alpha.1

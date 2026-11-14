@@ -96,10 +96,11 @@ print(client.get("greeting"))
 | Transactions and messaging | `MULTI`, `EXEC`, `WATCH`, blocking reads, local Pub/Sub, stream acknowledgements, pending-message recovery |
 | Persistence | ReRu snapshots, single-file AOF with online rewrite, a tested subset of Redis RDB |
 | Replication | Read-only ReRu replicas over an authenticated snapshot-plus-stream protocol |
+| Static Cluster | Explicit two-node slot map with `CLUSTER KEYSLOT/SHARDS/SLOTS`, `MOVED`, and `CROSSSLOT`; no failover or migration |
 | Auth and operations | Default-user `AUTH`, client limits, runtime memory configuration, partial `INFO` metrics |
 
-**219 of 459 command metadata entries** from Redis 8.10.2 have implementation
-paths: **47.7% command-name coverage**. This counts command names, not complete
+**222 of 459 command metadata entries** from Redis 8.10.2 have implementation
+paths: **48.4% command-name coverage**. This counts command names, not complete
 behavior. Supported options, differences, and tests are listed in the
 [compatibility inventory](docs/COMPATIBILITY.md).
 
@@ -284,7 +285,7 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 
 ReRu is suitable for development and compatibility experiments, not production
 use. Remaining work includes multi-user ACLs, TLS, RESP3, Lua and functions, newer stream features,
-`PSYNC`, clustering and failover, complete RDB/AOF compatibility, and
+`PSYNC`, dynamic clustering and failover, complete RDB/AOF compatibility, and
 performance tuning. Memory limits use a logical dataset estimate, not process
 RSS. Commands are serialized, and each connection uses an operating-system
 thread.

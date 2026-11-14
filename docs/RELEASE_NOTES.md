@@ -1,88 +1,58 @@
-# ReRu 0.1.0-alpha.1
+# ReRu 0.1.0-alpha.2
 
-7 November 2026 — experimental preview for local evaluation.
+14 November 2026 · Prerelease by Mansi Verma
+
+ReRu is an experimental Redis-compatible server written primarily in safe Rust.
+This update expands cache behavior, command discovery, and a bounded Cluster
+milestone. It is intended for development and compatibility testing.
 
 ## Highlights
 
-- RESP2 server with strings, lists, hashes, sets, sorted sets, bitmaps, streams
-  with consumer groups, and geospatial commands.
-- Transactions and `WATCH`, local Pub/Sub, TTLs, ten eviction policies, and
-  runtime memory configuration.
-- Background expiry with bounded deletion batches, persisted and replicated
-  deletions, startup index rebuilding, and expiry metrics.
-- Custom snapshots, single-file AOF with online rewrite, a subset of Redis RDB,
-  and authenticated ReRu-to-ReRu replication.
-- Default-user `AUTH`, `ACL WHOAMI`, password-file configuration, and
-  authenticated replication. Multi-user ACLs and TLS remain pending.
-- `--bind ADDRESS` so the server can listen on a container network while still
-  defaulting to loopback.
+- Hash-field expiration: `HEXPIRE`, `HPEXPIRE`, absolute-time variants, TTL
+  inspection, `HPERSIST`, `HGETEX`, and `HSETEX`. Field deadlines are removed
+  on reads and in the background, and survive ReRu snapshot and AOF reload.
+- Static two-node Cluster routing: Redis hash slots and hash tags,
+  `CLUSTER KEYSLOT/SHARDS/SLOTS`, `MOVED`, and `CROSSSLOT`. The map is configured
+  at startup; it does not discover peers or migrate data.
+- `COMMAND`, `COMMAND COUNT`, and `COMMAND INFO` metadata discovery,
+  `ZRANGESTORE`, and `CONFIG RESETSTAT`.
+- Faster list operations through `VecDeque`, plus corrected blocking move
+  timeout replies and several sorted-set range edge cases.
+- Expanded project docs, reproducible benchmarks, a RESP parser fuzz target,
+  OpenSSF Scorecard, and contributor governance.
 
-The command inventory has 203 of 459 Redis 8.10.2 metadata names (44.2%).
-This measures names with implementation paths, not complete behavior or a
-percentage of Redis rebuilt. See [compatibility](COMPATIBILITY.md).
+The inventory has **222 of 459 Redis 8.10.2 command metadata names (48.4%)**.
+This is name presence, not a Redis completion percentage. See the
+[compatibility inventory](https://github.com/mansiverma897993/ReRu/blob/v0.1.0-alpha.2/docs/COMPATIBILITY.md)
+for supported behavior and known gaps.
 
-## Open-source packaging
+## Install and verify
 
-- **License:** AGPL-3.0-only. Modified versions and hosted forks must publish
-  their source. The implementation is clean-room; no Redis source is translated.
-- Contributing guide, code of conduct, security policy, changelog, architecture
-  notes, development guide, and interoperability testing guide.
-- CI runs formatting, Clippy, and tests on Linux, macOS, and Windows, plus the
-  1.88 minimum toolchain and rustdoc. A dependency audit runs weekly.
-- `Dockerfile`, dev container, `Makefile`, and `cargo` aliases. A new contributor
-  can clone, run `make setup`, and run `make test`.
-- 20 scoped issues with `good first issue`, `help wanted`, area, and difficulty
-  labels.
-
-## Build and try
+Download the archive for Linux x86_64, macOS arm64/x86_64, or Windows x86_64
+from this release. Each archive has a matching `.sha256` file. To build from
+source with Rust 1.88 or newer:
 
 ```sh
-git clone https://github.com/mansiverma897993/ReRu.git
+git clone --branch v0.1.0-alpha.2 --depth 1 https://github.com/mansiverma897993/ReRu.git
 cd ReRu
-make setup
-make test
-make run
-```
-
-Without `make`:
-
-```sh
-cargo fetch
 cargo test
-cargo run -- --port 6379
+cargo build --release
+./target/release/reru --version
 ```
 
-Then:
+On Windows, run `target\release\reru.exe --version`.
 
-```sh
-redis-cli SET hello world EX 60
-redis-cli GET hello
-```
+The release gate runs formatting, Clippy with warnings denied, 243 Rust tests,
+and a release build. CI runs on Linux, macOS, and Windows and checks Rust 1.88
+compatibility. A two-node Redis 8.10.2 comparison checked slot vectors,
+topology shape, routing errors, and transaction replies.
 
-On Windows use `target\release\reru.exe`. The server binds to loopback unless
-`--bind` is set. Data is in memory unless a persistence option is supplied. Run
-`reru --help` and see the README for the mutually exclusive persistence modes.
+## Current limits
 
-## Verification
+ReRu remains **experimental**. It speaks RESP2 only. Cluster membership is
+static; there is no gossip, slot migration, or failover. Multi-user ACLs, TLS,
+Lua scripting, Redis `PSYNC`, and full RDB/AOF compatibility are still pending.
+Memory accounting is a logical estimate, and many Redis command options are
+not yet supported. Do not use this prerelease as a production Redis replacement.
 
-204 tests cover the implemented subset, with optional comparisons against a
-live Redis 7.0.15 server. RDB file exchange is checked in both directions with
-`redis-check-rdb`. Formatting, Clippy with warnings denied, and an optimized
-build are release checks. Redis 8.10.2 behavior, large-scale performance, and
-crash fault injection have not been comprehensively validated.
-
-## Release limits
-
-Full cache compatibility is unfinished: memory is estimated, command execution
-is serialized, and expiry and persistence can block. Several memory and queue
-limits remain unbounded. Cluster, Sentinel and failover, PSYNC, multi-user ACLs,
-TLS, RESP3, scripting and functions, newer stream features, complete RDB/AOF
-support, and many command options remain pending. Replication only connects
-matching ReRu builds.
-
-This preview is not a production Redis replacement.
-
-## License
-
-ReRu is licensed under the GNU Affero General Public License v3.0
-(`AGPL-3.0-only`). See [LICENSE](../LICENSE) and [NOTICE](../NOTICE).
+Licensed under [AGPL-3.0-only](https://github.com/mansiverma897993/ReRu/blob/v0.1.0-alpha.2/LICENSE).

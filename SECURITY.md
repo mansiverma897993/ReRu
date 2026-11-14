@@ -8,7 +8,8 @@ release exists, in the newest published pre-release.
 | Version | Supported |
 | --- | --- |
 | `main` (unreleased) | Yes |
-| `0.1.0-alpha.1` | Best effort |
+| `0.1.0-alpha.2` | Best effort |
+| `0.1.0-alpha.1` | No; upgrade to the newest preview |
 
 ## Reporting a vulnerability
 

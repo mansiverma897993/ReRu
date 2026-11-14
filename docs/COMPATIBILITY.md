@@ -43,7 +43,7 @@ entries, and `COMMAND COUNT` counts those entries. Redis documents
 [`COMMAND COUNT`](https://redis.io/docs/latest/commands/command-count/), and
 [`COMMAND INFO`](https://redis.io/docs/latest/commands/command-info/).
 
-Total: **219 Redis command metadata entries**, or **47.7% name presence**
+Total: **222 Redis command metadata entries**, or **48.4% name presence**
 against 459 entries in the pinned Redis 8.10.2 metadata. This is neither a
 behavior pass rate nor a percentage of Redis completed. Run
 `powershell -File scripts/command_coverage.ps1 -RedisSource PATH_TO_REDIS_8_10_2`
