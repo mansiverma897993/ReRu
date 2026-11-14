@@ -10,6 +10,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Added
 
+- Static two-node Cluster routing with CRC16/hash-tag slots, `CLUSTER KEYSLOT`,
+  `CLUSTER SHARDS`, `CLUSTER SLOTS`, `MOVED`, and `CROSSSLOT` replies. Dynamic
+  membership, migration, and failover remain unsupported.
 - Hash-field TTL commands (`HEXPIRE`, `HPEXPIRE`, `HEXPIREAT`, `HPEXPIREAT`,
   `HTTL`, `HPTTL`, `HEXPIRETIME`, `HPEXPIRETIME`, `HPERSIST`, `HGETEX`, `HSETEX`),
   with background expiry and ReRu snapshot/AOF preservation.

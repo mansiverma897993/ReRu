@@ -167,7 +167,14 @@ impl Session {
             ),
             (b"proto", b":2\r\n".to_vec()),
             (b"id", format!(":{}\r\n", self.id).into_bytes()),
-            (b"mode", protocol::bulk(b"standalone")),
+            (
+                b"mode",
+                protocol::bulk(if store.cluster.is_some() {
+                    b"cluster"
+                } else {
+                    b"standalone"
+                }),
+            ),
             (
                 b"role",
                 protocol::bulk(if store.read_only { b"slave" } else { b"master" }),

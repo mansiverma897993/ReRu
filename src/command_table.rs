@@ -29,6 +29,9 @@ const COMMANDS: &[&str] = &[
     "client|info",
     "client|setinfo",
     "client|setname",
+    "cluster|keyslot",
+    "cluster|shards",
+    "cluster|slots",
     "config|get",
     "config|resetstat",
     "config|set",
@@ -238,6 +241,8 @@ fn metadata(name: &str) -> Metadata {
         | "unsubscribe" | "punsubscribe" => -1,
         "bgrewriteaof" | "lastsave" | "dbsize" | "randomkey" | "multi" | "exec" | "discard"
         | "unwatch" | "save" | "time" | "reset" => 1,
+        "cluster|shards" | "cluster|slots" => 2,
+        "cluster|keyslot" => 3,
         "command|count" | "client|getname" | "client|id" | "client|info" | "echo" | "select"
         | "get" | "getdel" | "incr" | "decr" | "strlen" | "hgetall" | "hlen" | "hkeys"
         | "hvals" | "scard" | "smembers" | "type" | "ttl" | "pttl" | "persist" | "dump"
@@ -255,7 +260,7 @@ fn metadata(name: &str) -> Metadata {
         "getrange" | "lrange" | "ltrim" | "substr" => 4,
         "restore" => -4,
         "zincrby" => 4,
-        "client" | "config" | "acl" | "xgroup" | "xinfo" => -2,
+        "client" | "config" | "acl" | "xgroup" | "xinfo" | "cluster" => -2,
         "config|get" => -3,
         "config|set" => -4,
         "acl|whoami" => 2,
@@ -306,7 +311,8 @@ fn metadata(name: &str) -> Metadata {
 
     let (first_key, last_key, key_step) = match name {
         "command" | "command|count" | "command|info" | "acl" | "acl|whoami" | "auth"
-        | "bgrewriteaof" | "bgsave" | "client" | "client|getname" | "client|id" | "client|info"
+        | "cluster" | "cluster|keyslot" | "cluster|shards" | "cluster|slots" | "bgrewriteaof"
+        | "bgsave" | "client" | "client|getname" | "client|id" | "client|info"
         | "client|setinfo" | "client|setname" | "config" | "config|get" | "config|resetstat"
         | "config|set" | "discard" | "dbsize" | "echo" | "exec" | "flushall" | "flushdb"
         | "hello" | "info" | "keys" | "lastsave" | "multi" | "ping" | "pubsub" | "punsubscribe"
@@ -414,6 +420,68 @@ fn lookup(name: &[u8]) -> Option<String> {
         .find(|candidate| candidate == &name)
 }
 
+/// Resolve Cluster keys from the fixed positions advertised by COMMAND INFO.
+/// Commands with dynamic key positions need their own argument parser.
+pub(crate) fn key_indices(command: &[Vec<u8>]) -> Option<Vec<usize>> {
+    let root = String::from_utf8_lossy(command.first()?).to_ascii_lowercase();
+    let name = if matches!(root.as_str(), "xgroup" | "xinfo" | "cluster") {
+        let subcommand = String::from_utf8_lossy(command.get(1)?).to_ascii_lowercase();
+        format!("{root}|{subcommand}")
+    } else {
+        root.clone()
+    };
+    if !COMMANDS.contains(&name.as_str()) {
+        return None;
+    }
+    let count_range = |count_at: usize, keys_at: usize| {
+        let count = std::str::from_utf8(command.get(count_at)?)
+            .ok()?
+            .parse::<usize>()
+            .ok()?;
+        let end = keys_at.checked_add(count)?;
+        (count > 0 && end <= command.len()).then(|| (keys_at..end).collect::<Vec<_>>())
+    };
+    match root.as_str() {
+        "lmpop" | "zmpop" | "sintercard" | "zintercard" | "zunion" | "zinter" | "zdiff" => {
+            return count_range(1, 2)
+        }
+        "blmpop" | "bzmpop" => return count_range(2, 3),
+        "zunionstore" | "zinterstore" | "zdiffstore" => {
+            let mut indices = vec![1];
+            indices.extend(count_range(2, 3)?);
+            return Some(indices);
+        }
+        "xread" | "xreadgroup" => {
+            let streams = command
+                .iter()
+                .position(|arg| arg.eq_ignore_ascii_case(b"STREAMS"))?;
+            let remaining = command.len() - streams - 1;
+            if remaining < 2 || !remaining.is_multiple_of(2) {
+                return None;
+            }
+            return Some((streams + 1..streams + 1 + remaining / 2).collect());
+        }
+        _ => {}
+    }
+    let info = metadata(&name);
+    if info.first_key == 0 || info.key_step == 0 {
+        return Some(Vec::new());
+    }
+    let last = if info.last_key < 0 {
+        command
+            .len()
+            .checked_sub(info.last_key.unsigned_abs() as usize)?
+    } else {
+        info.last_key as usize
+    };
+    Some(
+        (info.first_key as usize..=last)
+            .step_by(info.key_step as usize)
+            .filter(|&index| index < command.len())
+            .collect(),
+    )
+}
+
 pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
     if command
         .first()
@@ -433,20 +501,6 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
             _ => true,
         },
     )
-}
-
-fn unknown_subcommand(name: &[u8]) -> Vec<u8> {
-    let name = name
-        .iter()
-        .map(|byte| {
-            if byte.is_ascii_graphic() && *byte != b'\'' {
-                *byte as char
-            } else {
-                '?'
-            }
-        })
-        .collect::<String>();
-    protocol::error(&format!("unknown subcommand '{name}'. Try COMMAND HELP."))
 }
 
 pub fn execute(command: &[Vec<u8>]) -> Vec<u8> {
@@ -480,7 +534,7 @@ pub fn execute(command: &[Vec<u8>]) -> Vec<u8> {
         }
         return format!(":{}\r\n", root_commands().len()).into_bytes();
     }
-    unknown_subcommand(subcommand)
+    protocol::unknown_subcommand("COMMAND", subcommand)
 }
 
 #[cfg(test)]
@@ -566,5 +620,21 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn cluster_key_extraction_handles_static_and_dynamic_positions() {
+        let check = |args: &[&[u8]], expected: &[usize]| {
+            let command = args.iter().map(|arg| arg.to_vec()).collect::<Vec<_>>();
+            assert_eq!(key_indices(&command).as_deref(), Some(expected));
+        };
+        check(&[b"MSET", b"a", b"1", b"b", b"2"], &[1, 3]);
+        check(&[b"BLPOP", b"a", b"b", b"0"], &[1, 2]);
+        check(&[b"BITOP", b"AND", b"dest", b"a", b"b"], &[2, 3, 4]);
+        check(&[b"XREAD", b"STREAMS", b"a", b"b", b"0", b"0"], &[2, 3]);
+        check(&[b"LMPOP", b"2", b"a", b"b", b"LEFT"], &[2, 3]);
+        check(&[b"ZUNIONSTORE", b"out", b"2", b"a", b"b"], &[1, 3, 4]);
+        check(&[b"XGROUP", b"CREATE", b"stream", b"group", b"$"], &[2]);
+        check(&[b"CLUSTER", b"KEYSLOT", b"a"], &[]);
     }
 }

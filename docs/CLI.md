@@ -10,6 +10,7 @@ usage: reru [--port PORT] [--bind ADDRESS] [--snapshot FILE] [--appendonly FILE]
             [--requirepass PASSWORD | --requirepass-file FILE]
             [--masterauth PASSWORD | --masterauth-file FILE]
             [--maxmemory SIZE] [--maxmemory-policy POLICY] [--maxclients COUNT]
+            [--cluster-node ID@IP:PORT@START-END]...
 ```
 
 Flags are space-separated (`--port 6380`, not `--port=6380`). Every flag takes a
@@ -35,6 +36,7 @@ usage text above.
 | `--maxmemory SIZE` | `0` (unlimited) | Dataset memory limit |
 | `--maxmemory-policy POLICY` | `noeviction` | Eviction policy |
 | `--maxclients COUNT` | `10000` | Maximum concurrent connections |
+| `--cluster-node ID@IP:PORT@START-END` | off | Add a static Cluster owner (exactly two entries required) |
 | `--help`, `-h` | - | Print version and usage |
 | `--version`, `-V` | - | Print version |
 
@@ -69,6 +71,19 @@ usage text above.
   `volatile-ttl` (case-insensitive).
 - `--maxclients COUNT` — maximum concurrent connections; excess connections get
   `ERR max number of clients reached` and are closed.
+- `--cluster-node ID@IP:PORT@START-END` — provide exactly two nodes with unique
+  40-hex IDs and non-overlapping, contiguous ranges covering slots 0–16383.
+  One address must match `--bind` and `--port`; each node starts with the same
+  map. This experimental mode supports routing and topology only, not gossip,
+  migration, replicas, or failover. See [compatibility status](COMPATIBILITY.md#static-cluster-milestone).
+
+For a local two-node setup, start two processes with the same map and different
+`--port` values:
+
+```sh
+reru --port 7001 --cluster-node 1111111111111111111111111111111111111111@127.0.0.1:7001@0-8191 --cluster-node 2222222222222222222222222222222222222222@127.0.0.1:7002@8192-16383
+reru --port 7002 --cluster-node 1111111111111111111111111111111111111111@127.0.0.1:7001@0-8191 --cluster-node 2222222222222222222222222222222222222222@127.0.0.1:7002@8192-16383
+```
 - `--help`, `-h`, `--version`, `-V` — print the version plus usage line and exit
   without starting the server. They are only recognized as the sole argument;
   passed with any other flag they abort startup with the usage text.

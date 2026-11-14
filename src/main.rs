@@ -6,6 +6,7 @@ mod auth;
 mod bitmaps;
 mod cache;
 mod clients;
+mod cluster;
 mod collections;
 mod command_table;
 mod connection;
@@ -66,6 +67,7 @@ struct SharedStore {
     expiry: expiry::Expiry,
     clients: Arc<clients::Limits>,
     pubsub: pubsub::Hub,
+    cluster: Option<cluster::Cluster>,
 }
 
 #[derive(Default)]
@@ -1045,6 +1047,12 @@ fn execute_command(
     allow_blocking: bool,
     probe: Option<&clients::DisconnectProbe>,
 ) -> Vec<u8> {
+    if command[0].eq_ignore_ascii_case(b"CLUSTER") {
+        return store.cluster.as_ref().map_or_else(
+            || protocol::error("This instance has cluster support disabled"),
+            |cluster| cluster.execute(command),
+        );
+    }
     if command[0].eq_ignore_ascii_case(b"COMMAND") {
         return command_table::execute(command);
     }
@@ -1631,6 +1639,8 @@ fn validate_queued(command: &[Vec<u8>]) -> Result<(), Vec<u8>> {
         valid
     } else if let Some(valid) = command_table::valid_arity(command) {
         valid
+    } else if let Some(valid) = cluster::valid_arity(command) {
+        valid
     } else if let Some(valid) = eviction::valid_arity(command) {
         valid
     } else if let Some(valid) = pubsub::valid_arity(command) {
@@ -1809,8 +1819,18 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             }
             continue;
         }
+        let route_error = if transaction.is_none() {
+            store
+                .cluster
+                .as_ref()
+                .and_then(|cluster| cluster.route(&command))
+        } else {
+            None
+        };
         let response = if command[0].eq_ignore_ascii_case(b"AUTH") && transaction.is_none() {
             store.auth.authenticate(&command, &mut authenticated)
+        } else if let Some(error) = route_error {
+            error
         } else if store.read_only && is_mutating(&command) {
             if transaction.is_some() {
                 transaction_error = true;
@@ -1863,9 +1883,14 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                     b"-EXECABORT Transaction discarded because of previous errors.\r\n".to_vec()
                 } else {
                     let _gate = store.command_gate.lock().unwrap();
+                    let route_error = store.cluster.as_ref().and_then(|cluster| {
+                        cluster.route_commands(queued.iter().map(Vec::as_slice))
+                    });
                     let changed = watches.changed();
                     watches.clear();
-                    if changed {
+                    if let Some(error) = route_error {
+                        error
+                    } else if changed {
                         b"*-1\r\n".to_vec()
                     } else {
                         let mut response = format!("*{}\r\n", queued.len()).into_bytes();
@@ -1896,8 +1921,17 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         } else if let Some(queued) = transaction.as_mut() {
             match validate_queued(&command) {
                 Ok(()) => {
-                    queued.push(command);
-                    b"+QUEUED\r\n".to_vec()
+                    let route_error = store
+                        .cluster
+                        .as_ref()
+                        .and_then(|cluster| cluster.route(&command));
+                    if let Some(error) = route_error {
+                        transaction_error = true;
+                        error
+                    } else {
+                        queued.push(command);
+                        b"+QUEUED\r\n".to_vec()
+                    }
                 }
                 Err(error) => {
                     transaction_error = true;
@@ -1942,7 +1976,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    const USAGE: &str = "usage: reru [--port PORT] [--bind ADDRESS] [--snapshot FILE] [--appendonly FILE] [--dir DIR] [--dbfilename FILE] [--replicaof HOST PORT] [--requirepass PASSWORD | --requirepass-file FILE] [--masterauth PASSWORD | --masterauth-file FILE] [--maxmemory SIZE] [--maxmemory-policy POLICY] [--maxclients COUNT]";
+    const USAGE: &str = "usage: reru [--port PORT] [--bind ADDRESS] [--snapshot FILE] [--appendonly FILE] [--dir DIR] [--dbfilename FILE] [--replicaof HOST PORT] [--requirepass PASSWORD | --requirepass-file FILE] [--masterauth PASSWORD | --masterauth-file FILE] [--maxmemory SIZE] [--maxmemory-policy POLICY] [--maxclients COUNT] [--cluster-node ID@IP:PORT@START-END]...";
     if args.len() == 2 && matches!(args[1].as_str(), "--version" | "-V") {
         println!("ReRu {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
@@ -1963,6 +1997,7 @@ fn main() -> io::Result<()> {
     let mut maxmemory = 0;
     let mut maxclients = clients::DEFAULT_MAX_CLIENTS;
     let mut maxmemory_policy = eviction::Policy::NoEviction;
+    let mut cluster_nodes = Vec::new();
     let mut index = 1;
     while index < args.len() {
         let value = args
@@ -2026,6 +2061,7 @@ fn main() -> io::Result<()> {
                     io::Error::new(io::ErrorKind::InvalidInput, "invalid --maxmemory-policy")
                 })?
             }
+            "--cluster-node" => cluster_nodes.push(value.to_string()),
             "--replicaof" => {
                 let upstream_port = args
                     .get(index + 2)
@@ -2071,9 +2107,16 @@ fn main() -> io::Result<()> {
             "--appendonly cannot be combined with --snapshot or --replicaof",
         ));
     }
+    if !cluster_nodes.is_empty() && replica_of.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "static cluster nodes cannot use --replicaof",
+        ));
+    }
 
     let listener = TcpListener::bind((bind_address.as_str(), port))?;
     let bound = listener.local_addr()?;
+    let cluster = cluster::Cluster::configure(&cluster_nodes, bound)?;
     let entries = if let Some(path) = &snapshot_path {
         persistence::load(path)?
     } else if let Some(path) = &rdb_path {
@@ -2099,9 +2142,13 @@ fn main() -> io::Result<()> {
         aof_rewrite: aof::Rewrite::default(),
         auth: auth::Settings::new(requirepass),
         pubsub: pubsub::Hub::default(),
+        cluster,
     });
     if let Some(path) = &store.aof_path {
         aof::replay(path, &store)?;
+    }
+    if let Some(cluster) = &store.cluster {
+        cluster.validate_keys(&store.entries.lock().unwrap())?;
     }
     if !store.read_only {
         store.eviction.evict(&store);
