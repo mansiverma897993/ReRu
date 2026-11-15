@@ -1629,6 +1629,9 @@ fn execute_command(
 }
 
 fn validate_queued(command: &[Vec<u8>]) -> Result<(), Vec<u8>> {
+    if let Some(error) = keyspace::queue_error(command) {
+        return Err(error);
+    }
     let name = &command[0];
     let arity = command.len();
     let valid = if let Some(valid) = connection::valid_arity(command) {

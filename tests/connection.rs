@@ -100,6 +100,18 @@ fn command_introspection_reports_dispatch_metadata_and_unknown_names_in_place() 
         )])
     );
     assert_eq!(
+        c.call(&[b"COMMAND", b"INFO", b"OBJECT"]),
+        array(vec![command_entry(
+            b"object",
+            -2,
+            (0, 0, 0),
+            vec![
+                command_entry(b"object|encoding", 3, (2, 2, 1), vec![]),
+                command_entry(b"object|refcount", 3, (2, 2, 1), vec![]),
+            ],
+        )])
+    );
+    assert_eq!(
         c.call(&[b"COMMAND", b"INFO", b"GET", b"not-a-command", b"PING"]),
         array(vec![
             command_entry(b"get", 2, (1, 1, 1), vec![]),

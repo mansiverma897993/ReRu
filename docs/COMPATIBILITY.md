@@ -1,6 +1,6 @@
 # ReRu compatibility status
 
-Updated: 14 November 2026. This inventory describes the implementation and local
+Updated: 15 November 2026. This inventory describes the implementation and local
 tests; it does not certify complete compatibility with Redis.
 
 ## Implemented commands
@@ -17,7 +17,7 @@ tests; it does not certify complete compatibility with Redis.
 | Bitmaps | `SETBIT`, `GETBIT`, `BITCOUNT`, `BITOP`, `BITPOS`, `BITFIELD`, `BITFIELD_RO` | Bitmaps stored as strings, byte/bit count ranges, AND/OR/XOR/NOT; bitfield GET/SET/INCRBY, signed/unsigned widths, `#` offsets and WRAP/SAT/FAIL overflow modes |
 | HyperLogLog | `PFADD`, `PFCOUNT`, `PFMERGE` | Approximate distinct counts, multi-key unions, binary members, Redis dense/sparse interchange, cached cardinality |
 | Geospatial | `GEOADD`, `GEOPOS`, `GEOHASH`, `GEODIST`, `GEOSEARCH`, `GEOSEARCHSTORE` | Geo points use sorted-set scores; NX/XX/CH, positions and distances, radius/box search, sort/count, decorated results, and destination storing |
-| Keyspace | `TYPE`, `DEL`, `UNLINK`, `EXISTS`, `TOUCH`, `DBSIZE`, `KEYS`, `SCAN`, `RANDOMKEY`, `COPY`, `RENAME`, `RENAMENX`, `TTL`, `PTTL`, `EXPIRE`, `PEXPIRE`, `EXPIREAT`, `PEXPIREAT`, `EXPIRETIME`, `PEXPIRETIME`, `PERSIST`, `FLUSHDB`, `FLUSHALL` | Multiple keys, glob and type filtered scanning, rename/copy with TTL, relative/absolute expiry conditions, whole-database flush |
+| Keyspace | `TYPE`, `DEL`, `UNLINK`, `EXISTS`, `TOUCH`, `DBSIZE`, `KEYS`, `SCAN`, `RANDOMKEY`, `COPY`, `RENAME`, `RENAMENX`, `TTL`, `PTTL`, `EXPIRE`, `PEXPIRE`, `EXPIREAT`, `PEXPIREAT`, `EXPIRETIME`, `PEXPIRETIME`, `PERSIST`, `OBJECT ENCODING`, `OBJECT REFCOUNT`, `FLUSHDB`, `FLUSHALL` | Multiple keys, glob and type filtered scanning, rename/copy with TTL, relative/absolute expiry conditions, advisory encoding labels with Redis 8 thresholds, constant reference counts, whole-database flush |
 | Transactions | `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` | Queuing, atomic execution relative to other commands, runtime errors, optimistic locking |
 | Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `PUBSUB` | Binary channels/messages, glob patterns, RESP2 subscribed mode, CHANNELS/NUMSUB/NUMPAT; local process only |
 | Connection close | `QUIT` | Replies OK and closes the connection |
@@ -43,7 +43,7 @@ entries, and `COMMAND COUNT` counts those entries. Redis documents
 [`COMMAND COUNT`](https://redis.io/docs/latest/commands/command-count/), and
 [`COMMAND INFO`](https://redis.io/docs/latest/commands/command-info/).
 
-Total: **222 Redis command metadata entries**, or **48.4% name presence**
+Total: **224 Redis command metadata entries**, or **48.8% name presence**
 against 459 entries in the pinned Redis 8.10.2 metadata. This is neither a
 behavior pass rate nor a percentage of Redis completed. Run
 `powershell -File scripts/command_coverage.ps1 -RedisSource PATH_TO_REDIS_8_10_2`
@@ -98,6 +98,23 @@ and overflow without changing the stored value.
 their index for each call. They apply `MATCH` after page selection and accept
 `COUNT` as a page size; concurrent edits may repeat or skip elements. `HSCAN`
 supports `NOVALUES`. `SETRANGE` currently caps growth at 64 MiB.
+
+`OBJECT ENCODING` and `OBJECT REFCOUNT` return the encoding and reference count
+for one key. The encoding uses Redis 8 defaults: `int`, `embstr`, or `raw` for
+strings, `listpack` or `quicklist` for lists (using an encoded listpack size
+estimate against the 8 KB `list-max-listpack-size` budget; the boundary is
+approximate because Redis also considers push history), `listpack`,
+`listpackex`, or `hashtable` for hashes, `intset`, `listpack`, or `hashtable`
+for sets, `listpack` or `skiplist` for sorted sets, and `stream` for streams. Because ReRu
+stores one representation per type, the reply is an advisory label rather than
+the physical layout. It is recomputed from current contents, so a value that
+shrinks below a threshold reports the compact encoding again, and in-place
+string writes (`APPEND`, `SETRANGE`, `SETBIT`) report the content-based label
+where Redis keeps `raw`. Hashes with field deadlines report `listpackex`. Redis
+keeps `listpackex` for the life of the hash once any field TTL was set; ReRu
+returns to `listpack` when the last deadline is cleared, deleted, or expires.
+`OBJECT REFCOUNT` always returns `1` because values are never shared between
+keys. `OBJECT FREQ`, `OBJECT IDLETIME`, and `OBJECT HELP` are not implemented.
 
 ## Memory limit and eviction
 

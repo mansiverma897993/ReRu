@@ -8,6 +8,11 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- `OBJECT ENCODING` and `OBJECT REFCOUNT`. The encoding is an advisory Redis 8
+  label for the stored value, and every present key reports one reference.
+
 ## [0.1.0-alpha.2] - 2026-11-14
 
 ### Added
