@@ -14,6 +14,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   server when it sends another subscription command.
 - Large replies are retried until the client drains them instead of being
   truncated by the 500 ms socket write timeout.
+- The AOF writer splits large keys below the replay bulk limit, and snapshots
+  with more than 1,000,000 keys decode again.
+- AOF write failures return `-MISCONF` and keep the client connection open.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
@@ -27,6 +30,11 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   label for the stored value, and every present key reports one reference.
 - `LCS` with `LEN`, `IDX`, `MINMATCHLEN`, and `WITHMATCHLEN`. All forms are
   capped at 8,000,000 table cells.
+<<<<<<< HEAD
+
+
+=======
+>>>>>>> origin/main
 - Static two-node Cluster routing with CRC16/hash-tag slots, `CLUSTER KEYSLOT`,
   `CLUSTER SHARDS`, `CLUSTER SLOTS`, `MOVED`, and `CROSSSLOT` replies. Dynamic
   membership, migration, and failover remain unsupported.

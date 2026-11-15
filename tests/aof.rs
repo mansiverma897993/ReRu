@@ -161,3 +161,28 @@ fn aof_restores_transaction_results_and_eviction() {
     }
     std::fs::remove_file(path).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn aof_write_failure_returns_misconf_and_keeps_the_connection() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = path();
+    let filename = path.to_str().unwrap().to_owned();
+    let server = Server::start_with(&["--appendonly", &filename]);
+    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"SET", b"before", b"1"]), ok());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+    assert!(matches!(
+        client.call(&[b"SET", b"after", b"2"]),
+        Reply::Error(message) if message.starts_with(b"MISCONF")
+    ));
+    assert_eq!(client.call(&[b"GET", b"after"]), bulk(b"2"));
+    assert!(matches!(
+        client.call(&[b"SET", b"again", b"3"]),
+        Reply::Error(message) if message.starts_with(b"MISCONF")
+    ));
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+}

@@ -371,6 +371,10 @@ fn execute_checked(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
     response
 }
 
+fn misconf(error: &io::Error) -> Vec<u8> {
+    format!("-MISCONF Errors writing to the AOF file: {error}\r\n").into_bytes()
+}
+
 fn save_and_publish(store: &Store) -> io::Result<()> {
     let changed_keys: Vec<_> = store.pending_keys.lock().unwrap().drain().collect();
     if changed_keys.is_empty() {
@@ -1928,7 +1932,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                             response.extend(result);
                         }
                         if writes {
-                            save_and_publish(&store)?;
+                            if let Err(error) = save_and_publish(&store) {
+                                response = misconf(&error);
+                            }
                         }
                         response
                     }
@@ -1970,20 +1976,24 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             || command[0].eq_ignore_ascii_case(b"XREAD")
         {
             let probe = clients::DisconnectProbe::new(&stream)?;
-            let response = execute_command(&command, &store, true, Some(&probe));
+            let mut response = execute_command(&command, &store, true, Some(&probe));
             record_write(&store, &command, &response);
             if is_mutating(&command) || hyperloglog::may_update_cache(&command) {
                 let _gate = store.command_gate.lock().unwrap();
-                save_and_publish(&store)?;
+                if let Err(error) = save_and_publish(&store) {
+                    response = misconf(&error);
+                }
             }
             response
         } else {
             let _gate = store.command_gate.lock().unwrap();
-            let response = session
+            let mut response = session
                 .execute(&command, &store, &mut authenticated)
                 .unwrap_or_else(|| execute_checked(&command, &store, true));
             if is_mutating(&command) || hyperloglog::may_update_cache(&command) {
-                save_and_publish(&store)?;
+                if let Err(error) = save_and_publish(&store) {
+                    response = misconf(&error);
+                }
             }
             response
         };
