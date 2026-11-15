@@ -80,7 +80,9 @@ fn encode(longitude: f64, latitude: f64) -> u64 {
 }
 
 fn decode(score: f64) -> Option<(f64, f64)> {
-    if !score.is_finite() || score < 0.0 || score >= (1u64 << 52) as f64 || score.fract() != 0.0 {
+    // Redis casts the stored double to u64, so fractional scores from
+    // STOREDIST or a plain ZADD remain readable.
+    if !score.is_finite() || score < 0.0 || score >= (1u64 << 52) as f64 {
         return None;
     }
     let score = score as u64;
@@ -90,12 +92,10 @@ fn decode(score: f64) -> Option<(f64, f64)> {
         x = (x << 1) | ((score >> (bit * 2 + 1)) & 1);
         y = (y << 1) | ((score >> (bit * 2)) & 1);
     }
-    let longitude_step = 360.0 / GRID;
-    let latitude_step = 2.0 * LATITUDE_LIMIT / GRID;
-    let longitude_min = -180.0 + x as f64 * longitude_step;
-    let longitude_max = -180.0 + (x + 1) as f64 * longitude_step;
-    let latitude_min = -LATITUDE_LIMIT + y as f64 * latitude_step;
-    let latitude_max = -LATITUDE_LIMIT + (y + 1) as f64 * latitude_step;
+    let longitude_min = -180.0 + (x as f64 / GRID) * 360.0;
+    let longitude_max = -180.0 + ((x + 1) as f64 / GRID) * 360.0;
+    let latitude_min = -LATITUDE_LIMIT + (y as f64 / GRID) * (2.0 * LATITUDE_LIMIT);
+    let latitude_max = -LATITUDE_LIMIT + ((y + 1) as f64 / GRID) * (2.0 * LATITUDE_LIMIT);
     Some((
         (longitude_min + longitude_max) / 2.0,
         (latitude_min + latitude_max) / 2.0,
@@ -134,12 +134,52 @@ fn geohash(longitude: f64, latitude: f64) -> Vec<u8> {
     text
 }
 
+// Redis prints coordinates with the shortest round-trip digits and uses
+// exponent form below 1e-4, like %.17g.
 fn coordinate_text(value: f64) -> Vec<u8> {
-    let text = format!("{value:.17}");
-    text.trim_end_matches('0')
-        .trim_end_matches('.')
-        .as_bytes()
-        .to_vec()
+    if value == 0.0 {
+        return b"0".to_vec();
+    }
+    let scientific = format!("{value:e}");
+    let (mantissa, exponent) = scientific.split_once('e').unwrap();
+    let exponent: i32 = exponent.parse().unwrap();
+    let negative = mantissa.starts_with('-');
+    let digits: String = mantissa
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect();
+    let mut text = String::new();
+    if negative {
+        text.push('-');
+    }
+    if exponent < -4 {
+        text.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            text.push('.');
+            text.push_str(&digits[1..]);
+        }
+        text.push('e');
+        text.push_str(&exponent.to_string());
+    } else if exponent >= 0 {
+        let point = (exponent + 1) as usize;
+        if digits.len() <= point {
+            text.push_str(&digits);
+            for _ in digits.len()..point {
+                text.push('0');
+            }
+        } else {
+            text.push_str(&digits[..point]);
+            text.push('.');
+            text.push_str(&digits[point..]);
+        }
+    } else {
+        text.push_str("0.");
+        for _ in 0..(-exponent - 1) {
+            text.push('0');
+        }
+        text.push_str(&digits);
+    }
+    text.into_bytes()
 }
 
 fn add(command: &[Vec<u8>], store: &Store) -> Vec<u8> {

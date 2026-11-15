@@ -856,6 +856,67 @@ fn compare_owned(ours: &mut Client, redis: &mut Client, args: &[Vec<u8>]) {
 }
 
 #[test]
+fn geo_positions_and_storedist_match_redis_8() {
+    let Ok(port) = std::env::var("RERU_REDIS_REFERENCE_PORT") else {
+        return;
+    };
+    let server = common::Server::start();
+    let mut ours = Client::new(&server);
+    let mut redis = Client::on_port(port.parse().unwrap());
+    let mut delete = vec![b"DEL".to_vec()];
+    for key in [b"reru-diff:geo:s".as_slice(), b"reru-diff:geo:d"] {
+        delete.push(key.to_vec());
+    }
+    compare_owned(&mut ours, &mut redis, &delete);
+    for command in [
+        &[
+            b"GEOADD".as_slice(),
+            b"reru-diff:geo:s",
+            b"13.361389",
+            b"38.115556",
+            b"Palermo",
+            b"15.087269",
+            b"37.502669",
+            b"Catania",
+        ] as &[&[u8]],
+        &[
+            b"GEOSEARCHSTORE",
+            b"reru-diff:geo:d",
+            b"reru-diff:geo:s",
+            b"FROMMEMBER",
+            b"Palermo",
+            b"BYRADIUS",
+            b"200",
+            b"km",
+            b"ASC",
+            b"STOREDIST",
+        ],
+    ] {
+        compare(&mut ours, &mut redis, command);
+    }
+    for command in [
+        &[b"GEOPOS".as_slice(), b"reru-diff:geo:s", b"Palermo"] as &[&[u8]],
+        &[b"GEOPOS", b"reru-diff:geo:s", b"Catania"],
+        &[b"GEODIST", b"reru-diff:geo:d", b"Palermo", b"Catania"],
+        &[
+            b"GEOSEARCH",
+            b"reru-diff:geo:d",
+            b"FROMMEMBER",
+            b"Palermo",
+            b"BYRADIUS",
+            b"200",
+            b"km",
+            b"ASC",
+        ],
+        &[b"ZRANGE", b"reru-diff:geo:d", b"0", b"-1", b"WITHSCORES"],
+        &[b"GEOPOS", b"reru-diff:geo:d", b"Catania"],
+    ] {
+        compare(&mut ours, &mut redis, command);
+    }
+    compare_owned(&mut ours, &mut redis, &delete);
+}
+
+#[test]
 fn object_encoding_and_refcount_match_redis_8() {
     let Ok(port) = std::env::var("RERU_REDIS_REFERENCE_PORT") else {
         return;

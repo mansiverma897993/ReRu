@@ -40,13 +40,10 @@ fn geo_scores_positions_hashes_and_distances_match_redis_examples() {
     assert_eq!(
         c.call(&[b"GEOPOS", b"cities", b"Palermo", b"Catania", b"missing"]),
         array(vec![
+            array(vec![bulk(b"13.361389338970184"), bulk(b"38.1155563954963")]),
             array(vec![
-                bulk(b"13.36138933897018433"),
-                bulk(b"38.11555639549629859")
-            ]),
-            array(vec![
-                bulk(b"15.08726745843887329"),
-                bulk(b"37.50266842333162032")
+                bulk(b"15.087267458438873"),
+                bulk(b"37.50266842333162")
             ]),
             Reply::Bulk(None),
         ])
@@ -181,18 +178,15 @@ fn geo_search_returns_sorted_nearby_members_and_stores_results() {
                 bulk(b"Palermo"),
                 bulk(b"0.0000"),
                 integer(3479099956230698),
-                array(vec![
-                    bulk(b"13.36138933897018433"),
-                    bulk(b"38.11555639549629859")
-                ])
+                array(vec![bulk(b"13.361389338970184"), bulk(b"38.1155563954963")])
             ]),
             array(vec![
                 bulk(b"Catania"),
                 bulk(b"166.2742"),
                 integer(3479447370796909),
                 array(vec![
-                    bulk(b"15.08726745843887329"),
-                    bulk(b"37.50266842333162032")
+                    bulk(b"15.087267458438873"),
+                    bulk(b"37.50266842333162")
                 ])
             ]),
         ])
@@ -216,6 +210,28 @@ fn geo_search_returns_sorted_nearby_members_and_stores_results() {
         c.call(&[b"ZSCORE", b"near", b"Catania"]),
         bulk(b"166.27415156960032")
     );
+    // Fractional STOREDIST scores remain readable by GEO commands.
+    assert_eq!(
+        c.call(&[b"GEODIST", b"near", b"Palermo", b"Catania"]),
+        bulk(b"0.8750")
+    );
+    assert_eq!(
+        c.call(&[
+            b"GEOSEARCH",
+            b"near",
+            b"FROMMEMBER",
+            b"Palermo",
+            b"BYRADIUS",
+            b"200",
+            b"km",
+            b"ASC"
+        ]),
+        array(vec![bulk(b"Palermo"), bulk(b"Catania")])
+    );
+    assert!(matches!(
+        c.call(&[b"GEOPOS", b"near", b"Catania"]),
+        Reply::Array(Some(_))
+    ));
     assert_eq!(c.call(&[b"PEXPIRE", b"near", b"60000"]), integer(1));
     assert_eq!(
         c.call(&[
