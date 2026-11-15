@@ -8,7 +8,7 @@ tests; it does not certify complete compatibility with Redis.
 | Area | Commands | Current scope |
 | --- | --- | --- |
 | Connection | `PING`, `ECHO`, `HELLO`, `SELECT`, `RESET`, `CLIENT ID`, `CLIENT SETNAME`, `CLIENT GETNAME`, `CLIENT SETINFO`, `CLIENT INFO` | RESP2 handshake, optional inline authentication/name, database 0 selection, socket metadata and context reset |
-| Strings/cache | `SET`, `GET`, `INCR`, `GETEX`, `GETDEL`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `STRLEN`, `SETNX`, `SETEX`, `PSETEX`, `GETSET`, `INCRBY`, `INCRBYFLOAT`, `DECR`, `DECRBY`, `GETRANGE`, `SUBSTR`, `SETRANGE` | Binary values; SET NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL; GETEX expiry/PERSIST; multi-key access, numeric arithmetic and byte ranges |
+| Strings/cache | `SET`, `GET`, `INCR`, `GETEX`, `GETDEL`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `STRLEN`, `SETNX`, `SETEX`, `PSETEX`, `GETSET`, `INCRBY`, `INCRBYFLOAT`, `DECR`, `DECRBY`, `GETRANGE`, `SUBSTR`, `SETRANGE`, `LCS` | Binary values; SET NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL; GETEX expiry/PERSIST; multi-key access, numeric arithmetic and byte ranges; longest common subsequence with LEN/IDX/MINMATCHLEN/WITHMATCHLEN |
 | Lists | `RPUSH`, `LPUSH`, `LPUSHX`, `RPUSHX`, `LRANGE`, `LLEN`, `LINDEX`, `LSET`, `LINSERT`, `LTRIM`, `LREM`, `LPOS`, `LPOP`, `RPOP`, `RPOPLPUSH`, `LMOVE`, `BLPOP`, `BRPOP`, `BLMOVE`, `BRPOPLPUSH`, `LMPOP`, `BLMPOP` | Multiple elements, negative indexes, edits, moves, position search, single/multi-key blocking pops and moves with timeout |
 | Streams | `XADD`, `XRANGE`, `XREVRANGE`, `XREAD`, `XLEN`, `XDEL`, `XTRIM`, `XGROUP CREATE`, `XGROUP SETID`, `XGROUP DESTROY`, `XGROUP CREATECONSUMER`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`, `XAUTOCLAIM`, `XINFO GROUPS`, `XINFO CONSUMERS`, `XINFO STREAM`, `XSETID` | IDs, ranges, deletion, exact trimming, blocking reads, consumer groups, pending entries, acknowledgement, claiming and diagnostics; XADD NOMKSTREAM/MAXLEN/MINID |
 | Hashes | `HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HGETALL`, `HDEL`, `HEXISTS`, `HLEN`, `HKEYS`, `HVALS`, `HINCRBY`, `HINCRBYFLOAT`, `HSTRLEN`, `HRANDFIELD`, `HSCAN`, `HEXPIRE`, `HPEXPIRE`, `HEXPIREAT`, `HPEXPIREAT`, `HTTL`, `HPTTL`, `HEXPIRETIME`, `HPEXPIRETIME`, `HPERSIST`, `HGETEX`, `HSETEX` | Binary fields/values, multiple field updates, missing-field nil replies, increments, cursor iteration, per-field expiry and conditional TTL changes |
@@ -43,7 +43,7 @@ entries, and `COMMAND COUNT` counts those entries. Redis documents
 [`COMMAND COUNT`](https://redis.io/docs/latest/commands/command-count/), and
 [`COMMAND INFO`](https://redis.io/docs/latest/commands/command-info/).
 
-Total: **227 Redis command metadata entries**, or **49.5% name presence**
+Total: **228 Redis command metadata entries**, or **49.7% name presence**
 against 459 entries in the pinned Redis 8.10.2 metadata. This is neither a
 behavior pass rate nor a percentage of Redis completed. Run
 `powershell -File scripts/command_coverage.ps1 -RedisSource PATH_TO_REDIS_8_10_2`
@@ -98,6 +98,18 @@ and overflow without changing the stored value.
 their index for each call. They apply `MATCH` after page selection and accept
 `COUNT` as a page size; concurrent edits may repeat or skip elements. `HSCAN`
 supports `NOVALUES`. `SETRANGE` currently caps growth at 64 MiB.
+
+`LCS` returns the longest common subsequence of two string values. `LEN`
+reports only the length and uses two rows of the dynamic-programming table;
+the other forms keep the full table. Every form first checks the table size and
+rejects more than 8,000,000 cells with `ERR LCS keys are too large`; that is
+about 32 MB of table, or two equal keys of up to 2,828 bytes, because the
+product `(len1 + 1) * (len2 + 1)` must not exceed 8,000,000. Redis bounds
+transient memory with `proto-max-bulk-len` (512 MiB by default), which is a
+looser limit than ReRu's cell cap. The command holds the dataset lock while it computes. Missing keys
+are treated as empty strings, `MINMATCHLEN` and `WITHMATCHLEN` only affect
+`IDX`, and non-string keys return `ERR The specified keys must contain string
+values`.
 
 `OBJECT ENCODING` and `OBJECT REFCOUNT` return the encoding and reference count
 for one key. The encoding uses Redis 8 defaults: `int`, `embstr`, or `raw` for
@@ -480,8 +492,8 @@ returns the connection to ordinary RESP2 command mode.
 
 ## Verification for this increment
 
-The local suite has **243 tests**: 25 unit tests in `src/main.rs`, 3 in
-`src/lib.rs`, and 215 server integration tests.
+The local suite has **264 tests**: 28 unit tests in `src/main.rs`, 3 in
+`src/lib.rs`, and 233 server integration tests.
 Sorted-set tests compare `ZRANGESTORE` output with the matching `ZRANGE` for rank,
 score and lex ranges, and cover destination replacement, cleared TTL, deletion on
 an empty result, and rejected arity, syntax and wrong types.

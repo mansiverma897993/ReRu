@@ -16,6 +16,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   maximum latency, and at most 160 recent command samples are kept.
 - `OBJECT ENCODING` and `OBJECT REFCOUNT`. The encoding is an advisory Redis 8
   label for the stored value, and every present key reports one reference.
+- `LCS` with `LEN`, `IDX`, `MINMATCHLEN`, and `WITHMATCHLEN`. All forms are
+  capped at 8,000,000 table cells.
 
 ## [0.1.0-alpha.2] - 2026-11-14
 

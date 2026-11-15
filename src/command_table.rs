@@ -99,6 +99,7 @@ const COMMANDS: &[&str] = &[
     "latency|history",
     "latency|latest",
     "latency|reset",
+    "lcs",
     "lindex",
     "linsert",
     "llen",
@@ -274,7 +275,7 @@ fn metadata(name: &str) -> Metadata {
         | "zpopmin" | "zpopmax" | "pfadd" | "pfcount" | "pfmerge" | "scan" | "touch" | "mget"
         | "del" | "unlink" | "exists" | "watch" | "sunion" | "sinter" | "sdiff" | "bitcount"
         | "bitfield" | "bitfield_ro" | "command|info" => -2,
-        "set" | "mset" | "msetnx" => -3,
+        "set" | "mset" | "msetnx" | "lcs" => -3,
         "setex" | "psetex" | "setrange" | "setbit" | "xgroup|destroy" => 4,
         "hset" | "hmset" | "zadd" => -4,
         "hexpire" | "hpexpire" | "hexpireat" | "hpexpireat" | "hsetex" => -6,
@@ -328,7 +329,7 @@ fn metadata(name: &str) -> Metadata {
         | "xgroup" | "xinfo" | "lmpop" | "blmpop" | "zmpop" | "bzmpop" | "sintercard"
         | "zintercard" | "zdiff" | "zinter" | "zunion" => (0, 0, 0),
         "copy" | "rename" | "renamenx" | "smove" | "lmove" | "blmove" | "rpoplpush"
-        | "brpoplpush" | "zrangestore" => (1, 2, 1),
+        | "brpoplpush" | "zrangestore" | "lcs" => (1, 2, 1),
         "geosearchstore" => (1, 2, 1),
         "sunionstore" | "sinterstore" | "sdiffstore" => (1, -1, 1),
         "zunionstore" | "zinterstore" | "zdiffstore" => (1, 1, 1),
@@ -616,6 +617,7 @@ mod tests {
             ("dbsize", (1, 0, 0, 0)),
             ("randomkey", (1, 0, 0, 0)),
             ("publish", (3, 0, 0, 0)),
+            ("lcs", (-3, 1, 2, 1)),
         ] {
             let actual = metadata(name);
             assert_eq!(
@@ -645,5 +647,6 @@ mod tests {
         check(&[b"ZUNIONSTORE", b"out", b"2", b"a", b"b"], &[1, 3, 4]);
         check(&[b"XGROUP", b"CREATE", b"stream", b"group", b"$"], &[2]);
         check(&[b"CLUSTER", b"KEYSLOT", b"a"], &[]);
+        check(&[b"LCS", b"a", b"b", b"IDX", b"WITHMATCHLEN"], &[1, 2]);
     }
 }
