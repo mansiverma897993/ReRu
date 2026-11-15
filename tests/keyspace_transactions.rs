@@ -329,3 +329,58 @@ fn exec_writes_invalidate_other_watchers_and_queue_error_clears_watches() {
     assert_eq!(watcher.call(&[b"MULTI"]), ok());
     assert_eq!(watcher.call(&[b"EXEC"]), array(vec![]));
 }
+
+#[test]
+fn transaction_control_arity_errors_abort_and_variadic_commands_queue() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+
+    assert_eq!(client.call(&[b"MULTI"]), ok());
+    assert_eq!(client.call(&[b"SET", b"t1", b"v"]), queued());
+    assert_eq!(
+        client.call(&[b"EXEC", b"extra"]),
+        Reply::Error(
+            b"EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command"
+                .to_vec()
+        )
+    );
+    assert_eq!(
+        client.call(&[b"EXEC"]),
+        Reply::Error(b"ERR EXEC without MULTI".to_vec())
+    );
+    assert_eq!(client.call(&[b"EXISTS", b"t1"]), integer(0));
+
+    for command in [
+        &[b"DISCARD".as_slice(), b"extra"] as &[&[u8]],
+        &[b"MULTI", b"extra"],
+        &[b"WATCH"],
+    ] {
+        assert_eq!(client.call(&[b"MULTI"]), ok());
+        assert_eq!(client.call(&[b"SET", b"t2", b"v"]), queued());
+        assert!(matches!(client.call(command), Reply::Error(_)));
+        assert_eq!(
+            client.call(&[b"EXEC"]),
+            Reply::Error(b"EXECABORT Transaction discarded because of previous errors.".to_vec())
+        );
+        assert_eq!(client.call(&[b"EXISTS", b"t2"]), integer(0));
+    }
+
+    assert_eq!(client.call(&[b"MULTI"]), ok());
+    assert_eq!(client.call(&[b"SET", b"t3", b"v"]), queued());
+    assert_eq!(client.call(&[b"PING", b"a", b"b"]), queued());
+    assert_eq!(client.call(&[b"INFO", b"a", b"b"]), queued());
+    assert_eq!(client.call(&[b"FLUSHDB", b"ASYNC", b"ASYNC"]), queued());
+    let Reply::Array(Some(replies)) = client.call(&[b"EXEC"]) else {
+        panic!("EXEC must return an array")
+    };
+    assert_eq!(replies.len(), 4);
+    assert_eq!(replies[0], ok());
+    assert!(
+        matches!(&replies[1], Reply::Error(message) if message.starts_with(b"ERR wrong number of arguments for 'ping'"))
+    );
+    assert!(matches!(&replies[2], Reply::Bulk(_) | Reply::Error(_)));
+    assert!(
+        matches!(&replies[3], Reply::Error(message) if message.starts_with(b"ERR wrong number of arguments for 'flushdb'"))
+    );
+    assert_eq!(client.call(&[b"EXISTS", b"t3"]), integer(1));
+}

@@ -21,6 +21,11 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - Negative hash-field expiry values are rejected instead of deleting fields.
 - Out-of-range score and weight literals are rejected instead of storing
   infinity.
+- Arity errors on `EXEC`, `DISCARD`, `MULTI`, and `WATCH` abort the queued
+  transaction, and variadic `PING`, `INFO`, `FLUSHDB`, and `FLUSHALL` queue
+  before failing inside `EXEC`.
+- `CONFIG SET` is accepted on a replica, and `COPY` with identical keys returns
+  the Redis error.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

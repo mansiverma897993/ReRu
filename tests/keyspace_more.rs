@@ -532,3 +532,21 @@ fn object_encoding_reports_current_contents_after_in_place_writes() {
         bulk(b"embstr")
     );
 }
+
+#[test]
+fn copy_rejects_identical_source_and_destination() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"SET", b"same", b"value"]), ok());
+    for command in [
+        &[b"COPY".as_slice(), b"same", b"same"] as &[&[u8]],
+        &[b"COPY", b"same", b"same", b"REPLACE"],
+    ] {
+        assert_eq!(
+            client.call(command),
+            Reply::Error(b"ERR source and destination objects are the same".to_vec())
+        );
+    }
+    assert_eq!(client.call(&[b"GET", b"same"]), bulk(b"value"));
+    assert_eq!(client.call(&[b"RENAME", b"same", b"same"]), ok());
+}

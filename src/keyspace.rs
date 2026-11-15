@@ -462,7 +462,12 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         let destination = &command[2];
         remove_expired(&mut entries, source);
         remove_expired(&mut entries, destination);
-        if source == destination || (command.len() == 3 && entries.contains_key(destination)) {
+        if source == destination {
+            return Some(protocol::error(
+                "source and destination objects are the same",
+            ));
+        }
+        if command.len() == 3 && entries.contains_key(destination) {
             return Some(b":0\r\n".to_vec());
         }
         let Some(entry) = entries.get(source).cloned() else {
