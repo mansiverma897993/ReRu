@@ -80,7 +80,10 @@ fn encode(longitude: f64, latitude: f64) -> u64 {
 }
 
 fn decode(score: f64) -> Option<(f64, f64)> {
-    if !score.is_finite() || score < 0.0 || score >= (1u64 << 52) as f64 || score.fract() != 0.0 {
+    // Redis truncates a stored double to u64, so fractional scores from
+    // STOREDIST or a plain ZADD remain readable. Redis also tolerates scores
+    // outside this range; this guard still rejects them.
+    if !score.is_finite() || score < 0.0 || score >= (1u64 << 52) as f64 {
         return None;
     }
     let score = score as u64;
@@ -134,12 +137,61 @@ fn geohash(longitude: f64, latitude: f64) -> Vec<u8> {
     text
 }
 
+// Redis prints coordinates with the shortest round-trip digits. It keeps
+// fixed notation while the least significant digit stays right of 1e-7 and
+// the decimal exponent is small, and uses exponent form otherwise.
 fn coordinate_text(value: f64) -> Vec<u8> {
-    let text = format!("{value:.17}");
-    text.trim_end_matches('0')
-        .trim_end_matches('.')
-        .as_bytes()
-        .to_vec()
+    if value == 0.0 {
+        return if value.is_sign_negative() {
+            b"-0".to_vec()
+        } else {
+            b"0".to_vec()
+        };
+    }
+    let scientific = format!("{value:e}");
+    let (mantissa, exponent) = scientific.split_once('e').unwrap();
+    let exponent: i32 = exponent.parse().unwrap();
+    let negative = mantissa.starts_with('-');
+    let digits: String = mantissa
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect();
+    let mut text = String::new();
+    if negative {
+        text.push('-');
+    }
+    // Redis keeps fixed notation while the least significant digit stays
+    // right of 1e-7 and the exponent is small.
+    let plain =
+        exponent.unsigned_abs() < 4 || exponent - (digits.len().saturating_sub(1) as i32) > -7;
+    if !plain {
+        text.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            text.push('.');
+            text.push_str(&digits[1..]);
+        }
+        text.push('e');
+        text.push_str(&exponent.to_string());
+    } else if exponent >= 0 {
+        let point = (exponent + 1) as usize;
+        if digits.len() <= point {
+            text.push_str(&digits);
+            for _ in digits.len()..point {
+                text.push('0');
+            }
+        } else {
+            text.push_str(&digits[..point]);
+            text.push('.');
+            text.push_str(&digits[point..]);
+        }
+    } else {
+        text.push_str("0.");
+        for _ in 0..(-exponent - 1) {
+            text.push('0');
+        }
+        text.push_str(&digits);
+    }
+    text.into_bytes()
 }
 
 fn add(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
@@ -593,4 +645,35 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         Command::Search => search(command, store, false),
         Command::SearchStore => search(command, store, true),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::coordinate_text;
+
+    #[test]
+    fn coordinate_text_matches_redis_d2string_rules() {
+        assert_eq!(coordinate_text(0.0), b"0");
+        // Defensive: a decoded cell centre is never exactly zero.
+        assert_eq!(coordinate_text(-0.0), b"-0");
+        assert_eq!(coordinate_text(13.361389338970184), b"13.361389338970184");
+        assert_eq!(coordinate_text(-73.50000232458115), b"-73.50000232458115");
+        assert_eq!(
+            coordinate_text(0.0010004639625549316),
+            b"0.0010004639625549316"
+        );
+        assert_eq!(
+            coordinate_text(3.9964914321899414e-4),
+            b"3.9964914321899414e-4"
+        );
+        assert_eq!(
+            coordinate_text(3.992185825958848e-4),
+            b"3.992185825958848e-4"
+        );
+        assert_eq!(
+            coordinate_text(2.682209014892578e-6),
+            b"2.682209014892578e-6"
+        );
+        assert_eq!(coordinate_text(0.000001), b"0.000001");
+    }
 }
