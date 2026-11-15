@@ -115,6 +115,14 @@ fn static_nodes_route_keys_and_reject_cross_slot_writes() {
         Reply::Error(format!("MOVED 5061 {left_endpoint}").into_bytes())
     );
     assert_eq!(
+        left.call(&[b"OBJECT", b"ENCODING", b"foo"]),
+        Reply::Error(format!("MOVED 12182 {right_endpoint}").into_bytes())
+    );
+    assert_eq!(
+        right.call(&[b"OBJECT", b"REFCOUNT", b"bar"]),
+        Reply::Error(format!("MOVED 5061 {left_endpoint}").into_bytes())
+    );
+    assert_eq!(
         left.call(&[b"MGET", b"bar", b"foo"]),
         Reply::Error(b"CROSSSLOT Keys in request don't hash to the same slot".to_vec())
     );

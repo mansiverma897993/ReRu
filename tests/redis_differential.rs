@@ -848,3 +848,95 @@ fn representative_resp2_sequences_match_a_real_redis_server() {
     assert_eq!(redis.call(&[b"EXEC"]), array(vec![ok()]));
     let _ = redis.call(&reset);
 }
+
+fn compare_owned(ours: &mut Client, redis: &mut Client, args: &[Vec<u8>]) {
+    let actual = ours.call_many(args);
+    let expected = redis.call_many(args);
+    assert_eq!(actual, expected, "reply mismatch for {args:?}");
+}
+
+#[test]
+fn object_encoding_and_refcount_match_redis_8() {
+    let Ok(port) = std::env::var("RERU_REDIS_REFERENCE_PORT") else {
+        return;
+    };
+    let server = common::Server::start();
+    let mut ours = Client::new(&server);
+    let mut redis = Client::on_port(port.parse().unwrap());
+
+    let keys: Vec<Vec<u8>> = [
+        b"int".as_slice(),
+        b"zero",
+        b"leading",
+        b"plus",
+        b"empty",
+        b"long",
+        b"list",
+        b"quicklist",
+        b"hash",
+        b"bighash",
+        b"intset",
+        b"set",
+        b"bigset",
+        b"wideset",
+        b"zset",
+        b"bigzset",
+        b"stream",
+        b"missing",
+        b"ttlhash",
+        b"boundarylist",
+    ]
+    .iter()
+    .map(|key| [b"reru-diff:object:".as_slice(), key].concat())
+    .collect();
+    // The reference server keeps keys between runs, so start from a known state.
+    let mut delete = vec![b"DEL".to_vec()];
+    delete.extend(keys.iter().cloned());
+    compare_owned(&mut ours, &mut redis, &delete);
+
+    let long = vec![b'x'; 45];
+    let huge = vec![b'y'; 9000];
+    let long_member = vec![b'm'; 65];
+    for command in [
+        &[b"SET".as_slice(), keys[0].as_slice(), b"12345"] as &[&[u8]],
+        &[b"SET", &keys[1], b"0"],
+        &[b"SET", &keys[2], b"0123"],
+        &[b"SET", &keys[3], b"+42"],
+        &[b"SET", &keys[4], b""],
+        &[b"SET", &keys[5], &long],
+        &[b"RPUSH", &keys[6], b"a", b"b"],
+        &[b"RPUSH", &keys[7], &huge],
+        &[b"HSET", &keys[8], b"field", b"value"],
+        &[b"HSET", &keys[9], b"field", &long_member],
+        &[b"SADD", &keys[10], b"1", b"2"],
+        &[b"SADD", &keys[11], b"a", b"b"],
+        &[b"SADD", &keys[12], &long_member],
+        &[b"ZADD", &keys[14], b"1", b"a"],
+        &[b"ZADD", &keys[15], b"1", &long_member],
+        &[b"XADD", &keys[16], b"1-0", b"f", b"v"],
+        &[b"HSET", &keys[18], b"field", b"value"],
+        &[b"HEXPIRE", &keys[18], b"100", b"FIELDS", b"1", b"field"],
+        &[b"RPUSH", &keys[19], &vec![b'z'; 8190]],
+    ] {
+        compare(&mut ours, &mut redis, command);
+    }
+    let mut wide_set = vec![b"SADD".to_vec(), keys[13].clone()];
+    wide_set.extend((1..=129).map(|value| value.to_string().into_bytes()));
+    compare_owned(&mut ours, &mut redis, &wide_set);
+
+    for key in &keys {
+        compare(&mut ours, &mut redis, &[b"OBJECT", b"ENCODING", key]);
+        compare(&mut ours, &mut redis, &[b"OBJECT", b"REFCOUNT", key]);
+    }
+
+    for command in [
+        &[b"OBJECT".as_slice()] as &[&[u8]],
+        &[b"OBJECT", b"ENCODING"],
+        &[b"OBJECT", b"REFCOUNT", &keys[0], b"extra"],
+        &[b"OBJECT", b"FOO"],
+    ] {
+        compare(&mut ours, &mut redis, command);
+    }
+
+    compare_owned(&mut ours, &mut redis, &delete);
+}

@@ -11,6 +11,18 @@ fn bulk(value: &[u8]) -> Reply {
     Reply::Bulk(Some(value.to_vec()))
 }
 
+fn set_fields(client: &mut Client, key: &[u8], start: usize, end: usize, value: &[u8]) -> i64 {
+    let mut args = vec![b"HSET".to_vec(), key.to_vec()];
+    for index in start..end {
+        args.push(format!("field-{index}").into_bytes());
+        args.push(value.to_vec());
+    }
+    match client.call_many(&args) {
+        Reply::Integer(count) => count,
+        other => panic!("HSET failed: {other:?}"),
+    }
+}
+
 #[test]
 fn rename_copy_and_renamenx_preserve_source_expiry() {
     let server = common::Server::start();
@@ -133,5 +145,390 @@ fn brpop_reads_the_right_end_and_wakes_for_a_new_list() {
     assert_eq!(
         writer.call(&[b"LRANGE", b"new", b"0", b"-1"]),
         client::array(vec![bulk(b"b")])
+    );
+}
+
+#[test]
+fn object_encoding_reports_string_encodings() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    for (key, value, encoding) in [
+        (
+            b"integer".as_slice(),
+            b"12345".as_slice(),
+            b"int".as_slice(),
+        ),
+        (b"zero", b"0", b"int"),
+        (b"negative", b"-42", b"int"),
+        (b"leading-zero", b"0123", b"embstr"),
+        (b"plus", b"+42", b"embstr"),
+        (b"negative-zero", b"-0", b"embstr"),
+        (b"empty", b"", b"embstr"),
+        (b"overflow", b"123456789012345678901", b"embstr"),
+        (b"short", &[b'x'; 44], b"embstr"),
+        (b"long", &[b'x'; 45], b"raw"),
+    ] {
+        assert_eq!(client.call(&[b"SET", key, value]), ok());
+        assert_eq!(client.call(&[b"OBJECT", b"ENCODING", key]), bulk(encoding));
+    }
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"missing"]),
+        Reply::Bulk(None)
+    );
+    assert_eq!(client.call(&[b"set", b"lower", b"123"]), ok());
+    assert_eq!(
+        client.call(&[b"object", b"encoding", b"lower"]),
+        bulk(b"int")
+    );
+    let binary_key = b"binary\0key\xff";
+    let binary_value = b"\xff\x00value";
+    assert_eq!(client.call(&[b"SET", binary_key, binary_value]), ok());
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", binary_key]),
+        bulk(b"embstr")
+    );
+}
+
+#[test]
+fn object_encoding_reports_collection_encodings() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+
+    assert_eq!(
+        client.call(&[b"RPUSH", b"list", b"a", b"b", b"c"]),
+        integer(3)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"list"]),
+        bulk(b"listpack")
+    );
+    let huge = vec![b'y'; 9000];
+    assert_eq!(client.call(&[b"RPUSH", b"quicklist", &huge]), integer(1));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"quicklist"]),
+        bulk(b"quicklist")
+    );
+    let boundary = vec![b'z'; 8190];
+    assert_eq!(
+        client.call(&[b"RPUSH", b"boundary-list", &boundary]),
+        integer(1)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"boundary-list"]),
+        bulk(b"quicklist")
+    );
+    for chunk in 1..=3 {
+        let mut queue = vec![b"RPUSH".to_vec(), b"many-small".to_vec()];
+        queue.extend((0..1000).map(|_| b"x".to_vec()));
+        assert_eq!(client.call_many(&queue), integer(chunk * 1000));
+    }
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"many-small"]),
+        bulk(b"quicklist")
+    );
+
+    assert_eq!(
+        client.call(&[b"HSET", b"hash", b"field", b"value"]),
+        integer(1)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"hash"]),
+        bulk(b"listpack")
+    );
+    let long_value = vec![b'v'; 65];
+    assert_eq!(
+        client.call(&[b"HSET", b"bighash", b"field", &long_value]),
+        integer(1)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"bighash"]),
+        bulk(b"hashtable")
+    );
+    let exact_value = vec![b'v'; 64];
+    assert_eq!(
+        set_fields(&mut client, b"exacthash", 0, 256, &exact_value),
+        256
+    );
+    assert_eq!(
+        set_fields(&mut client, b"exacthash", 256, 512, &exact_value),
+        256
+    );
+    assert_eq!(
+        set_fields(&mut client, b"widehash", 0, 256, &exact_value),
+        256
+    );
+    assert_eq!(
+        set_fields(&mut client, b"widehash", 256, 512, &exact_value),
+        256
+    );
+    assert_eq!(
+        set_fields(&mut client, b"widehash", 512, 513, &exact_value),
+        1
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"exacthash"]),
+        bulk(b"listpack")
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"widehash"]),
+        bulk(b"hashtable")
+    );
+    assert_eq!(
+        client.call(&[b"HEXPIRE", b"widehash", b"100", b"FIELDS", b"1", b"field-0"]),
+        client::array(vec![integer(1)])
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"widehash"]),
+        bulk(b"hashtable")
+    );
+    assert_eq!(
+        client.call(&[b"HSET", b"ttl-hash", b"field", b"value"]),
+        integer(1)
+    );
+    assert_eq!(
+        client.call(&[b"HEXPIRE", b"ttl-hash", b"100", b"FIELDS", b"1", b"field"]),
+        client::array(vec![integer(1)])
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"ttl-hash"]),
+        bulk(b"listpackex")
+    );
+
+    assert_eq!(
+        client.call(&[b"SADD", b"intset", b"1", b"2", b"3"]),
+        integer(3)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"intset"]),
+        bulk(b"intset")
+    );
+    assert_eq!(
+        client.call(&[b"SADD", b"set", b"a", b"b", b"c"]),
+        integer(3)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"set"]),
+        bulk(b"listpack")
+    );
+    let long_member = vec![b'm'; 65];
+    assert_eq!(client.call(&[b"SADD", b"bigset", &long_member]), integer(1));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"bigset"]),
+        bulk(b"hashtable")
+    );
+    let mut intset = vec![b"SADD".to_vec(), b"wideset".to_vec()];
+    intset.extend((1..=513).map(|value| value.to_string().into_bytes()));
+    assert_eq!(client.call_many(&intset), integer(513));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"wideset"]),
+        bulk(b"hashtable")
+    );
+    let mut listpack_set = vec![b"SADD".to_vec(), b"listpack-set".to_vec()];
+    listpack_set.extend((0..128).map(|index| format!("m{index}").into_bytes()));
+    assert_eq!(client.call_many(&listpack_set), integer(128));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"listpack-set"]),
+        bulk(b"listpack")
+    );
+    assert_eq!(
+        client.call(&[b"SADD", b"listpack-set", b"extra"]),
+        integer(1)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"listpack-set"]),
+        bulk(b"hashtable")
+    );
+
+    assert_eq!(
+        client.call(&[b"ZADD", b"zset", b"1", b"a", b"2", b"b"]),
+        integer(2)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"zset"]),
+        bulk(b"listpack")
+    );
+    assert_eq!(
+        client.call(&[b"ZADD", b"bigzset", b"1", &long_member]),
+        integer(1)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"bigzset"]),
+        bulk(b"skiplist")
+    );
+    let mut zset = vec![b"ZADD".to_vec(), b"widezset".to_vec()];
+    for index in 0..129 {
+        zset.push(index.to_string().into_bytes());
+        zset.push(format!("member-{index}").into_bytes());
+    }
+    assert_eq!(client.call_many(&zset), integer(129));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"widezset"]),
+        bulk(b"skiplist")
+    );
+    let mut compact_zset = vec![b"ZADD".to_vec(), b"listpack-zset".to_vec()];
+    for index in 0..128 {
+        compact_zset.push(index.to_string().into_bytes());
+        compact_zset.push(format!("member-{index}").into_bytes());
+    }
+    assert_eq!(client.call_many(&compact_zset), integer(128));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"listpack-zset"]),
+        bulk(b"listpack")
+    );
+
+    assert!(matches!(
+        client.call(&[b"XADD", b"stream", b"*", b"field", b"value"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"stream"]),
+        bulk(b"stream")
+    );
+}
+
+#[test]
+fn object_refcount_is_one_and_missing_keys_reply_nil() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"SET", b"key", b"value"]), ok());
+    assert_eq!(client.call(&[b"OBJECT", b"REFCOUNT", b"key"]), integer(1));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"REFCOUNT", b"missing"]),
+        Reply::Bulk(None)
+    );
+    assert_eq!(
+        client.call(&[b"SET", b"expiring", b"value", b"PX", b"10"]),
+        ok()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(40));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"expiring"]),
+        Reply::Bulk(None)
+    );
+}
+
+#[test]
+fn object_argument_errors_match_redis() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"SET", b"key", b"value"]), ok());
+    assert_eq!(
+        client.call(&[b"OBJECT"]),
+        Reply::Error(b"ERR wrong number of arguments for 'object' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING"]),
+        Reply::Error(b"ERR wrong number of arguments for 'object|encoding' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"REFCOUNT", b"key", b"extra"]),
+        Reply::Error(b"ERR wrong number of arguments for 'object|refcount' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"FOO", b"key"]),
+        Reply::Error(b"ERR unknown subcommand 'FOO'. Try OBJECT HELP.".to_vec())
+    );
+}
+
+#[test]
+fn object_encoding_recomputes_after_a_value_shrinks() {
+    // Redis keeps the larger encoding after a conversion. ReRu reports the
+    // label for the current contents, as docs/COMPATIBILITY.md notes.
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    let value = b"value";
+    assert_eq!(set_fields(&mut client, b"shrinking", 0, 256, value), 256);
+    assert_eq!(set_fields(&mut client, b"shrinking", 256, 513, value), 257);
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"shrinking"]),
+        bulk(b"hashtable")
+    );
+    let mut delete = vec![b"HDEL".to_vec(), b"shrinking".to_vec()];
+    delete.extend((0..500).map(|index| format!("field-{index}").into_bytes()));
+    assert_eq!(client.call_many(&delete), integer(500));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"shrinking"]),
+        bulk(b"listpack")
+    );
+}
+
+#[test]
+fn object_queue_errors_abort_the_transaction() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"MULTI"]), ok());
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING"]),
+        Reply::Error(b"ERR wrong number of arguments for 'object|encoding' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"EXEC"]),
+        Reply::Error(b"EXECABORT Transaction discarded because of previous errors.".to_vec())
+    );
+    assert_eq!(client.call(&[b"MULTI"]), ok());
+    assert_eq!(
+        client.call(&[b"OBJECT", b"FOO", b"key"]),
+        Reply::Error(b"ERR unknown subcommand 'FOO'. Try OBJECT HELP.".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"EXEC"]),
+        Reply::Error(b"EXECABORT Transaction discarded because of previous errors.".to_vec())
+    );
+    assert_eq!(client.call(&[b"MULTI"]), ok());
+    assert_eq!(
+        client.call(&[b"SET", b"queued", b"value"]),
+        client::queued()
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"queued"]),
+        client::queued()
+    );
+    assert_eq!(
+        client.call(&[b"EXEC"]),
+        client::array(vec![ok(), bulk(b"embstr")])
+    );
+}
+
+#[test]
+fn object_encoding_does_not_change_lru_order() {
+    let server =
+        common::Server::start_with(&["--maxmemory", "500", "--maxmemory-policy", "allkeys-lru"]);
+    let mut client = Client::new(&server);
+    let value = vec![b'v'; 100];
+    assert_eq!(client.call(&[b"SET", b"ENCODING", &value]), ok());
+    assert_eq!(client.call(&[b"SET", b"k", &value]), ok());
+    // OBJECT resolves its key without touching LRU, so ENCODING stays oldest.
+    assert_eq!(client.call(&[b"OBJECT", b"ENCODING", b"k"]), bulk(b"raw"));
+    assert_eq!(client.call(&[b"SET", b"c", &value]), ok());
+    assert_eq!(client.call(&[b"EXISTS", b"ENCODING"]), integer(0));
+    assert_eq!(client.call(&[b"GET", b"k"]), bulk(&value));
+    assert_eq!(client.call(&[b"GET", b"c"]), bulk(&value));
+}
+
+#[test]
+fn object_encoding_reports_current_contents_after_in_place_writes() {
+    // Redis converts these values to `raw`; ReRu reports the content-based label.
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"SET", b"bit", b"1"]), ok());
+    assert_eq!(client.call(&[b"SETBIT", b"bit", b"0", b"1"]), integer(0));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"bit"]),
+        bulk(b"embstr")
+    );
+    assert_eq!(client.call(&[b"SET", b"appended", b"1"]), ok());
+    assert_eq!(client.call(&[b"APPEND", b"appended", b"2"]), integer(2));
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"appended"]),
+        bulk(b"int")
+    );
+    assert_eq!(client.call(&[b"SET", b"ranged", b"123"]), ok());
+    assert_eq!(
+        client.call(&[b"SETRANGE", b"ranged", b"0", b"x"]),
+        integer(3)
+    );
+    assert_eq!(
+        client.call(&[b"OBJECT", b"ENCODING", b"ranged"]),
+        bulk(b"embstr")
     );
 }
