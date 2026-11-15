@@ -31,8 +31,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `GETRANGE`, `SUBSTR`, `BITCOUNT`, and `BITPOS` clamp very negative end indexes
   like Redis, and `BITPOS` distinguishes a missing key from an empty string.
 - `GEOPOS` and `WITHCOORD` print coordinates in Redis's shortest round-trip and
-  exponent form, and fractional `STOREDIST` destination scores are readable by
-  GEO commands again.
+  small-value exponent form, and fractional `STOREDIST` destination scores are
+  readable by GEO commands again.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

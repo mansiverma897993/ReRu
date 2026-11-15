@@ -228,10 +228,13 @@ fn geo_search_returns_sorted_nearby_members_and_stores_results() {
         ]),
         array(vec![bulk(b"Palermo"), bulk(b"Catania")])
     );
-    assert!(matches!(
+    assert_eq!(
         c.call(&[b"GEOPOS", b"near", b"Catania"]),
-        Reply::Array(Some(_))
-    ));
+        array(vec![array(vec![
+            bulk(b"-179.9999275803566"),
+            bulk(b"-85.0511224431971"),
+        ])])
+    );
     assert_eq!(c.call(&[b"PEXPIRE", b"near", b"60000"]), integer(1));
     assert_eq!(
         c.call(&[

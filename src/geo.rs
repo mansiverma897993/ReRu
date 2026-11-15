@@ -80,8 +80,9 @@ fn encode(longitude: f64, latitude: f64) -> u64 {
 }
 
 fn decode(score: f64) -> Option<(f64, f64)> {
-    // Redis casts the stored double to u64, so fractional scores from
-    // STOREDIST or a plain ZADD remain readable.
+    // Redis truncates a stored double to u64, so fractional scores from
+    // STOREDIST or a plain ZADD remain readable. Redis also tolerates scores
+    // outside this range; this guard still rejects them.
     if !score.is_finite() || score < 0.0 || score >= (1u64 << 52) as f64 {
         return None;
     }
@@ -92,10 +93,12 @@ fn decode(score: f64) -> Option<(f64, f64)> {
         x = (x << 1) | ((score >> (bit * 2 + 1)) & 1);
         y = (y << 1) | ((score >> (bit * 2)) & 1);
     }
-    let longitude_min = -180.0 + (x as f64 / GRID) * 360.0;
-    let longitude_max = -180.0 + ((x + 1) as f64 / GRID) * 360.0;
-    let latitude_min = -LATITUDE_LIMIT + (y as f64 / GRID) * (2.0 * LATITUDE_LIMIT);
-    let latitude_max = -LATITUDE_LIMIT + ((y + 1) as f64 / GRID) * (2.0 * LATITUDE_LIMIT);
+    let longitude_step = 360.0 / GRID;
+    let latitude_step = 2.0 * LATITUDE_LIMIT / GRID;
+    let longitude_min = -180.0 + x as f64 * longitude_step;
+    let longitude_max = -180.0 + (x + 1) as f64 * longitude_step;
+    let latitude_min = -LATITUDE_LIMIT + y as f64 * latitude_step;
+    let latitude_max = -LATITUDE_LIMIT + (y + 1) as f64 * latitude_step;
     Some((
         (longitude_min + longitude_max) / 2.0,
         (latitude_min + latitude_max) / 2.0,
@@ -138,7 +141,11 @@ fn geohash(longitude: f64, latitude: f64) -> Vec<u8> {
 // exponent form below 1e-4, like %.17g.
 fn coordinate_text(value: f64) -> Vec<u8> {
     if value == 0.0 {
-        return b"0".to_vec();
+        return if value.is_sign_negative() {
+            b"-0".to_vec()
+        } else {
+            b"0".to_vec()
+        };
     }
     let scientific = format!("{value:e}");
     let (mantissa, exponent) = scientific.split_once('e').unwrap();
@@ -152,7 +159,11 @@ fn coordinate_text(value: f64) -> Vec<u8> {
     if negative {
         text.push('-');
     }
-    if exponent < -4 {
+    // Redis keeps fixed notation while the least significant digit stays
+    // right of 1e-7 and the exponent is small.
+    let plain =
+        exponent.unsigned_abs() < 4 || exponent - (digits.len().saturating_sub(1) as i32) > -7;
+    if !plain {
         text.push_str(&digits[..1]);
         if digits.len() > 1 {
             text.push('.');
@@ -633,4 +644,34 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         Command::Search => search(command, store, false),
         Command::SearchStore => search(command, store, true),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::coordinate_text;
+
+    #[test]
+    fn coordinate_text_matches_redis_d2string_rules() {
+        assert_eq!(coordinate_text(0.0), b"0");
+        assert_eq!(coordinate_text(-0.0), b"-0");
+        assert_eq!(coordinate_text(13.361389338970184), b"13.361389338970184");
+        assert_eq!(coordinate_text(-73.50000232458115), b"-73.50000232458115");
+        assert_eq!(
+            coordinate_text(0.0010004639625549316),
+            b"0.0010004639625549316"
+        );
+        assert_eq!(
+            coordinate_text(3.9964914321899414e-4),
+            b"3.9964914321899414e-4"
+        );
+        assert_eq!(
+            coordinate_text(3.992185825958848e-4),
+            b"3.992185825958848e-4"
+        );
+        assert_eq!(
+            coordinate_text(2.682209014892578e-6),
+            b"2.682209014892578e-6"
+        );
+        assert_eq!(coordinate_text(0.000001), b"0.000001");
+    }
 }

@@ -61,9 +61,10 @@ Blocking forms wait for another write and return immediately inside MULTI/EXEC.
 
 Geo search scans the sorted set, then filters and sorts candidates. This is
 slower than Redis's geohash-area query for large datasets. Coordinates are
-printed with Redis's shortest round-trip digits and exponent form below 1e-4,
-and GEO readers truncate fractional destination scores, so `STOREDIST` results
-stay readable. `COUNT ANY` currently
+printed with Redis's shortest round-trip digits and its small-value exponent
+rule, and GEO readers truncate fractional destination scores, so `STOREDIST`
+results stay readable. Scores below 0 or at least 2^52 return nil where Redis
+decodes them. `COUNT ANY` currently
 uses the same post-filter limit as `COUNT`; Redis may stop early. The
 `GEORADIUS` aliases and cross-dateline box behavior remain to be verified.
 
