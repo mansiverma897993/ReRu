@@ -197,6 +197,9 @@ fn parse_fields(command: &[Vec<u8>], at: usize, pairs: bool) -> Result<&[Vec<u8>
 
 fn deadline(raw: &[u8], millis: bool, absolute: bool) -> Result<FieldDeadline, Vec<u8>> {
     let amount = parse_number(raw)?;
+    if amount < 0 {
+        return Err(protocol::error("invalid expire time, must be >= 0"));
+    }
     let now = Instant::now();
     let current = SystemTime::now()
         .duration_since(UNIX_EPOCH)
