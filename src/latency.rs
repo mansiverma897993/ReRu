@@ -44,12 +44,15 @@ impl Monitor {
 
     // The disabled path only loads the threshold; it does not read the clock or lock.
     pub fn start(&self, command: &[Vec<u8>]) -> Option<(Instant, u64)> {
+        let threshold_ms = self.threshold_ms();
+        if threshold_ms == 0 {
+            return None;
+        }
         // Avoid self-generated samples and time spent waiting in blocking commands.
         if command[0].eq_ignore_ascii_case(b"LATENCY") || is_blocking(command) {
             return None;
         }
-        let threshold_ms = self.threshold_ms();
-        (threshold_ms > 0).then(|| (Instant::now(), threshold_ms))
+        Some((Instant::now(), threshold_ms))
     }
 
     pub fn record(&self, started: Option<(Instant, u64)>) {
@@ -250,6 +253,8 @@ mod tests {
             assert!(monitor.start(&command(parts)).is_none());
         }
         assert!(!is_blocking(&command(&[b"XREAD", b"STREAMS", b"s", b"0"])));
+        // A normal command is still timed once monitoring is enabled.
+        assert!(monitor.start(&command(&[b"GET", b"key"])).is_some());
     }
 
     #[test]
