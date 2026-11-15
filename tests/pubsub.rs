@@ -173,10 +173,16 @@ fn a_stalled_subscriber_does_not_abort_the_server() {
     // This publish cannot drain into the stalled socket, so the hub drops it.
     let mut publisher = Client::new(&server);
     let payload = vec![b'x'; 16 * 1024 * 1024];
-    assert_eq!(
-        publisher.call(&[b"PUBLISH", b"stalled", &payload]),
-        integer(0)
-    );
+    // Kernel buffers differ per platform, so publish until the stalled
+    // subscriber is actually dropped.
+    let mut dropped = false;
+    for _ in 0..8 {
+        if publisher.call(&[b"PUBLISH", b"stalled", &payload]) == integer(0) {
+            dropped = true;
+            break;
+        }
+    }
+    assert!(dropped, "publish never dropped the stalled subscriber");
 
     // The removed subscription must not panic in SUBSCRIBE or in Drop.
     let _ = stalled.write_all(&command(&[b"SUBSCRIBE", b"other"]));
