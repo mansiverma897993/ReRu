@@ -1128,14 +1128,10 @@ fn execute_command(
     } else if command[0].eq_ignore_ascii_case(b"FLUSHDB")
         || command[0].eq_ignore_ascii_case(b"FLUSHALL")
     {
-        if command.len() > 2 {
-            protocol::error(&format!(
-                "wrong number of arguments for '{}' command",
-                String::from_utf8_lossy(&command[0]).to_ascii_lowercase()
-            ))
-        } else if command.len() == 2
-            && !command[1].eq_ignore_ascii_case(b"SYNC")
-            && !command[1].eq_ignore_ascii_case(b"ASYNC")
+        if command.len() > 2
+            || (command.len() == 2
+                && !command[1].eq_ignore_ascii_case(b"SYNC")
+                && !command[1].eq_ignore_ascii_case(b"ASYNC"))
         {
             protocol::error("syntax error")
         } else {
@@ -1682,12 +1678,16 @@ fn validate_queued(command: &[Vec<u8>]) -> Result<(), Vec<u8>> {
         valid
     } else if let Some(valid) = keyspace::valid_arity(command) {
         valid
-    } else if name.eq_ignore_ascii_case(b"INFO") || name.eq_ignore_ascii_case(b"PING") {
-        arity <= 2
+    } else if name.eq_ignore_ascii_case(b"INFO")
+        || name.eq_ignore_ascii_case(b"PING")
+        || name.eq_ignore_ascii_case(b"FLUSHDB")
+        || name.eq_ignore_ascii_case(b"FLUSHALL")
+    {
+        // Redis queues these variadic commands and rejects excess arguments
+        // inside EXEC, so one bad call does not discard the transaction.
+        true
     } else if name.eq_ignore_ascii_case(b"UNWATCH") || name.eq_ignore_ascii_case(b"TIME") {
         arity == 1
-    } else if name.eq_ignore_ascii_case(b"FLUSHDB") || name.eq_ignore_ascii_case(b"FLUSHALL") {
-        arity == 1 || arity == 2
     } else if name.eq_ignore_ascii_case(b"ECHO")
         || name.eq_ignore_ascii_case(b"GET")
         || name.eq_ignore_ascii_case(b"INCR")
@@ -1853,13 +1853,20 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             store.auth.authenticate(&command, &mut authenticated)
         } else if let Some(error) = route_error {
             error
-        } else if store.read_only && is_mutating(&command) {
+        } else if store.read_only
+            && is_mutating(&command)
+            && !(command[0].eq_ignore_ascii_case(b"CONFIG")
+                && command
+                    .get(1)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(b"SET")))
+        {
             if transaction.is_some() {
                 transaction_error = true;
             }
             b"-READONLY You can't write against a read only replica.\r\n".to_vec()
         } else if command[0].eq_ignore_ascii_case(b"WATCH") {
             if command.len() < 2 {
+                transaction_error |= transaction.is_some();
                 protocol::error("wrong number of arguments for 'watch' command")
             } else if transaction.is_some() {
                 protocol::error("WATCH inside MULTI is not allowed")
@@ -1877,6 +1884,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             }
         } else if command[0].eq_ignore_ascii_case(b"MULTI") {
             if command.len() != 1 {
+                transaction_error |= transaction.is_some();
                 protocol::error("wrong number of arguments for 'multi' command")
             } else if transaction.is_some() {
                 protocol::error("MULTI calls can not be nested")
@@ -1887,6 +1895,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             }
         } else if command[0].eq_ignore_ascii_case(b"DISCARD") {
             if command.len() != 1 {
+                transaction_error |= transaction.is_some();
                 protocol::error("wrong number of arguments for 'discard' command")
             } else if transaction.take().is_some() {
                 transaction_error = false;
@@ -1897,7 +1906,10 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             }
         } else if command[0].eq_ignore_ascii_case(b"EXEC") {
             if command.len() != 1 {
-                protocol::error("wrong number of arguments for 'exec' command")
+                transaction.take();
+                transaction_error = false;
+                watches.clear();
+                b"-EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command\r\n".to_vec()
             } else if let Some(queued) = transaction.take() {
                 if transaction_error {
                     transaction_error = false;

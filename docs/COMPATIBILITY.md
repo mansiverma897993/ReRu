@@ -23,7 +23,7 @@ tests; it does not certify complete compatibility with Redis.
 | Connection close | `QUIT` | Replies OK and closes the connection |
 | Authentication | `AUTH`, `ACL WHOAMI` | Startup-configured password for the default user, connection-local authentication and authenticated ReRu replication |
 | Configuration | `CONFIG GET`, `CONFIG SET`, [`CONFIG RESETSTAT`](https://redis.io/docs/latest/commands/config-resetstat/) | Runtime `maxmemory`, `maxmemory-policy`, `maxclients`, and `latency-monitor-threshold`; GET also reports AOF enabled/fsync mode and configured RDB dir/dbfilename; RESETSTAT clears counters exposed by INFO |
-| Observability | `INFO`, [`LATENCY LATEST`](https://redis.io/docs/latest/commands/latency-latest/), [`LATENCY HISTORY`](https://redis.io/docs/latest/commands/latency-history/), [`LATENCY RESET`](https://redis.io/docs/latest/commands/latency-reset/) | Partial `memory`, `stats`, `clients`, and `persistence` INFO sections; only the `command` latency event is implemented, blocking commands are excluded so wait time is not counted, same-second spikes merge by maximum, up to 160 recent samples are retained, and `LATENCY` commands are not monitored. Commands queued in `MULTI` are not timed individually; `EXEC` is measured as one command |
+| Observability | `INFO`, [`LATENCY LATEST`](https://redis.io/docs/latest/commands/latency-latest/), [`LATENCY HISTORY`](https://redis.io/docs/latest/commands/latency-history/), [`LATENCY RESET`](https://redis.io/docs/latest/commands/latency-reset/) | Partial `memory`, `stats`, `clients`, and `persistence` INFO sections, which accept multiple sections and the `all`, `everything`, and `default` aliases; only the `command` latency event is implemented, blocking commands are excluded so wait time is not counted, same-second spikes merge by maximum, up to 160 recent samples are retained, and `LATENCY` commands are not monitored. Commands queued in `MULTI` are not timed individually; `EXEC` is measured as one command |
 | Server time | `TIME` | Epoch seconds and microseconds as RESP2 bulk strings |
 | Persistence | `SAVE`, `BGSAVE`, `LASTSAVE`, `DUMP`, `RESTORE`, `BGREWRITEAOF` | Initial Redis RDB interoperability; supported values, key expiry, checksums, REPLACE/ABSTTL; manual single-file AOF compaction |
 | Command introspection | [`COMMAND`](https://redis.io/docs/latest/commands/command/), `COMMAND COUNT`, `COMMAND INFO` | Lists ReRu's implemented command metadata, counts entries, or looks up names |
@@ -67,6 +67,10 @@ uses the same post-filter limit as `COUNT`; Redis may stop early. The
 WATCH tracks writes even if the resulting value is unchanged, missing-key
 creation/deletion, and natural expiry. EXEC and DISCARD clear the connection's
 watches; UNWATCH clears them outside MULTI. Inside MULTI, UNWATCH is queued.
+Queue-time validation follows each command's declared arity. PING, INFO,
+FLUSHDB, FLUSHALL, and COPY queue and surface argument errors inside the EXEC
+reply; some variadic commands such as LPOP, HSET, SPOP, and ZRANK still abort at
+queue time.
 Disconnects release registrations. Replica updates identify changed keys;
 unrelated writes preserve watches, while a full resync invalidates all watches.
 
@@ -197,6 +201,8 @@ Redis's error text, and a rejected count does not touch the key. `BLMOVE` and
 `MULTI`, where they run without blocking.
 
 `COPY` supports same-database copy and `REPLACE`; `DB` selection is pending.
+Copying a key onto itself returns `ERR source and destination objects are the
+same`.
 `FLUSHDB` and `FLUSHALL` both clear ReRu's only database. `ASYNC` is accepted
 but deletion is currently synchronous; flush invalidates WATCH and is persisted
 through ReRu snapshots/AOF.
@@ -378,6 +384,8 @@ Behavior references: [XREADGROUP](https://redis.io/docs/latest/commands/xreadgro
   `--snapshot` or `--replicaof` yet. Without manual compaction, files grow with writes.
 - Optional `--replicaof HOST PORT` provides read-only ReRu replicas, initial
   synchronization, subsequent full dataset snapshots and reconnection.
+  `CONFIG SET` remains available on a replica; dataset writes do not, and
+  eviction is skipped so a lowered `maxmemory` does not drop replicated keys.
 - Replication uses custom `RERUREP1` frames with changed-key metadata. Use matching
   builds on both ends. Redis PSYNC, partial resynchronization, acknowledgments,
   WAIT and failover are not implemented.

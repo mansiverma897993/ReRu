@@ -27,7 +27,7 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
     } else if name.eq_ignore_ascii_case(b"RENAME") || name.eq_ignore_ascii_case(b"RENAMENX") {
         Some(command.len() == 3)
     } else if name.eq_ignore_ascii_case(b"COPY") {
-        Some(command.len() == 3 || command.len() == 4)
+        Some(command.len() >= 3)
     } else if [
         b"TTL".as_slice(),
         b"PTTL",
@@ -454,7 +454,10 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         });
     }
     if name.eq_ignore_ascii_case(b"COPY") {
-        if command.len() == 4 && !command[3].eq_ignore_ascii_case(b"REPLACE") {
+        if command[3..]
+            .iter()
+            .any(|option| !option.eq_ignore_ascii_case(b"REPLACE"))
+        {
             return Some(protocol::error("syntax error"));
         }
         let mut entries = store.entries.lock().unwrap();
@@ -462,7 +465,12 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         let destination = &command[2];
         remove_expired(&mut entries, source);
         remove_expired(&mut entries, destination);
-        if source == destination || (command.len() == 3 && entries.contains_key(destination)) {
+        if source == destination {
+            return Some(protocol::error(
+                "source and destination objects are the same",
+            ));
+        }
+        if command.len() == 3 && entries.contains_key(destination) {
             return Some(b":0\r\n".to_vec());
         }
         let Some(entry) = entries.get(source).cloned() else {
