@@ -19,6 +19,12 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `LCS` with `LEN`, `IDX`, `MINMATCHLEN`, and `WITHMATCHLEN`. All forms are
   capped at 8,000,000 table cells.
 
+### Fixed
+
+- The AOF writer splits large keys below the replay bulk limit, and snapshots
+  with more than 1,000,000 keys decode again.
+- AOF write failures return `-MISCONF` and keep the client connection open.
+
 ## [0.1.0-alpha.2] - 2026-11-14
 
 ### Added

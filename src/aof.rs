@@ -193,30 +193,62 @@ fn deadline_millis(deadline: Instant) -> io::Result<String> {
         .to_string())
 }
 
+// Keep every replayed command under the protocol bulk limit. Values can be
+// much larger than the argument-count chunks alone would allow.
+const MAX_REPLAY_COMMAND_BYTES: usize = 32 * 1024 * 1024;
+
+fn chunk_items<'a, I>(items: I, mut emit: impl FnMut(Vec<&'a [u8]>))
+where
+    I: IntoIterator<Item = &'a [u8]>,
+{
+    let mut chunk: Vec<&'a [u8]> = Vec::new();
+    let mut bytes = 0usize;
+    for item in items {
+        let too_many = chunk.len() == 1022;
+        let too_large =
+            !chunk.is_empty() && bytes.saturating_add(item.len()) > MAX_REPLAY_COMMAND_BYTES;
+        if too_many || too_large {
+            emit(std::mem::take(&mut chunk));
+            bytes = 0;
+        }
+        bytes = bytes.saturating_add(item.len());
+        chunk.push(item);
+    }
+    if !chunk.is_empty() {
+        emit(chunk);
+    }
+}
+
 fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<()> {
     match &entry.value {
         Value::String(value) => command(output, &[b"SET", key, value]),
         Value::List(items) => {
-            let mut remaining = items.iter();
-            loop {
-                let chunk: Vec<&[u8]> = remaining.by_ref().take(1022).map(Vec::as_slice).collect();
-                if chunk.is_empty() {
-                    break;
-                }
+            chunk_items(items.iter().map(Vec::as_slice), |chunk| {
                 let mut args: Vec<&[u8]> = vec![b"RPUSH", key];
                 args.extend(chunk);
                 command(output, &args);
-            }
+            });
         }
         Value::Hash(hash) => {
             let mut fields: Vec<_> = hash.iter().collect();
             fields.sort_by(|left, right| left.0.cmp(right.0));
-            for chunk in fields.chunks(511) {
-                let mut args: Vec<&[u8]> = vec![b"HSET", key];
-                for (field, value) in chunk {
-                    args.push(field);
-                    args.push(value);
+            let mut args: Vec<&[u8]> = vec![b"HSET", key];
+            let mut bytes = 0usize;
+            for (field, value) in fields {
+                let pair = field.len().saturating_add(value.len());
+                let full = args.len() + 2 > 1024;
+                let too_large =
+                    args.len() > 2 && bytes.saturating_add(pair) > MAX_REPLAY_COMMAND_BYTES;
+                if full || too_large {
+                    command(output, &args);
+                    args.truncate(2);
+                    bytes = 0;
                 }
+                args.push(field);
+                args.push(value);
+                bytes = bytes.saturating_add(pair);
+            }
+            if args.len() > 2 {
                 command(output, &args);
             }
             let mut deadlines: Vec<_> = hash.deadlines().iter().collect();
@@ -239,15 +271,27 @@ fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<(
         Value::Set(members) => {
             let mut members: Vec<_> = members.iter().collect();
             members.sort();
-            for chunk in members.chunks(1022) {
+            chunk_items(members.iter().map(|member| member.as_slice()), |chunk| {
                 let mut args: Vec<&[u8]> = vec![b"SADD", key];
-                args.extend(chunk.iter().map(|member| member.as_slice()));
+                args.extend(chunk);
                 command(output, &args);
-            }
+            });
         }
         Value::SortedSet(members) => {
             let members: Vec<_> = members.entries().collect();
-            for chunk in members.chunks(511) {
+            let mut start = 0;
+            while start < members.len() {
+                let mut end = start;
+                let mut bytes = 0usize;
+                while end < members.len() && end - start < 511 {
+                    let add = members[end].0.len();
+                    if end > start && bytes.saturating_add(add) > MAX_REPLAY_COMMAND_BYTES {
+                        break;
+                    }
+                    bytes = bytes.saturating_add(add);
+                    end += 1;
+                }
+                let chunk = &members[start..end];
                 let scores: Vec<_> = chunk.iter().map(|(_, score)| score.to_string()).collect();
                 let mut args: Vec<&[u8]> = vec![b"ZADD", key];
                 for ((member, _), score) in chunk.iter().zip(&scores) {
@@ -255,6 +299,7 @@ fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<(
                     args.push(member);
                 }
                 command(output, &args);
+                start = end;
             }
         }
         Value::Stream(stream) => {
@@ -455,6 +500,33 @@ pub fn replay(path: &Path, store: &Store) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_values_are_chunked_below_the_replay_limit() {
+        let mut items = std::collections::VecDeque::new();
+        for _ in 0..8 {
+            items.push_back(vec![b'x'; 9 * 1024 * 1024]);
+        }
+        let entry = Entry {
+            value: Value::List(items),
+            expires_at: None,
+        };
+        let mut output = Vec::new();
+        append_value(&mut output, b"big", &entry).unwrap();
+
+        let mut cursor = std::io::Cursor::new(output.as_slice());
+        let mut commands = 0;
+        let mut members = 0;
+        while let Some(command) = protocol::read_command(&mut cursor).unwrap() {
+            let bytes: usize = command.iter().map(Vec::len).sum();
+            assert!(bytes <= MAX_REPLAY_COMMAND_BYTES + 1024, "{bytes} bytes");
+            members += command.len() - 2;
+            commands += 1;
+        }
+        // One 72 MiB command would exceed the 64 MiB replay limit.
+        assert_eq!(commands, 3);
+        assert_eq!(members, 8);
+    }
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
