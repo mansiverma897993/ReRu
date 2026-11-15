@@ -8,6 +8,13 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- A Pub/Sub subscriber removed after a failed publish no longer aborts the
+  server when it sends another subscription command.
+- Large replies are retried until the client drains them instead of being
+  truncated by the 500 ms socket write timeout.
+
 ## [0.1.0-alpha.2] - 2026-11-15
 
 ### Added
@@ -20,7 +27,6 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   label for the stored value, and every present key reports one reference.
 - `LCS` with `LEN`, `IDX`, `MINMATCHLEN`, and `WITHMATCHLEN`. All forms are
   capped at 8,000,000 table cells.
-
 - Static two-node Cluster routing with CRC16/hash-tag slots, `CLUSTER KEYSLOT`,
   `CLUSTER SHARDS`, `CLUSTER SLOTS`, `MOVED`, and `CROSSSLOT` replies. Dynamic
   membership, migration, and failover remain unsupported.
