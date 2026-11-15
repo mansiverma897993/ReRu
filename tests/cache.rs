@@ -673,3 +673,27 @@ fn large_replies_survive_a_slow_reader() {
     assert!(bytes.starts_with(b"$8388608\r\n"));
     assert!(bytes.ends_with(b"\r\n"));
 }
+
+#[test]
+fn ranges_clamp_very_negative_end_indexes() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"SET", b"range", b"Hello World"]), ok());
+    assert_eq!(c.call(&[b"GETRANGE", b"range", b"0", b"-100"]), bulk(b"H"));
+    assert_eq!(c.call(&[b"SUBSTR", b"range", b"0", b"-100"]), bulk(b"H"));
+    // Both indexes negative and start > end is empty before conversion.
+    assert_eq!(c.call(&[b"GETRANGE", b"range", b"-11", b"-12"]), bulk(b""));
+    assert_eq!(
+        c.call(&[b"GETRANGE", b"range", b"-100", b"-101"]),
+        bulk(b"")
+    );
+    assert_eq!(
+        c.call(&[b"GETRANGE", b"missing-range", b"0", b"-1"]),
+        bulk(b"")
+    );
+    assert_eq!(c.call(&[b"SET", b"empty-range", b""]), ok());
+    assert_eq!(
+        c.call(&[b"GETRANGE", b"empty-range", b"0", b"-1"]),
+        bulk(b"")
+    );
+}

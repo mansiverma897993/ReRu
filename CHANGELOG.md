@@ -28,6 +28,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   `ERR syntax error`. Replicas now skip eviction when `maxmemory` is lowered.
 - `CONFIG SET` is accepted on a replica, and `COPY` with identical keys returns
   the Redis error.
+- `GETRANGE`, `SUBSTR`, `BITCOUNT`, and `BITPOS` clamp very negative end indexes
+  like Redis, and `BITPOS` distinguishes a missing key from an empty string.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
