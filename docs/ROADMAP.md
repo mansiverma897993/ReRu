@@ -26,7 +26,7 @@ from upstream documentation; the project does not translate Redis source.
 - Compare observable behavior against a real Redis server and keep regression
   tests for every command before marking it complete.
 - Track command-name presence separately from verified behavior and subsystem
-  coverage. The current 222/459 metadata entries (48.4%) do not establish
+  coverage. The current 228/459 metadata entries (49.7%) do not establish
   30–40% implementation of Redis.
 - Keep the server usable after every small, tested commit.
 
