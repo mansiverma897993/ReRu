@@ -17,6 +17,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - The AOF writer splits large keys below the replay bulk limit, and snapshots
   with more than 1,000,000 keys decode again.
 - AOF write failures return `-MISCONF` and keep the client connection open.
+- `ZADD ... GT|LT INCR` compares the resulting score instead of the increment.
+- Negative hash-field expiry values are rejected instead of deleting fields.
+- Out-of-range score and weight literals are rejected instead of storing
+  infinity.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
