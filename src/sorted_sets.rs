@@ -223,12 +223,23 @@ pub(crate) fn score_text(score: f64) -> Vec<u8> {
     }
 }
 
+fn infinity_literal(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    unsigned.eq_ignore_ascii_case("inf") || unsigned.eq_ignore_ascii_case("infinity")
+}
+
 fn parse_score(bytes: &[u8]) -> Result<f64, Vec<u8>> {
     let score = std::str::from_utf8(bytes)
         .ok()
         .and_then(|text| text.parse::<f64>().ok());
     match score {
-        Some(score) if !score.is_nan() => Ok(if score == 0.0 { 0.0 } else { score }),
+        // Rust saturates out-of-range literals to infinity; Redis rejects them.
+        Some(score) if !score.is_nan() && (!score.is_infinite() || infinity_literal(bytes)) => {
+            Ok(if score == 0.0 { 0.0 } else { score })
+        }
         _ => Err(protocol::error("value is not a valid float")),
     }
 }
@@ -320,12 +331,7 @@ fn add(command: &[Vec<u8>], store: &Store, increment_only: bool) -> Vec<u8> {
             Some(Value::SortedSet(values)) => values.get(&member),
             _ => None,
         };
-        if (old.is_some() && options.nx)
-            || (old.is_none() && options.xx)
-            || old.is_some_and(|old| options.gt && score <= old || options.lt && score >= old)
-        {
-            continue;
-        }
+        // INCR compares the resulting score, not the raw increment.
         let new_score = if options.incr {
             let value = old.unwrap_or(0.0) + score;
             if value.is_nan() {
@@ -339,6 +345,13 @@ fn add(command: &[Vec<u8>], store: &Store, increment_only: bool) -> Vec<u8> {
         } else {
             score
         };
+        if (old.is_some() && options.nx)
+            || (old.is_none() && options.xx)
+            || old
+                .is_some_and(|old| options.gt && new_score <= old || options.lt && new_score >= old)
+        {
+            continue;
+        }
         let modified = old != Some(new_score);
         if old.is_none() {
             added += 1;

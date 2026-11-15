@@ -797,3 +797,31 @@ fn snapshots_restore_hashes_sets_and_their_expiry_and_deletion() {
     std::fs::remove_file(directory.join("data.bak")).unwrap();
     std::fs::remove_dir(directory).unwrap();
 }
+
+#[test]
+fn negative_hash_field_expiry_is_rejected_without_changes() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"HSET", b"h", b"keep", b"v", b"live", b"w"]),
+        integer(2)
+    );
+    for command in [
+        &[b"HEXPIRE".as_slice(), b"h", b"-1", b"FIELDS", b"1", b"keep"] as &[&[u8]],
+        &[b"HPEXPIRE", b"h", b"-1", b"FIELDS", b"1", b"keep"],
+        &[b"HEXPIREAT", b"h", b"-1", b"FIELDS", b"1", b"keep"],
+        &[b"HPEXPIREAT", b"h", b"-1", b"FIELDS", b"1", b"keep"],
+        &[b"HGETEX", b"h", b"EX", b"-1", b"FIELDS", b"1", b"keep"],
+        &[b"HSETEX", b"h", b"EX", b"-1", b"FIELDS", b"1", b"new", b"x"],
+    ] {
+        assert_eq!(
+            c.call(command),
+            Reply::Error(b"ERR invalid expire time, must be >= 0".to_vec())
+        );
+    }
+    assert_eq!(
+        c.call(&[b"HGETALL", b"h"]),
+        array(vec![bulk(b"keep"), bulk(b"v"), bulk(b"live"), bulk(b"w"),])
+    );
+    assert_eq!(c.call(&[b"HGET", b"h", b"new"]), Reply::Bulk(None));
+}

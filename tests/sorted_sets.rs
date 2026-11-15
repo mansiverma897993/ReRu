@@ -799,3 +799,51 @@ fn score_bounds_and_negative_limit_offsets_match_redis() {
         Reply::Error(b"ERR value is not an integer or out of range".to_vec())
     );
 }
+
+#[test]
+fn zadd_gt_lt_incr_compares_the_resulting_score() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"ZADD", b"z", b"10", b"m"]), integer(1));
+    assert_eq!(
+        c.call(&[b"ZADD", b"z", b"GT", b"INCR", b"5", b"m"]),
+        bulk(b"15")
+    );
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"m"]), bulk(b"15"));
+    assert_eq!(
+        c.call(&[b"ZADD", b"z", b"LT", b"INCR", b"5", b"m"]),
+        Reply::Bulk(None)
+    );
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"m"]), bulk(b"15"));
+    assert_eq!(
+        c.call(&[b"ZADD", b"z", b"LT", b"INCR", b"-10", b"m"]),
+        bulk(b"5")
+    );
+    assert_eq!(
+        c.call(&[b"ZADD", b"z", b"GT", b"INCR", b"-10", b"m"]),
+        Reply::Bulk(None)
+    );
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"m"]), bulk(b"5"));
+}
+
+#[test]
+fn zset_scores_reject_out_of_range_floats_but_accept_infinity_literals() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"ZADD", b"z", b"1", b"m"]), integer(1));
+    for command in [
+        &[b"ZADD".as_slice(), b"z", b"1e400", b"x"] as &[&[u8]],
+        &[b"ZINCRBY", b"z", b"1e400", b"m"],
+        &[b"ZUNIONSTORE", b"d", b"1", b"z", b"WEIGHTS", b"1e400"],
+    ] {
+        assert_eq!(
+            c.call(command),
+            Reply::Error(b"ERR value is not a valid float".to_vec())
+        );
+    }
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"m"]), bulk(b"1"));
+    assert_eq!(c.call(&[b"ZADD", b"z", b"inf", b"a"]), integer(1));
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"a"]), bulk(b"inf"));
+    assert_eq!(c.call(&[b"ZADD", b"z", b"-infinity", b"b"]), integer(1));
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"b"]), bulk(b"-inf"));
+}
