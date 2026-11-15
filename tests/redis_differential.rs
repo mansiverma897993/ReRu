@@ -940,3 +940,84 @@ fn object_encoding_and_refcount_match_redis_8() {
 
     compare_owned(&mut ours, &mut redis, &delete);
 }
+
+#[test]
+fn lcs_matches_redis_8() {
+    let Ok(port) = std::env::var("RERU_REDIS_REFERENCE_PORT") else {
+        return;
+    };
+    let server = common::Server::start();
+    let mut ours = Client::new(&server);
+    let mut redis = Client::on_port(port.parse().unwrap());
+    let keys: Vec<Vec<u8>> = [
+        b"a".as_slice(),
+        b"b",
+        b"tied-a",
+        b"tied-b",
+        b"bin-a",
+        b"bin-b",
+        b"list",
+    ]
+    .iter()
+    .map(|key| [b"reru-diff:lcs:".as_slice(), key].concat())
+    .collect();
+    let mut delete = vec![b"DEL".to_vec()];
+    delete.extend(keys.iter().cloned());
+    compare_owned(&mut ours, &mut redis, &delete);
+
+    for command in [
+        &[b"SET".as_slice(), keys[0].as_slice(), b"ohmytext"] as &[&[u8]],
+        &[b"SET", &keys[1], b"mynewtext"],
+        &[b"SET", &keys[2], b"abc"],
+        &[b"SET", &keys[3], b"bac"],
+        &[b"SET", &keys[4], b"\x00\xffA\x00B"],
+        &[b"SET", &keys[5], b"\x00\xffA\x00C"],
+        &[b"RPUSH", &keys[6], b"x"],
+    ] {
+        compare(&mut ours, &mut redis, command);
+    }
+
+    for command in [
+        &[b"LCS".as_slice(), keys[0].as_slice(), keys[1].as_slice()] as &[&[u8]],
+        &[b"LCS", &keys[0], &keys[1], b"LEN"],
+        &[b"LCS", &keys[0], &keys[1], b"IDX"],
+        &[b"LCS", &keys[0], &keys[1], b"IDX", b"WITHMATCHLEN"],
+        &[
+            b"LCS",
+            &keys[0],
+            &keys[1],
+            b"IDX",
+            b"MINMATCHLEN",
+            b"2",
+            b"WITHMATCHLEN",
+        ],
+        &[b"LCS", &keys[0], &keys[1], b"WITHMATCHLEN"],
+        &[b"LCS", &keys[2], &keys[3], b"IDX"],
+        &[b"LCS", &keys[4], &keys[5], b"IDX"],
+        &[b"LCS", &keys[0], &keys[1], b"LEN", b"IDX"],
+        &[b"LCS", &keys[0], &keys[1], b"FOO"],
+        &[b"LCS", &keys[0], &keys[1], b"IDX", b"MINMATCHLEN"],
+        &[b"LCS", &keys[0], &keys[1], b"IDX", b"MINMATCHLEN", b"x"],
+        &[b"LCS", &keys[0], &keys[1], b"IDX", b"MINMATCHLEN", b"-1"],
+        &[b"LCS", &keys[0], &keys[6]],
+        &[b"LCS", &keys[0], &keys[6], b"FOO"],
+        &[b"LCS", &keys[6], &keys[0], b"LEN", b"IDX"],
+        &[b"LCS", &keys[6], &keys[0], b"IDX", b"MINMATCHLEN", b"x"],
+        &[b"LCS", &keys[0]],
+        &[
+            b"LCS",
+            b"reru-diff:lcs:missing-a",
+            b"reru-diff:lcs:missing-b",
+        ],
+        &[
+            b"LCS",
+            b"reru-diff:lcs:missing-a",
+            b"reru-diff:lcs:missing-b",
+            b"IDX",
+        ],
+    ] {
+        compare(&mut ours, &mut redis, command);
+    }
+
+    compare_owned(&mut ours, &mut redis, &delete);
+}

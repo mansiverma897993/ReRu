@@ -351,7 +351,9 @@ impl Eviction {
             return;
         }
         let name = &command[0];
-        let keys: Vec<&Vec<u8>> = if [
+        let keys: Vec<&Vec<u8>> = if name.eq_ignore_ascii_case(b"LCS") {
+            command[1..command.len().min(3)].iter().collect()
+        } else if [
             b"MGET".as_slice(),
             b"DEL",
             b"UNLINK",

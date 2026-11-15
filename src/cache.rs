@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::{mark_modified, protocol, remove_expired, Entry, Store, Value};
+use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy)]
@@ -23,6 +24,7 @@ enum Command {
     GetRange,
     SubStr,
     SetRange,
+    Lcs,
 }
 
 fn parse(name: &[u8]) -> Option<Command> {
@@ -47,6 +49,7 @@ fn parse(name: &[u8]) -> Option<Command> {
         (b"GETRANGE", GetRange),
         (b"SUBSTR", SubStr),
         (b"SETRANGE", SetRange),
+        (b"LCS", Lcs),
     ]
     .iter()
     .find(|(candidate, _)| name.eq_ignore_ascii_case(candidate))
@@ -72,6 +75,7 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
         | Command::SubStr
         | Command::SetRange => command.len() == 4,
         Command::Decr => command.len() == 2,
+        Command::Lcs => command.len() >= 3,
     })
 }
 
@@ -100,6 +104,201 @@ pub fn is_mutating(command: &[Vec<u8>]) -> bool {
 fn wrong_type() -> Vec<u8> {
     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()
 }
+
+const MAX_LCS_CELLS: usize = 8_000_000;
+
+// (first_start, first_end, second_start, second_end), all inclusive.
+type LcsMatch = (usize, usize, usize, usize);
+
+#[derive(Default)]
+struct LcsOptions {
+    length_only: bool,
+    indexes: bool,
+    min_match_len: usize,
+    with_match_len: bool,
+}
+
+// Redis parses signed integers in their canonical decimal form.
+fn lcs_integer(raw: &[u8]) -> Option<i64> {
+    let text = std::str::from_utf8(raw).ok()?;
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    if text == "0" {
+        return Some(0);
+    }
+    if digits.is_empty() || digits.as_bytes()[0] == b'0' {
+        return None;
+    }
+    if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse::<i64>().ok()
+}
+
+fn lcs_options(command: &[Vec<u8>]) -> Result<LcsOptions, Vec<u8>> {
+    let mut options = LcsOptions::default();
+    let mut index = 3;
+    while index < command.len() {
+        let option = &command[index];
+        if option.eq_ignore_ascii_case(b"LEN") {
+            options.length_only = true;
+            index += 1;
+        } else if option.eq_ignore_ascii_case(b"IDX") {
+            options.indexes = true;
+            index += 1;
+        } else if option.eq_ignore_ascii_case(b"WITHMATCHLEN") {
+            options.with_match_len = true;
+            index += 1;
+        } else if option.eq_ignore_ascii_case(b"MINMATCHLEN") {
+            let Some(raw) = command.get(index + 1) else {
+                return Err(protocol::error("syntax error"));
+            };
+            let value = lcs_integer(raw)
+                .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
+            options.min_match_len = usize::try_from(value.max(0)).unwrap_or(usize::MAX);
+            index += 2;
+        } else {
+            return Err(protocol::error("syntax error"));
+        }
+    }
+    if options.length_only && options.indexes {
+        return Err(protocol::error(
+            "If you want both the length and indexes, please just use IDX.",
+        ));
+    }
+    Ok(options)
+}
+
+fn lcs_string<'a>(entries: &'a HashMap<Vec<u8>, Entry>, key: &[u8]) -> Result<&'a [u8], Vec<u8>> {
+    match entries.get(key).map(|entry| &entry.value) {
+        Some(Value::String(value)) => Ok(value),
+        Some(_) => Err(protocol::error(
+            "The specified keys must contain string values",
+        )),
+        None => Ok(&[]),
+    }
+}
+
+// LEN only needs two rows of the dynamic-programming table.
+fn lcs_length(first: &[u8], second: &[u8]) -> usize {
+    let (short, long) = if second.len() < first.len() {
+        (second, first)
+    } else {
+        (first, second)
+    };
+    let mut previous = vec![0u32; short.len() + 1];
+    let mut current = vec![0u32; short.len() + 1];
+    for &byte in long {
+        for (index, &candidate) in short.iter().enumerate() {
+            current[index + 1] = if candidate == byte {
+                previous[index] + 1
+            } else {
+                previous[index + 1].max(current[index])
+            };
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[short.len()] as usize
+}
+
+// Returns match ranges as (first_start, first_end, second_start, second_end),
+// ordered from the end of both strings to the start, like Redis.
+fn lcs_matches(first: &[u8], second: &[u8]) -> Result<(Vec<LcsMatch>, usize), Vec<u8>> {
+    let cells = (first.len() + 1)
+        .checked_mul(second.len() + 1)
+        .filter(|cells| *cells <= MAX_LCS_CELLS)
+        .ok_or_else(|| protocol::error("LCS keys are too large"))?;
+    let width = second.len() + 1;
+    let mut matrix = vec![0u32; cells];
+    for i in 1..=first.len() {
+        for j in 1..=second.len() {
+            matrix[i * width + j] = if first[i - 1] == second[j - 1] {
+                matrix[(i - 1) * width + j - 1] + 1
+            } else {
+                matrix[(i - 1) * width + j].max(matrix[i * width + j - 1])
+            };
+        }
+    }
+    let total = matrix[first.len() * width + second.len()] as usize;
+    let mut matches: Vec<LcsMatch> = Vec::new();
+    let (mut i, mut j) = (first.len(), second.len());
+    while i > 0 && j > 0 {
+        if first[i - 1] == second[j - 1] {
+            match matches.last_mut() {
+                Some(last) if last.0 == i && last.2 == j => {
+                    last.0 -= 1;
+                    last.2 -= 1;
+                }
+                _ => matches.push((i - 1, i - 1, j - 1, j - 1)),
+            }
+            i -= 1;
+            j -= 1;
+        } else if matrix[(i - 1) * width + j] > matrix[i * width + j - 1] {
+            i -= 1;
+        } else {
+            j -= 1;
+        }
+    }
+    Ok((matches, total))
+}
+
+fn lcs(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
+    let mut entries = store.entries.lock().unwrap();
+    remove_expired(&mut entries, &command[1]);
+    remove_expired(&mut entries, &command[2]);
+    let first = match lcs_string(&entries, &command[1]) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let second = match lcs_string(&entries, &command[2]) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let options = match lcs_options(command) {
+        Ok(options) => options,
+        Err(error) => return error,
+    };
+    let cells = (first.len() + 1)
+        .checked_mul(second.len() + 1)
+        .filter(|cells| *cells <= MAX_LCS_CELLS);
+    if cells.is_none() {
+        return protocol::error("LCS keys are too large");
+    }
+    if options.length_only {
+        return format!(":{}\r\n", lcs_length(first, second)).into_bytes();
+    }
+    let (matches, total) = match lcs_matches(first, second) {
+        Ok(result) => result,
+        Err(error) => return error,
+    };
+    if !options.indexes {
+        let mut bytes = Vec::with_capacity(total);
+        for found in matches.iter().rev() {
+            bytes.extend_from_slice(&first[found.0..=found.1]);
+        }
+        return protocol::bulk(&bytes);
+    }
+    let shown: Vec<_> = matches
+        .iter()
+        .filter(|found| found.1 - found.0 + 1 >= options.min_match_len)
+        .collect();
+    let mut reply = b"*4\r\n".to_vec();
+    reply.extend(protocol::bulk(b"matches"));
+    reply.extend(format!("*{}\r\n", shown.len()).as_bytes());
+    for found in shown {
+        let length = found.1 - found.0 + 1;
+        let fields = if options.with_match_len { 3 } else { 2 };
+        reply.extend(format!("*{fields}\r\n").as_bytes());
+        reply.extend(format!("*2\r\n:{}\r\n:{}\r\n", found.0, found.1).as_bytes());
+        reply.extend(format!("*2\r\n:{}\r\n:{}\r\n", found.2, found.3).as_bytes());
+        if options.with_match_len {
+            reply.extend(format!(":{length}\r\n").as_bytes());
+        }
+    }
+    reply.extend(protocol::bulk(b"len"));
+    reply.extend(format!(":{total}\r\n").as_bytes());
+    reply
+}
+
 fn optional_bulk(value: Option<&[u8]>) -> Vec<u8> {
     value.map_or_else(|| b"$-1\r\n".to_vec(), protocol::bulk)
 }
@@ -569,6 +768,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         Command::IncrByFloat => change_float(command, store),
         Command::GetRange | Command::SubStr => getrange(command, store),
         Command::SetRange => setrange(command, store),
+        Command::Lcs => lcs(command, store),
         Command::MSet => execute_multi(command, store, false),
         Command::MSetNx => execute_multi(command, store, true),
         Command::MGet => {

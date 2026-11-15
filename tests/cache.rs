@@ -311,3 +311,302 @@ fn cache_commands_participate_in_watch_transactions_and_replication() {
         array(vec![Reply::Bulk(None), bulk(b"v!")])
     );
 }
+
+#[test]
+fn lcs_returns_subsequence_length_and_indexes() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"SET", b"first", b"ohmytext"]), ok());
+    assert_eq!(c.call(&[b"SET", b"second", b"mynewtext"]), ok());
+    assert_eq!(c.call(&[b"LCS", b"first", b"second"]), bulk(b"mytext"));
+    assert_eq!(c.call(&[b"LCS", b"first", b"second", b"LEN"]), integer(6));
+    assert_eq!(
+        c.call(&[b"LCS", b"first", b"second", b"IDX"]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![
+                array(vec![
+                    array(vec![integer(4), integer(7)]),
+                    array(vec![integer(5), integer(8)]),
+                ]),
+                array(vec![
+                    array(vec![integer(2), integer(3)]),
+                    array(vec![integer(0), integer(1)]),
+                ]),
+            ]),
+            bulk(b"len"),
+            integer(6),
+        ])
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"first", b"second", b"IDX", b"WITHMATCHLEN"]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![
+                array(vec![
+                    array(vec![integer(4), integer(7)]),
+                    array(vec![integer(5), integer(8)]),
+                    integer(4),
+                ]),
+                array(vec![
+                    array(vec![integer(2), integer(3)]),
+                    array(vec![integer(0), integer(1)]),
+                    integer(2),
+                ]),
+            ]),
+            bulk(b"len"),
+            integer(6),
+        ])
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"first", b"second", b"IDX", b"MINMATCHLEN", b"3"]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![array(vec![
+                array(vec![integer(4), integer(7)]),
+                array(vec![integer(5), integer(8)]),
+            ])]),
+            bulk(b"len"),
+            integer(6),
+        ])
+    );
+    assert_eq!(
+        c.call(&[
+            b"LCS",
+            b"first",
+            b"second",
+            b"IDX",
+            b"MINMATCHLEN",
+            b"3",
+            b"WITHMATCHLEN",
+        ]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![array(vec![
+                array(vec![integer(4), integer(7)]),
+                array(vec![integer(5), integer(8)]),
+                integer(4),
+            ])]),
+            bulk(b"len"),
+            integer(6),
+        ])
+    );
+}
+
+#[test]
+fn lcs_handles_empty_missing_binary_and_tied_keys() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"LCS", b"missing-one", b"missing-two"]), bulk(b""));
+    assert_eq!(
+        c.call(&[b"LCS", b"missing-one", b"missing-two", b"LEN"]),
+        integer(0)
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"missing-one", b"missing-two", b"IDX"]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![]),
+            bulk(b"len"),
+            integer(0)
+        ])
+    );
+    assert_eq!(c.call(&[b"SET", b"present", b"text"]), ok());
+    assert_eq!(c.call(&[b"LCS", b"present", b"missing"]), bulk(b""));
+    assert_eq!(c.call(&[b"SET", b"empty", b""]), ok());
+    assert_eq!(c.call(&[b"LCS", b"empty", b"present"]), bulk(b""));
+
+    assert_eq!(c.call(&[b"SET", b"bin-one", b"\x00\xffA\x00B"]), ok());
+    assert_eq!(c.call(&[b"SET", b"bin-two", b"\x00\xffA\x00C"]), ok());
+    assert_eq!(
+        c.call(&[b"LCS", b"bin-one", b"bin-two"]),
+        bulk(b"\x00\xffA\x00")
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"bin-one", b"bin-two", b"IDX"]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![array(vec![
+                array(vec![integer(0), integer(3)]),
+                array(vec![integer(0), integer(3)]),
+            ])]),
+            bulk(b"len"),
+            integer(4),
+        ])
+    );
+
+    assert_eq!(c.call(&[b"SET", b"tied-one", b"abc"]), ok());
+    assert_eq!(c.call(&[b"SET", b"tied-two", b"bac"]), ok());
+    assert_eq!(c.call(&[b"LCS", b"tied-one", b"tied-two"]), bulk(b"bc"));
+    assert_eq!(
+        c.call(&[b"LCS", b"tied-one", b"tied-two", b"IDX"]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![
+                array(vec![
+                    array(vec![integer(2), integer(2)]),
+                    array(vec![integer(2), integer(2)]),
+                ]),
+                array(vec![
+                    array(vec![integer(1), integer(1)]),
+                    array(vec![integer(0), integer(0)]),
+                ]),
+            ]),
+            bulk(b"len"),
+            integer(2),
+        ])
+    );
+}
+
+#[test]
+fn lcs_rejects_bad_options_and_wrong_types() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"SET", b"lcs-a", b"abc"]), ok());
+    assert_eq!(c.call(&[b"SET", b"lcs-b", b"abc"]), ok());
+    assert_eq!(c.call(&[b"RPUSH", b"lcs-list", b"x"]), integer(1));
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-a", b"lcs-b", b"LEN", b"IDX"]),
+        Reply::Error(b"ERR If you want both the length and indexes, please just use IDX.".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-a", b"lcs-b", b"FOO"]),
+        Reply::Error(b"ERR syntax error".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-a", b"lcs-b", b"IDX", b"MINMATCHLEN"]),
+        Reply::Error(b"ERR syntax error".to_vec())
+    );
+    for invalid in [b"x".as_slice(), b"+2", b"02", b"-0", b""] {
+        assert_eq!(
+            c.call(&[b"LCS", b"lcs-a", b"lcs-b", b"IDX", b"MINMATCHLEN", invalid]),
+            Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+        );
+    }
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-a"]),
+        Reply::Error(b"ERR wrong number of arguments for 'lcs' command".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-a", b"lcs-list"]),
+        Reply::Error(b"ERR The specified keys must contain string values".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-list", b"lcs-a"]),
+        Reply::Error(b"ERR The specified keys must contain string values".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-a", b"lcs-b", b"WITHMATCHLEN"]),
+        bulk(b"abc")
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-a", b"lcs-b", b"MINMATCHLEN", b"2"]),
+        bulk(b"abc")
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-a", b"lcs-b", b"IDX", b"MINMATCHLEN", b"-1"]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![array(vec![
+                array(vec![integer(0), integer(2)]),
+                array(vec![integer(0), integer(2)]),
+            ])]),
+            bulk(b"len"),
+            integer(3),
+        ])
+    );
+}
+
+#[test]
+fn lcs_bounds_index_matrix_memory() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    let value = vec![b'a'; 3000];
+    assert_eq!(c.call(&[b"SET", b"lcs-big-one", &value]), ok());
+    assert_eq!(c.call(&[b"SET", b"lcs-big-two", &value]), ok());
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-big-one", b"lcs-big-two"]),
+        Reply::Error(b"ERR LCS keys are too large".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-big-one", b"lcs-big-two", b"LEN"]),
+        Reply::Error(b"ERR LCS keys are too large".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-big-one", b"lcs-big-two", b"IDX"]),
+        Reply::Error(b"ERR LCS keys are too large".to_vec())
+    );
+    let within = vec![b'a'; 2800];
+    assert_eq!(c.call(&[b"SET", b"lcs-fit-one", &within]), ok());
+    assert_eq!(c.call(&[b"SET", b"lcs-fit-two", &within]), ok());
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-fit-one", b"lcs-fit-two", b"LEN"]),
+        integer(2800)
+    );
+}
+
+#[test]
+fn lcs_checks_types_before_options_and_handles_expiry_and_mult_transactions() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"SET", b"lcs-text", b"value"]), ok());
+    assert_eq!(c.call(&[b"RPUSH", b"lcs-wrong", b"x"]), integer(1));
+    for command in [
+        &[b"LCS".as_slice(), b"lcs-text", b"lcs-wrong", b"FOO"] as &[&[u8]],
+        &[b"LCS", b"lcs-wrong", b"lcs-text", b"LEN", b"IDX"],
+        &[
+            b"LCS",
+            b"lcs-wrong",
+            b"lcs-text",
+            b"IDX",
+            b"MINMATCHLEN",
+            b"x",
+        ],
+    ] {
+        assert_eq!(
+            c.call(command),
+            Reply::Error(b"ERR The specified keys must contain string values".to_vec())
+        );
+    }
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-text", b"lcs-text", b"IDX", b"LEN"]),
+        Reply::Error(b"ERR If you want both the length and indexes, please just use IDX.".to_vec())
+    );
+    assert_eq!(
+        c.call(&[
+            b"LCS",
+            b"lcs-text",
+            b"lcs-text",
+            b"IDX",
+            b"MINMATCHLEN",
+            b"3",
+            b"MINMATCHLEN",
+            b"0",
+        ]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![array(vec![
+                array(vec![integer(0), integer(4)]),
+                array(vec![integer(0), integer(4)]),
+            ])]),
+            bulk(b"len"),
+            integer(5),
+        ])
+    );
+    assert_eq!(
+        c.call(&[b"SET", b"lcs-expiring", b"value", b"PX", b"10"]),
+        ok()
+    );
+    std::thread::sleep(Duration::from_millis(40));
+    assert_eq!(c.call(&[b"LCS", b"lcs-expiring", b"lcs-text"]), bulk(b""));
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-expiring", b"lcs-text", b"LEN"]),
+        integer(0)
+    );
+    assert_eq!(c.call(&[b"MULTI"]), ok());
+    assert_eq!(
+        c.call(&[b"LCS", b"lcs-text", b"lcs-text", b"LEN"]),
+        queued()
+    );
+    assert_eq!(c.call(&[b"EXEC"]), array(vec![integer(5)]));
+}
