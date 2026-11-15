@@ -202,11 +202,7 @@ fn lcs_length(first: &[u8], second: &[u8]) -> usize {
 
 // Returns match ranges as (first_start, first_end, second_start, second_end),
 // ordered from the end of both strings to the start, like Redis.
-fn lcs_matches(first: &[u8], second: &[u8]) -> Result<(Vec<LcsMatch>, usize), Vec<u8>> {
-    let cells = (first.len() + 1)
-        .checked_mul(second.len() + 1)
-        .filter(|cells| *cells <= MAX_LCS_CELLS)
-        .ok_or_else(|| protocol::error("LCS keys are too large"))?;
+fn lcs_matches(first: &[u8], second: &[u8], cells: usize) -> (Vec<LcsMatch>, usize) {
     let width = second.len() + 1;
     let mut matrix = vec![0u32; cells];
     for i in 1..=first.len() {
@@ -238,7 +234,7 @@ fn lcs_matches(first: &[u8], second: &[u8]) -> Result<(Vec<LcsMatch>, usize), Ve
             j -= 1;
         }
     }
-    Ok((matches, total))
+    (matches, total)
 }
 
 fn lcs(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
@@ -257,19 +253,16 @@ fn lcs(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         Ok(options) => options,
         Err(error) => return error,
     };
-    let cells = (first.len() + 1)
+    let Some(cells) = (first.len() + 1)
         .checked_mul(second.len() + 1)
-        .filter(|cells| *cells <= MAX_LCS_CELLS);
-    if cells.is_none() {
+        .filter(|cells| *cells <= MAX_LCS_CELLS)
+    else {
         return protocol::error("LCS keys are too large");
-    }
+    };
     if options.length_only {
         return format!(":{}\r\n", lcs_length(first, second)).into_bytes();
     }
-    let (matches, total) = match lcs_matches(first, second) {
-        Ok(result) => result,
-        Err(error) => return error,
-    };
+    let (matches, total) = lcs_matches(first, second, cells);
     if !options.indexes {
         let mut bytes = Vec::with_capacity(total);
         for found in matches.iter().rev() {

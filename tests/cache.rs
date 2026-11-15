@@ -546,7 +546,7 @@ fn lcs_bounds_index_matrix_memory() {
 }
 
 #[test]
-fn lcs_checks_types_before_options_and_handles_expiry_and_mult_transactions() {
+fn lcs_checks_types_before_options_and_handles_expiry_and_multi_transactions() {
     let server = common::Server::start();
     let mut c = Client::new(&server);
     assert_eq!(c.call(&[b"SET", b"lcs-text", b"value"]), ok());
@@ -572,6 +572,7 @@ fn lcs_checks_types_before_options_and_handles_expiry_and_mult_transactions() {
         c.call(&[b"LCS", b"lcs-text", b"lcs-text", b"IDX", b"LEN"]),
         Reply::Error(b"ERR If you want both the length and indexes, please just use IDX.".to_vec())
     );
+    // The last MINMATCHLEN wins: 6 then 0 keeps the match, 0 then 6 drops it.
     assert_eq!(
         c.call(&[
             b"LCS",
@@ -579,7 +580,7 @@ fn lcs_checks_types_before_options_and_handles_expiry_and_mult_transactions() {
             b"lcs-text",
             b"IDX",
             b"MINMATCHLEN",
-            b"3",
+            b"6",
             b"MINMATCHLEN",
             b"0",
         ]),
@@ -589,6 +590,24 @@ fn lcs_checks_types_before_options_and_handles_expiry_and_mult_transactions() {
                 array(vec![integer(0), integer(4)]),
                 array(vec![integer(0), integer(4)]),
             ])]),
+            bulk(b"len"),
+            integer(5),
+        ])
+    );
+    assert_eq!(
+        c.call(&[
+            b"LCS",
+            b"lcs-text",
+            b"lcs-text",
+            b"IDX",
+            b"MINMATCHLEN",
+            b"0",
+            b"MINMATCHLEN",
+            b"6",
+        ]),
+        array(vec![
+            bulk(b"matches"),
+            array(vec![]),
             bulk(b"len"),
             integer(5),
         ])
