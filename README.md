@@ -99,8 +99,8 @@ print(client.get("greeting"))
 | Static Cluster | Explicit two-node slot map with `CLUSTER KEYSLOT/SHARDS/SLOTS`, `MOVED`, and `CROSSSLOT`; no failover or migration |
 | Auth and operations | Default-user `AUTH`, client limits, runtime memory configuration, partial `INFO` metrics |
 
-**222 of 459 command metadata entries** from Redis 8.10.2 have implementation
-paths: **48.4% command-name coverage**. This counts command names, not complete
+**228 of 459 command metadata entries** from Redis 8.10.2 have implementation
+paths: **49.7% command-name coverage**. This counts command names, not complete
 behavior. Supported options, differences, and tests are listed in the
 [compatibility inventory](docs/COMPATIBILITY.md).
 

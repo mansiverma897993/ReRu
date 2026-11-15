@@ -1,6 +1,6 @@
 # ReRu 0.1.0-alpha.2
 
-14 November 2026 · Prerelease by Mansi Verma
+15 November 2026 · Prerelease by Mansi Verma
 
 ReRu is an experimental Redis-compatible server written primarily in safe Rust.
 This update expands cache behavior, command discovery, and a bounded Cluster
@@ -16,12 +16,15 @@ milestone. It is intended for development and compatibility testing.
   at startup; it does not discover peers or migrate data.
 - `COMMAND`, `COMMAND COUNT`, and `COMMAND INFO` metadata discovery,
   `ZRANGESTORE`, and `CONFIG RESETSTAT`.
+- `LCS` with length and index forms; `OBJECT ENCODING` and `OBJECT REFCOUNT`
+  for key inspection; and opt-in command latency monitoring through
+  `LATENCY LATEST`, `HISTORY`, and `RESET`.
 - Faster list operations through `VecDeque`, plus corrected blocking move
   timeout replies and several sorted-set range edge cases.
 - Expanded project docs, reproducible benchmarks, a RESP parser fuzz target,
   OpenSSF Scorecard, and contributor governance.
 
-The inventory has **222 of 459 Redis 8.10.2 command metadata names (48.4%)**.
+The inventory has **228 of 459 Redis 8.10.2 command metadata names (49.7%)**.
 This is name presence, not a Redis completion percentage. See the
 [compatibility inventory](https://github.com/mansiverma897993/ReRu/blob/v0.1.0-alpha.2/docs/COMPATIBILITY.md)
 for supported behavior and known gaps.
@@ -42,7 +45,7 @@ cargo build --release
 
 On Windows, run `target\release\reru.exe --version`.
 
-The release gate runs formatting, Clippy with warnings denied, 243 Rust tests,
+The release gate runs formatting, Clippy with warnings denied, the Rust tests,
 and a release build. CI runs on Linux, macOS, and Windows and checks Rust 1.88
 compatibility. A two-node Redis 8.10.2 comparison checked slot vectors,
 topology shape, routing errors, and transaction replies.
