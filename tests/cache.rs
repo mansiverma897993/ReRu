@@ -629,3 +629,47 @@ fn lcs_checks_types_before_options_and_handles_expiry_and_multi_transactions() {
     );
     assert_eq!(c.call(&[b"EXEC"]), array(vec![integer(5)]));
 }
+
+#[test]
+fn large_replies_survive_a_slow_reader() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    fn frame(args: &[&[u8]]) -> Vec<u8> {
+        let mut bytes = format!("*{}\r\n", args.len()).into_bytes();
+        for arg in args {
+            bytes.extend(format!("${}\r\n", arg.len()).as_bytes());
+            bytes.extend(*arg);
+            bytes.extend(b"\r\n");
+        }
+        bytes
+    }
+
+    let server = common::Server::start();
+    let mut socket = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let value = vec![b'v'; 8 * 1024 * 1024];
+    socket
+        .write_all(&frame(&[b"SET", b"big-slow", &value]))
+        .unwrap();
+    let mut reply = [0u8; 16];
+    let read = socket.read(&mut reply).unwrap();
+    assert_eq!(&reply[..read], b"+OK\r\n");
+
+    socket.write_all(&frame(&[b"GET", b"big-slow"])).unwrap();
+    std::thread::sleep(Duration::from_millis(1200));
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 65536];
+    while bytes.len() < value.len() + 12 {
+        match socket.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+            Err(error) => panic!("read failed after {} bytes: {error}", bytes.len()),
+        }
+    }
+    assert_eq!(bytes.len(), value.len() + 12);
+    assert!(bytes.starts_with(b"$8388608\r\n"));
+    assert!(bytes.ends_with(b"\r\n"));
+}
