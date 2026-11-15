@@ -143,3 +143,51 @@ fn disconnect_releases_subscriptions() {
     }
     assert_eq!(publisher.call(&[b"PUBLISH", b"gone", b"x"]), integer(0));
 }
+
+fn command(args: &[&[u8]]) -> Vec<u8> {
+    let mut bytes = format!("*{}\r\n", args.len()).into_bytes();
+    for arg in args {
+        bytes.extend(format!("${}\r\n", arg.len()).as_bytes());
+        bytes.extend(*arg);
+        bytes.extend(b"\r\n");
+    }
+    bytes
+}
+
+#[test]
+fn a_stalled_subscriber_does_not_abort_the_server() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let server = Server::start();
+    let mut stalled = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    stalled
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stalled
+        .write_all(&command(&[b"SUBSCRIBE", b"stalled"]))
+        .unwrap();
+    let mut ack = [0u8; 64];
+    assert!(stalled.read(&mut ack).unwrap() > 0);
+
+    // This publish cannot drain into the stalled socket, so the hub drops it.
+    let mut publisher = Client::new(&server);
+    let payload = vec![b'x'; 16 * 1024 * 1024];
+    assert_eq!(
+        publisher.call(&[b"PUBLISH", b"stalled", &payload]),
+        integer(0)
+    );
+
+    // The removed subscription must not panic in SUBSCRIBE or in Drop.
+    let _ = stalled.write_all(&command(&[b"SUBSCRIBE", b"other"]));
+    let mut sink = [0u8; 65536];
+    loop {
+        match stalled.read(&mut sink) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => continue,
+        }
+    }
+
+    let mut survivor = Client::new(&server);
+    assert_eq!(survivor.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
+}

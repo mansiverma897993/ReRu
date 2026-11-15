@@ -19,6 +19,13 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `LCS` with `LEN`, `IDX`, `MINMATCHLEN`, and `WITHMATCHLEN`. All forms are
   capped at 8,000,000 table cells.
 
+### Fixed
+
+- A Pub/Sub subscriber removed after a failed publish no longer aborts the
+  server when it sends another subscription command.
+- Large replies are retried until the client drains them instead of being
+  truncated by the 500 ms socket write timeout.
+
 ## [0.1.0-alpha.2] - 2026-11-14
 
 ### Added
