@@ -67,6 +67,9 @@ uses the same post-filter limit as `COUNT`; Redis may stop early. The
 WATCH tracks writes even if the resulting value is unchanged, missing-key
 creation/deletion, and natural expiry. EXEC and DISCARD clear the connection's
 watches; UNWATCH clears them outside MULTI. Inside MULTI, UNWATCH is queued.
+Queue-time arity validation only rejects fixed-arity commands; variadic
+commands such as PING, INFO, FLUSHDB, and FLUSHALL queue and report their
+argument error inside the EXEC array.
 Disconnects release registrations. Replica updates identify changed keys;
 unrelated writes preserve watches, while a full resync invalidates all watches.
 
@@ -197,6 +200,8 @@ Redis's error text, and a rejected count does not touch the key. `BLMOVE` and
 `MULTI`, where they run without blocking.
 
 `COPY` supports same-database copy and `REPLACE`; `DB` selection is pending.
+Copying a key onto itself returns `ERR source and destination objects are the
+same`.
 `FLUSHDB` and `FLUSHALL` both clear ReRu's only database. `ASYNC` is accepted
 but deletion is currently synchronous; flush invalidates WATCH and is persisted
 through ReRu snapshots/AOF.
@@ -378,6 +383,7 @@ Behavior references: [XREADGROUP](https://redis.io/docs/latest/commands/xreadgro
   `--snapshot` or `--replicaof` yet. Without manual compaction, files grow with writes.
 - Optional `--replicaof HOST PORT` provides read-only ReRu replicas, initial
   synchronization, subsequent full dataset snapshots and reconnection.
+  `CONFIG SET` remains available on a replica; dataset writes do not.
 - Replication uses custom `RERUREP1` frames with changed-key metadata. Use matching
   builds on both ends. Redis PSYNC, partial resynchronization, acknowledgments,
   WAIT and failover are not implemented.

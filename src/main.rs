@@ -1128,14 +1128,10 @@ fn execute_command(
     } else if command[0].eq_ignore_ascii_case(b"FLUSHDB")
         || command[0].eq_ignore_ascii_case(b"FLUSHALL")
     {
-        if command.len() > 2 {
-            protocol::error(&format!(
-                "wrong number of arguments for '{}' command",
-                String::from_utf8_lossy(&command[0]).to_ascii_lowercase()
-            ))
-        } else if command.len() == 2
-            && !command[1].eq_ignore_ascii_case(b"SYNC")
-            && !command[1].eq_ignore_ascii_case(b"ASYNC")
+        if command.len() > 2
+            || (command.len() == 2
+                && !command[1].eq_ignore_ascii_case(b"SYNC")
+                && !command[1].eq_ignore_ascii_case(b"ASYNC"))
         {
             protocol::error("syntax error")
         } else {
@@ -1859,7 +1855,10 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             error
         } else if store.read_only
             && is_mutating(&command)
-            && !command[0].eq_ignore_ascii_case(b"CONFIG")
+            && !(command[0].eq_ignore_ascii_case(b"CONFIG")
+                && command
+                    .get(1)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(b"SET")))
         {
             if transaction.is_some() {
                 transaction_error = true;
@@ -1907,13 +1906,10 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             }
         } else if command[0].eq_ignore_ascii_case(b"EXEC") {
             if command.len() != 1 {
-                if transaction.take().is_some() {
-                    transaction_error = false;
-                    watches.clear();
-                    b"-EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command\r\n".to_vec()
-                } else {
-                    protocol::error("wrong number of arguments for 'exec' command")
-                }
+                transaction.take();
+                transaction_error = false;
+                watches.clear();
+                b"-EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command\r\n".to_vec()
             } else if let Some(queued) = transaction.take() {
                 if transaction_error {
                     transaction_error = false;

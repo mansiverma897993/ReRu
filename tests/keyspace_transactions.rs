@@ -3,6 +3,10 @@
 mod client;
 mod common;
 use client::{array, integer, ok, queued, Client, Reply};
+
+fn bulk(value: &[u8]) -> Reply {
+    Reply::Bulk(Some(value.to_vec()))
+}
 use std::time::Duration;
 #[test]
 fn key_existence_and_deletion_count_duplicates_correctly() {
@@ -350,14 +354,39 @@ fn transaction_control_arity_errors_abort_and_variadic_commands_queue() {
     );
     assert_eq!(client.call(&[b"EXISTS", b"t1"]), integer(0));
 
-    for command in [
-        &[b"DISCARD".as_slice(), b"extra"] as &[&[u8]],
-        &[b"MULTI", b"extra"],
-        &[b"WATCH"],
+    // EXEC with a bad arity also aborts without MULTI and clears WATCH.
+    assert_eq!(client.call(&[b"SET", b"watched", b"old"]), ok());
+    assert_eq!(client.call(&[b"WATCH", b"watched"]), ok());
+    assert_eq!(
+        client.call(&[b"EXEC", b"extra"]),
+        Reply::Error(
+            b"EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command"
+                .to_vec()
+        )
+    );
+    let mut writer = Client::new(&server);
+    assert_eq!(writer.call(&[b"SET", b"watched", b"new"]), ok());
+    assert_eq!(client.call(&[b"MULTI"]), ok());
+    assert_eq!(client.call(&[b"GET", b"watched"]), queued());
+    assert_eq!(client.call(&[b"EXEC"]), array(vec![bulk(b"new")]));
+
+    for (command, message) in [
+        (
+            &[b"DISCARD".as_slice(), b"extra"] as &[&[u8]],
+            b"ERR wrong number of arguments for 'discard' command".as_slice(),
+        ),
+        (
+            &[b"MULTI", b"extra"],
+            b"ERR wrong number of arguments for 'multi' command",
+        ),
+        (
+            &[b"WATCH"],
+            b"ERR wrong number of arguments for 'watch' command",
+        ),
     ] {
         assert_eq!(client.call(&[b"MULTI"]), ok());
         assert_eq!(client.call(&[b"SET", b"t2", b"v"]), queued());
-        assert!(matches!(client.call(command), Reply::Error(_)));
+        assert_eq!(client.call(command), Reply::Error(message.to_vec()));
         assert_eq!(
             client.call(&[b"EXEC"]),
             Reply::Error(b"EXECABORT Transaction discarded because of previous errors.".to_vec())
@@ -365,22 +394,30 @@ fn transaction_control_arity_errors_abort_and_variadic_commands_queue() {
         assert_eq!(client.call(&[b"EXISTS", b"t2"]), integer(0));
     }
 
+    assert_eq!(client.call(&[b"INFO", b"a", b"b"]), bulk(b""));
+    let Reply::Bulk(Some(sections)) = client.call(&[b"INFO", b"memory", b"stats"]) else {
+        panic!("INFO must return a bulk string")
+    };
+    let sections = String::from_utf8(sections).unwrap();
+    assert!(sections.contains("# Memory"));
+    assert!(sections.contains("# Stats"));
     assert_eq!(client.call(&[b"MULTI"]), ok());
     assert_eq!(client.call(&[b"SET", b"t3", b"v"]), queued());
     assert_eq!(client.call(&[b"PING", b"a", b"b"]), queued());
     assert_eq!(client.call(&[b"INFO", b"a", b"b"]), queued());
     assert_eq!(client.call(&[b"FLUSHDB", b"ASYNC", b"ASYNC"]), queued());
+    assert_eq!(client.call(&[b"FLUSHALL", b"a", b"b"]), queued());
     let Reply::Array(Some(replies)) = client.call(&[b"EXEC"]) else {
         panic!("EXEC must return an array")
     };
-    assert_eq!(replies.len(), 4);
+    assert_eq!(replies.len(), 5);
     assert_eq!(replies[0], ok());
-    assert!(
-        matches!(&replies[1], Reply::Error(message) if message.starts_with(b"ERR wrong number of arguments for 'ping'"))
+    assert_eq!(
+        replies[1],
+        Reply::Error(b"ERR wrong number of arguments for 'ping' command".to_vec())
     );
-    assert!(matches!(&replies[2], Reply::Bulk(_) | Reply::Error(_)));
-    assert!(
-        matches!(&replies[3], Reply::Error(message) if message.starts_with(b"ERR wrong number of arguments for 'flushdb'"))
-    );
+    assert_eq!(replies[2], bulk(b""));
+    assert_eq!(replies[3], Reply::Error(b"ERR syntax error".to_vec()));
+    assert_eq!(replies[4], Reply::Error(b"ERR syntax error".to_vec()));
     assert_eq!(client.call(&[b"EXISTS", b"t3"]), integer(1));
 }

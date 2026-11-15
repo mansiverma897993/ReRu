@@ -549,4 +549,32 @@ fn copy_rejects_identical_source_and_destination() {
     }
     assert_eq!(client.call(&[b"GET", b"same"]), bulk(b"value"));
     assert_eq!(client.call(&[b"RENAME", b"same", b"same"]), ok());
+
+    // The same-object error precedes the existence check.
+    assert_eq!(
+        client.call(&[b"COPY", b"absent", b"absent"]),
+        Reply::Error(b"ERR source and destination objects are the same".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"SET", b"source", b"value", b"PX", b"90000"]),
+        ok()
+    );
+    assert_eq!(client.call(&[b"SET", b"destination", b"old"]), ok());
+    assert_eq!(
+        client.call(&[b"COPY", b"source", b"destination"]),
+        integer(0)
+    );
+    assert_eq!(
+        client.call(&[b"COPY", b"source", b"destination", b"REPLACE"]),
+        integer(1)
+    );
+    assert_eq!(
+        client.call(&[b"COPY", b"source", b"destination", b"REPLACE", b"REPLACE"]),
+        integer(1)
+    );
+    assert!(matches!(
+        client.call(&[b"COPY", b"source", b"destination", b"REPLACE", b"extra"]),
+        Reply::Error(message) if message == b"ERR syntax error"
+    ));
+    assert!(matches!(client.call(&[b"PTTL", b"destination"]), Reply::Integer(ttl) if ttl > 0));
 }

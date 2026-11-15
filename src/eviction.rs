@@ -131,12 +131,16 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
 }
 
 pub fn info(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
-    if command.len() > 2 {
-        return protocol::error("wrong number of arguments for 'info' command");
-    }
-    let section = command.get(1).map(Vec::as_slice);
-    let memory = section.is_none_or(|name| name.eq_ignore_ascii_case(b"memory"));
-    let stats = section.is_none_or(|name| name.eq_ignore_ascii_case(b"stats"));
+    // Redis 7 accepts INFO <section> [<section> ...].
+    let sections = &command[1..];
+    let wanted = |name: &[u8]| {
+        sections.is_empty()
+            || sections
+                .iter()
+                .any(|section| section.eq_ignore_ascii_case(name))
+    };
+    let memory = wanted(b"memory");
+    let stats = wanted(b"stats");
     let mut report = String::new();
     if memory {
         let settings = store.eviction.settings();
@@ -165,10 +169,10 @@ pub fn info(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         ));
         report.push_str(&store.clients.stats());
     }
-    if section.is_none_or(|name| name.eq_ignore_ascii_case(b"clients")) {
+    if wanted(b"clients") {
         report.push_str(&store.clients.info());
     }
-    if section.is_none_or(|name| name.eq_ignore_ascii_case(b"persistence")) {
+    if wanted(b"persistence") {
         report.push_str(&crate::rdb::info(store));
         report.push_str(&crate::aof::info(store));
     }
