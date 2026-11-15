@@ -12,7 +12,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 - Command latency monitoring with the `latency-monitor-threshold` runtime
   setting and `LATENCY LATEST`, `HISTORY`, and `RESET`. Monitoring is disabled
-  by default, and at most 160 recent command samples are kept.
+  by default, blocking wait time is excluded, same-second spikes merge by
+  maximum latency, and at most 160 recent command samples are kept.
 
 ## [0.1.0-alpha.2] - 2026-11-14
 

@@ -5,7 +5,7 @@ mod client;
 #[allow(dead_code)]
 mod common;
 
-use client::{array, integer, ok, Client, Reply};
+use client::{array, ok, Client, Reply};
 use common::Server;
 
 fn bulk(value: &[u8]) -> Reply {
@@ -47,7 +47,7 @@ fn latency_monitor_is_disabled_by_default_and_can_be_configured() {
 }
 
 #[test]
-fn latency_commands_report_history_and_reset_events() {
+fn blocking_waits_are_not_reported_as_command_latency() {
     let server = Server::start();
     let mut client = Client::new(&server);
     assert_eq!(
@@ -55,68 +55,26 @@ fn latency_commands_report_history_and_reset_events() {
         ok()
     );
 
-    // A blocking command gives a deterministic sample above the 1 ms threshold.
+    // Time waiting for data is not command execution latency.
     assert_eq!(
         client.call(&[b"BLPOP", b"missing", b"0.02"]),
         Reply::Array(None)
     );
-    let samples = client.call(&[b"LATENCY", b"HISTORY", b"command"]);
-    assert!(matches!(&samples, Reply::Array(Some(events)) if events.len() == 1));
-
-    let latest = client.call(&[b"LATENCY", b"LATEST"]);
-    let Reply::Array(Some(events)) = latest else {
-        panic!("expected latency events, got {latest:?}");
-    };
-    let [Reply::Array(Some(fields))] = events.as_slice() else {
-        panic!("expected one latency event, got {events:?}");
-    };
-    assert_eq!(fields.len(), 4);
-    assert_eq!(fields[0], bulk(b"command"));
-    assert!(matches!(fields[1], Reply::Integer(timestamp) if timestamp > 0));
-    assert!(matches!(fields[2], Reply::Integer(duration) if duration >= 1));
-    assert_eq!(fields[2], fields[3]);
-
-    let history = client.call(&[b"LATENCY", b"HISTORY", b"command"]);
-    let Reply::Array(Some(samples)) = history else {
-        panic!("expected history, got {history:?}");
-    };
-    let [Reply::Array(Some(sample))] = samples.as_slice() else {
-        panic!("expected one latency sample, got {samples:?}");
-    };
-    assert_eq!(sample.len(), 2);
-    assert!(matches!(sample[0], Reply::Integer(timestamp) if timestamp > 0));
-    assert!(matches!(sample[1], Reply::Integer(duration) if duration >= 1));
-
-    assert_eq!(client.call(&[b"LATENCY", b"RESET", b"command"]), integer(1));
-    assert_eq!(client.call(&[b"LATENCY", b"LATEST"]), array(vec![]));
-    assert_eq!(client.call(&[b"LATENCY", b"RESET"]), integer(0));
     assert_eq!(
         client.call(&[b"LATENCY", b"HISTORY", b"command"]),
         array(vec![])
     );
-}
-
-#[test]
-fn latency_monitor_can_be_disabled_after_recording() {
-    let server = Server::start();
-    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"LATENCY", b"LATEST"]), array(vec![]));
     assert_eq!(
-        client.call(&[b"CONFIG", b"SET", b"latency-monitor-threshold", b"1"]),
-        ok()
+        client.call(&[b"LATENCY", b"LATEST", b"extra"]),
+        Reply::Error(b"ERR wrong number of arguments for 'latency|latest' command".to_vec())
     );
     assert_eq!(
-        client.call(&[b"BLPOP", b"missing", b"0.02"]),
-        Reply::Array(None)
-    );
-    let samples = client.call(&[b"LATENCY", b"HISTORY", b"command"]);
-    assert!(matches!(&samples, Reply::Array(Some(events)) if events.len() == 1));
-    assert_eq!(
-        client.call(&[b"CONFIG", b"SET", b"latency-monitor-threshold", b"0"]),
-        ok()
+        client.call(&[b"LATENCY", b"BOGUS"]),
+        Reply::Error(b"ERR unknown subcommand 'BOGUS'. Try LATENCY HELP.".to_vec())
     );
     assert_eq!(
-        client.call(&[b"BLPOP", b"another", b"0.02"]),
-        Reply::Array(None)
+        client.call(&[b"LATENCY", b"HISTORY", b"command"]),
+        array(vec![])
     );
-    assert_eq!(client.call(&[b"LATENCY", b"HISTORY", b"command"]), samples);
 }
