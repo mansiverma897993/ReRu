@@ -39,6 +39,12 @@ impl Client {
         self.read()
     }
 
+    #[allow(dead_code)]
+    pub fn call_many(&mut self, args: &[Vec<u8>]) -> Reply {
+        let borrowed: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
+        self.call(&borrowed)
+    }
+
     pub fn read(&mut self) -> Reply {
         let mut line = Vec::new();
         self.0.read_until(b'\n', &mut line).unwrap();

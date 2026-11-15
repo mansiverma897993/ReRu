@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::{mark_modified, protocol, pubsub::glob_matches, remove_expired, Store, Value};
 use std::collections::hash_map::RandomState;
+use std::collections::VecDeque;
 use std::hash::BuildHasher;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,6 +19,9 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
         Some(command.len() == 2)
     } else if name.eq_ignore_ascii_case(b"RANDOMKEY") {
         Some(command.len() == 1)
+    } else if name.eq_ignore_ascii_case(b"OBJECT") {
+        // queue_error and execute validate OBJECT subcommands in full.
+        Some(true)
     } else if name.eq_ignore_ascii_case(b"SCAN") {
         Some(command.len() >= 2 && command.len().is_multiple_of(2))
     } else if name.eq_ignore_ascii_case(b"RENAME") || name.eq_ignore_ascii_case(b"RENAMENX") {
@@ -53,6 +57,175 @@ fn kind(value: &Value) -> &'static [u8] {
         Value::Hash(_) => b"hash",
         Value::Set(_) => b"set",
         Value::SortedSet(_) => b"zset",
+    }
+}
+
+// Thresholds follow the Redis 8 defaults: embstr 44 bytes, listpacks of 128
+// entries for sets and sorted sets, 512 entries for hashes, 64-byte members,
+// an 8 KB list listpack, and intsets of 512 integers.
+const MAX_EMBSTR_LEN: usize = 44;
+const MAX_LISTPACK_ENTRIES: usize = 128;
+const MAX_HASH_LISTPACK_ENTRIES: usize = 512;
+const MAX_LISTPACK_VALUE_LEN: usize = 64;
+const MAX_LISTPACK_LIST_BYTES: usize = 8 * 1024;
+const MAX_INTSET_ENTRIES: usize = 512;
+
+// Approximate the listpack cost of one element: string header, payload, and
+// back-length. Integer elements are charged as strings.
+fn listpack_entry_bytes(length: usize) -> usize {
+    let header = if length <= 63 {
+        1usize
+    } else if length < 4096 {
+        2
+    } else {
+        5
+    };
+    let body = header.saturating_add(length);
+    let back_length = if body <= 127 {
+        1
+    } else if body <= 16_383 {
+        2
+    } else if body <= 2_097_151 {
+        3
+    } else {
+        4
+    };
+    body.saturating_add(back_length)
+}
+
+fn list_fits_one_listpack(items: &VecDeque<Vec<u8>>) -> bool {
+    // Six header bytes and one terminator byte frame the entries.
+    let mut bytes = 7usize;
+    for item in items {
+        bytes = bytes.saturating_add(listpack_entry_bytes(item.len()));
+        if bytes > MAX_LISTPACK_LIST_BYTES {
+            return false;
+        }
+    }
+    true
+}
+
+fn integer_encoded(value: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(value) else {
+        return false;
+    };
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    let canonical = text == "0"
+        || digits
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
+            && digits.bytes().all(|byte| byte.is_ascii_digit());
+    canonical && text.parse::<i64>().is_ok()
+}
+
+// ReRu stores one representation per value type. The reply reports the encoding
+// Redis 8 would choose for the same value with default configuration.
+fn encoding(value: &Value) -> &'static [u8] {
+    match value {
+        Value::String(bytes) => {
+            if integer_encoded(bytes) {
+                b"int"
+            } else if bytes.len() <= MAX_EMBSTR_LEN {
+                b"embstr"
+            } else {
+                b"raw"
+            }
+        }
+        Value::List(items) => {
+            if list_fits_one_listpack(items) {
+                b"listpack"
+            } else {
+                b"quicklist"
+            }
+        }
+        Value::Hash(fields) => {
+            let listpack = fields.len() <= MAX_HASH_LISTPACK_ENTRIES
+                && fields.iter().all(|(field, value)| {
+                    field.len() <= MAX_LISTPACK_VALUE_LEN && value.len() <= MAX_LISTPACK_VALUE_LEN
+                });
+            if !listpack {
+                b"hashtable"
+            } else if fields.deadlines().is_empty() {
+                b"listpack"
+            } else {
+                // Redis keeps a hash with field deadlines in listpackex.
+                b"listpackex"
+            }
+        }
+        Value::Set(members) => {
+            if members.len() <= MAX_INTSET_ENTRIES
+                && members.iter().all(|member| integer_encoded(member))
+            {
+                b"intset"
+            } else if members.len() <= MAX_LISTPACK_ENTRIES
+                && members
+                    .iter()
+                    .all(|member| member.len() <= MAX_LISTPACK_VALUE_LEN)
+            {
+                b"listpack"
+            } else {
+                b"hashtable"
+            }
+        }
+        Value::SortedSet(members) => {
+            let listpack = members.len() <= MAX_LISTPACK_ENTRIES
+                && members
+                    .entries()
+                    .all(|(member, _)| member.len() <= MAX_LISTPACK_VALUE_LEN);
+            if listpack {
+                b"listpack"
+            } else {
+                b"skiplist"
+            }
+        }
+        Value::Stream(_) => b"stream",
+    }
+}
+
+fn object_error(command: &[Vec<u8>]) -> Option<Vec<u8>> {
+    let Some(subcommand) = command.get(1) else {
+        return Some(protocol::error(
+            "wrong number of arguments for 'object' command",
+        ));
+    };
+    if !subcommand.eq_ignore_ascii_case(b"ENCODING")
+        && !subcommand.eq_ignore_ascii_case(b"REFCOUNT")
+    {
+        return Some(protocol::unknown_subcommand("OBJECT", subcommand));
+    }
+    if command.len() != 3 {
+        return Some(protocol::error(&format!(
+            "wrong number of arguments for 'object|{}' command",
+            String::from_utf8_lossy(subcommand).to_ascii_lowercase()
+        )));
+    }
+    None
+}
+
+/// Validate OBJECT when it is queued, so MULTI aborts like Redis does.
+pub fn queue_error(command: &[Vec<u8>]) -> Option<Vec<u8>> {
+    command[0]
+        .eq_ignore_ascii_case(b"OBJECT")
+        .then(|| object_error(command))
+        .flatten()
+}
+
+fn object(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
+    if let Some(error) = object_error(command) {
+        return error;
+    }
+    let encoding_requested = command[1].eq_ignore_ascii_case(b"ENCODING");
+    let mut entries = store.entries.lock().unwrap();
+    remove_expired(&mut entries, &command[2]);
+    let Some(entry) = entries.get(&command[2]) else {
+        return b"$-1\r\n".to_vec();
+    };
+    if encoding_requested {
+        protocol::bulk(encoding(&entry.value))
+    } else {
+        // Values are never shared between keys, so every key owns one reference.
+        b":1\r\n".to_vec()
     }
 }
 
@@ -184,6 +357,9 @@ fn expiry_arguments(command: &[Vec<u8>]) -> Result<(i64, ExpiryConditions), Vec<
 }
 
 pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
+    if command[0].eq_ignore_ascii_case(b"OBJECT") {
+        return Some(object(command, store));
+    }
     let valid = valid_arity(command)?;
     let name = &command[0];
     if !valid {

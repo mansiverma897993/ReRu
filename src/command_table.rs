@@ -116,6 +116,8 @@ const COMMANDS: &[&str] = &[
     "mset",
     "msetnx",
     "multi",
+    "object|encoding",
+    "object|refcount",
     "pfadd",
     "pfcount",
     "pfmerge",
@@ -252,7 +254,7 @@ fn metadata(name: &str) -> Metadata {
         | "dump" | "xlen" | "zcard" | "expiretime" | "pexpiretime" | "keys" => 2,
         "client|setname" | "append" | "setnx" | "getset" | "decrby" | "incrby" | "incrbyfloat"
         | "latency|history" | "hget" | "hstrlen" | "sismember" | "zscore" | "rpoplpush"
-        | "rename" | "renamenx" | "lindex" | "hexists" => 3,
+        | "rename" | "renamenx" | "lindex" | "hexists" | "object|encoding" | "object|refcount" => 3,
         "httl" | "hpttl" | "hexpiretime" | "hpexpiretime" | "hpersist" | "hgetex" => -5,
         "config|resetstat" => 2,
         "client|setinfo" | "hincrby" | "hincrbyfloat" | "hsetnx" | "smove" | "lset" | "lrem"
@@ -264,7 +266,7 @@ fn metadata(name: &str) -> Metadata {
         "restore" => -4,
         "zincrby" => 4,
         "client" | "config" | "acl" | "xgroup" | "xinfo" | "cluster" | "latency"
-        | "latency|reset" => -2,
+        | "latency|reset" | "object" => -2,
         "config|get" => -3,
         "config|set" => -4,
         "acl|whoami" => 2,
@@ -319,12 +321,12 @@ fn metadata(name: &str) -> Metadata {
         | "bgsave" | "client" | "client|getname" | "client|id" | "client|info"
         | "client|setinfo" | "client|setname" | "config" | "config|get" | "config|resetstat"
         | "config|set" | "discard" | "dbsize" | "echo" | "exec" | "flushall" | "flushdb"
-        | "hello" | "info" | "keys" | "lastsave" | "multi" | "ping" | "pubsub" | "punsubscribe"
-        | "psubscribe" | "publish" | "quit" | "randomkey" | "reset" | "save" | "scan"
-        | "select" | "subscribe" | "time" | "unwatch" | "unsubscribe" | "xread" | "xreadgroup"
-        | "latency" | "latency|history" | "latency|latest" | "latency|reset" | "xgroup"
-        | "xinfo" | "lmpop" | "blmpop" | "zmpop" | "bzmpop" | "sintercard" | "zintercard"
-        | "zdiff" | "zinter" | "zunion" => (0, 0, 0),
+        | "hello" | "info" | "keys" | "lastsave" | "multi" | "object" | "ping" | "pubsub"
+        | "punsubscribe" | "psubscribe" | "publish" | "quit" | "randomkey" | "reset" | "save"
+        | "scan" | "select" | "subscribe" | "time" | "unwatch" | "unsubscribe" | "xread"
+        | "xreadgroup" | "latency" | "latency|history" | "latency|latest" | "latency|reset"
+        | "xgroup" | "xinfo" | "lmpop" | "blmpop" | "zmpop" | "bzmpop" | "sintercard"
+        | "zintercard" | "zdiff" | "zinter" | "zunion" => (0, 0, 0),
         "copy" | "rename" | "renamenx" | "smove" | "lmove" | "blmove" | "rpoplpush"
         | "brpoplpush" | "zrangestore" => (1, 2, 1),
         "geosearchstore" => (1, 2, 1),
@@ -342,7 +344,9 @@ fn metadata(name: &str) -> Metadata {
         | "xgroup|delconsumer"
         | "xinfo|groups"
         | "xinfo|consumers"
-        | "xinfo|stream" => (2, 2, 1),
+        | "xinfo|stream"
+        | "object|encoding"
+        | "object|refcount" => (2, 2, 1),
         _ => (1, 1, 1),
     };
 
@@ -429,7 +433,7 @@ fn lookup(name: &[u8]) -> Option<String> {
 /// Commands with dynamic key positions need their own argument parser.
 pub(crate) fn key_indices(command: &[Vec<u8>]) -> Option<Vec<usize>> {
     let root = String::from_utf8_lossy(command.first()?).to_ascii_lowercase();
-    let name = if matches!(root.as_str(), "xgroup" | "xinfo" | "cluster") {
+    let name = if matches!(root.as_str(), "xgroup" | "xinfo" | "cluster" | "object") {
         let subcommand = String::from_utf8_lossy(command.get(1)?).to_ascii_lowercase();
         format!("{root}|{subcommand}")
     } else {
