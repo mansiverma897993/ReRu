@@ -5,6 +5,43 @@ use std::io::{self, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+const REPLAY_BUDGET: Duration = Duration::from_secs(30);
+const PUBLISH_BUDGET: Duration = Duration::from_secs(1);
+
+// A socket write timeout reports WouldBlock after a partial write. Retry the
+// remaining bytes until the budget expires so replies are never truncated.
+fn write_frame(writer: &mut TcpStream, bytes: &[u8], budget: Duration) -> io::Result<()> {
+    let deadline = Instant::now() + budget;
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match writer.write(&bytes[offset..]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "write returned zero bytes",
+                ))
+            }
+            Ok(written) => offset += written,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) =>
+            {
+                if Instant::now() >= deadline {
+                    return Err(error);
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
 
 type Writer = Arc<Mutex<TcpStream>>;
 
@@ -27,7 +64,11 @@ pub struct ClientSubscription<'a> {
 
 impl Drop for ClientSubscription<'_> {
     fn drop(&mut self) {
-        self.hub.listeners.lock().unwrap().remove(&self.id);
+        // A peer dropped by a failed publish may already have removed this
+        // entry, and a poisoned lock must not panic during unwinding.
+        if let Ok(mut listeners) = self.hub.listeners.lock() {
+            listeners.remove(&self.id);
+        }
     }
 }
 
@@ -76,7 +117,14 @@ impl ClientSubscription<'_> {
             b"unsubscribe".as_slice()
         };
         let mut listeners = self.hub.listeners.lock().unwrap();
-        let listener = listeners.get_mut(&self.id).unwrap();
+        let Some(listener) = listeners.get_mut(&self.id) else {
+            // A failed publish removed this subscriber. Close the connection
+            // instead of unwrapping an entry that no longer exists.
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "subscriber disconnected",
+            ));
+        };
         let items: Vec<Option<Vec<u8>>> = if !adding && command.len() == 1 {
             let subscriptions = if pattern {
                 &listener.patterns
@@ -107,11 +155,9 @@ impl ClientSubscription<'_> {
                 }
             }
             let count = listener.channels.len() + listener.patterns.len();
-            listener.writer.lock().unwrap().write_all(&acknowledgement(
-                kind,
-                item.as_deref(),
-                count,
-            ))?;
+            let frame = acknowledgement(kind, item.as_deref(), count);
+            let mut writer = listener.writer.lock().unwrap();
+            write_frame(&mut writer, &frame, REPLAY_BUDGET)?;
         }
         Ok(())
     }
@@ -126,8 +172,8 @@ impl ClientSubscription<'_> {
             .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "subscriber disconnected"))?
             .writer
             .clone();
-        let result = writer.lock().unwrap().write_all(reply);
-        result
+        let mut writer = writer.lock().unwrap();
+        write_frame(&mut writer, reply, REPLAY_BUDGET)
     }
 }
 
@@ -154,7 +200,7 @@ impl Hub {
             let mut writer = listener.writer.lock().unwrap();
             let mut delivered = true;
             if listener.channels.contains(channel) {
-                if writer.write_all(&direct).is_err() {
+                if write_frame(&mut writer, &direct, PUBLISH_BUDGET).is_err() {
                     delivered = false;
                 } else {
                     count += 1;
@@ -164,7 +210,7 @@ impl Hub {
                 for pattern in &listener.patterns {
                     if glob_matches(pattern, channel) {
                         let reply = message_reply(b"pmessage", &[pattern, channel, message]);
-                        if writer.write_all(&reply).is_err() {
+                        if write_frame(&mut writer, &reply, PUBLISH_BUDGET).is_err() {
                             delivered = false;
                             break;
                         }

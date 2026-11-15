@@ -11,7 +11,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAGIC: &[u8; 8] = b"RERUSNP1";
 const MAX_SNAPSHOT: usize = 256 * 1024 * 1024;
-const MAX_ITEMS: usize = 1_000_000;
 
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid ReRu snapshot")
@@ -45,6 +44,18 @@ pub(crate) fn put_bytes(output: &mut Vec<u8>, bytes: &[u8]) -> io::Result<()> {
         return Err(invalid());
     }
     Ok(())
+}
+
+fn bounded_count(cursor: &Cursor<&[u8]>, count: u64, minimum_bytes: usize) -> io::Result<usize> {
+    let count = usize::try_from(count).map_err(|_| invalid())?;
+    let remaining = cursor
+        .get_ref()
+        .len()
+        .saturating_sub(cursor.position() as usize);
+    if count > remaining / minimum_bytes.max(1) {
+        return Err(invalid());
+    }
+    Ok(count)
 }
 
 pub(crate) fn read_u64(cursor: &mut Cursor<&[u8]>) -> io::Result<u64> {
@@ -167,10 +178,8 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
     }
     let mut cursor = Cursor::new(bytes);
     cursor.set_position(MAGIC.len() as u64);
-    let count = usize::try_from(read_u64(&mut cursor)?).map_err(|_| invalid())?;
-    if count > MAX_ITEMS {
-        return Err(invalid());
-    }
+    let raw = read_u64(&mut cursor)?;
+    let count = bounded_count(&cursor, raw, 17)?;
     let now_system = SystemTime::now();
     let now_instant = Instant::now();
     let mut entries = HashMap::new();
@@ -182,10 +191,8 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
         let value = match kind[0] {
             1 => Value::String(read_bytes(&mut cursor)?),
             2 => {
-                let count = usize::try_from(read_u64(&mut cursor)?).map_err(|_| invalid())?;
-                if count > MAX_ITEMS {
-                    return Err(invalid());
-                }
+                let raw = read_u64(&mut cursor)?;
+                let count = bounded_count(&cursor, raw, 8)?;
                 let mut items = Vec::with_capacity(count);
                 for _ in 0..count {
                     items.push(read_bytes(&mut cursor)?);
@@ -201,19 +208,17 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                 } else {
                     None
                 };
-                let count = usize::try_from(read_u64(&mut cursor)?).map_err(|_| invalid())?;
-                if count > MAX_ITEMS {
-                    return Err(invalid());
-                }
+                let raw = read_u64(&mut cursor)?;
+                let count = bounded_count(&cursor, raw, 24)?;
                 let mut stream = streams::Stream::default();
                 for _ in 0..count {
                     let id = streams::StreamId {
                         milliseconds: read_u64(&mut cursor)?,
                         sequence: read_u64(&mut cursor)?,
                     };
-                    let fields_count =
-                        usize::try_from(read_u64(&mut cursor)?).map_err(|_| invalid())?;
-                    if fields_count > MAX_ITEMS || fields_count % 2 != 0 {
+                    let raw = read_u64(&mut cursor)?;
+                    let fields_count = bounded_count(&cursor, raw, 8)?;
+                    if fields_count % 2 != 0 {
                         return Err(invalid());
                     }
                     let mut fields = Vec::with_capacity(fields_count);
@@ -245,8 +250,9 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                 Value::Stream(stream)
             }
             4 | 9 => {
-                let count = usize::try_from(read_u64(&mut cursor)?).map_err(|_| invalid())?;
-                if count == 0 || count > MAX_ITEMS {
+                let raw = read_u64(&mut cursor)?;
+                let count = bounded_count(&cursor, raw, 16)?;
+                if count == 0 {
                     return Err(invalid());
                 }
                 let mut fields = HashValue::default();
@@ -278,8 +284,9 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                 Value::Hash(fields)
             }
             5 => {
-                let count = usize::try_from(read_u64(&mut cursor)?).map_err(|_| invalid())?;
-                if count == 0 || count > MAX_ITEMS {
+                let raw = read_u64(&mut cursor)?;
+                let count = bounded_count(&cursor, raw, 8)?;
+                if count == 0 {
                     return Err(invalid());
                 }
                 let mut members = HashSet::new();
@@ -291,8 +298,9 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                 Value::Set(members)
             }
             6 => {
-                let count = usize::try_from(read_u64(&mut cursor)?).map_err(|_| invalid())?;
-                if count == 0 || count > MAX_ITEMS {
+                let raw = read_u64(&mut cursor)?;
+                let count = bounded_count(&cursor, raw, 16)?;
+                if count == 0 {
                     return Err(invalid());
                 }
                 let mut members = crate::sorted_sets::SortedSet::default();
@@ -393,6 +401,14 @@ mod tests {
     }
 
     #[test]
+    fn key_count_bound_tracks_remaining_bytes_instead_of_a_fixed_cap() {
+        let bytes = vec![0u8; 17 * 1_000_001];
+        let cursor = Cursor::new(bytes.as_slice());
+        assert_eq!(bounded_count(&cursor, 1_000_001, 17).unwrap(), 1_000_001);
+        assert!(bounded_count(&cursor, 1_000_002, 17).is_err());
+    }
+
+    #[test]
     fn validates_hash_and_set_snapshot_payloads() {
         let hash = collection_snapshot(4, 1, &[b"f\0", b"v\0"]);
         let set = collection_snapshot(5, 1, &[b"m\0"]);
@@ -407,7 +423,7 @@ mod tests {
             collection_snapshot(5, 2, &[b"m", b"m"]),
             collection_snapshot(4, 0, &[]),
             collection_snapshot(5, 0, &[]),
-            collection_snapshot(5, MAX_ITEMS as u64 + 1, &[]),
+            collection_snapshot(5, 1_000_000_000, &[]),
             hash[..hash.len() - 1].to_vec(),
             set[..set.len() - 1].to_vec(),
         ] {
