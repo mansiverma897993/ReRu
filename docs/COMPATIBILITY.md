@@ -22,8 +22,8 @@ tests; it does not certify complete compatibility with Redis.
 | Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `PUBSUB` | Binary channels/messages, glob patterns, RESP2 subscribed mode, CHANNELS/NUMSUB/NUMPAT; local process only |
 | Connection close | `QUIT` | Replies OK and closes the connection |
 | Authentication | `AUTH`, `ACL WHOAMI` | Startup-configured password for the default user, connection-local authentication and authenticated ReRu replication |
-| Configuration | `CONFIG GET`, `CONFIG SET`, [`CONFIG RESETSTAT`](https://redis.io/docs/latest/commands/config-resetstat/) | Runtime `maxmemory`, `maxmemory-policy`, and `maxclients`; GET also reports AOF enabled/fsync mode and configured RDB dir/dbfilename; RESETSTAT clears counters exposed by INFO |
-| Observability | `INFO` | Partial `memory`, `stats`, `clients`, and `persistence` sections |
+| Configuration | `CONFIG GET`, `CONFIG SET`, [`CONFIG RESETSTAT`](https://redis.io/docs/latest/commands/config-resetstat/) | Runtime `maxmemory`, `maxmemory-policy`, `maxclients`, and `latency-monitor-threshold`; GET also reports AOF enabled/fsync mode and configured RDB dir/dbfilename; RESETSTAT clears counters exposed by INFO |
+| Observability | `INFO`, [`LATENCY LATEST`](https://redis.io/docs/latest/commands/latency-latest/), [`LATENCY HISTORY`](https://redis.io/docs/latest/commands/latency-history/), [`LATENCY RESET`](https://redis.io/docs/latest/commands/latency-reset/) | Partial `memory`, `stats`, `clients`, and `persistence` INFO sections; only the `command` latency event is implemented, blocking commands are excluded so wait time is not counted, same-second spikes merge by maximum, up to 160 recent samples are retained, and `LATENCY` commands are not monitored. Commands queued in `MULTI` are not timed individually; `EXEC` is measured as one command |
 | Server time | `TIME` | Epoch seconds and microseconds as RESP2 bulk strings |
 | Persistence | `SAVE`, `BGSAVE`, `LASTSAVE`, `DUMP`, `RESTORE`, `BGREWRITEAOF` | Initial Redis RDB interoperability; supported values, key expiry, checksums, REPLACE/ABSTTL; manual single-file AOF compaction |
 | Command introspection | [`COMMAND`](https://redis.io/docs/latest/commands/command/), `COMMAND COUNT`, `COMMAND INFO` | Lists ReRu's implemented command metadata, counts entries, or looks up names |
@@ -43,7 +43,7 @@ entries, and `COMMAND COUNT` counts those entries. Redis documents
 [`COMMAND COUNT`](https://redis.io/docs/latest/commands/command-count/), and
 [`COMMAND INFO`](https://redis.io/docs/latest/commands/command-info/).
 
-Total: **224 Redis command metadata entries**, or **48.8% name presence**
+Total: **227 Redis command metadata entries**, or **49.5% name presence**
 against 459 entries in the pinned Redis 8.10.2 metadata. This is neither a
 behavior pass rate nor a percentage of Redis completed. Run
 `powershell -File scripts/command_coverage.ps1 -RedisSource PATH_TO_REDIS_8_10_2`

@@ -15,6 +15,7 @@ mod expiry;
 mod geo;
 mod hyperloglog;
 mod keyspace;
+mod latency;
 mod list_ops;
 mod persistence;
 mod protocol;
@@ -65,6 +66,7 @@ struct SharedStore {
     staged_keys: Mutex<Option<HashSet<Vec<u8>>>>,
     eviction: eviction::Eviction,
     expiry: expiry::Expiry,
+    latency: latency::Monitor,
     clients: Arc<clients::Limits>,
     pubsub: pubsub::Hub,
     cluster: Option<cluster::Cluster>,
@@ -1056,6 +1058,9 @@ fn execute_command(
     if command[0].eq_ignore_ascii_case(b"COMMAND") {
         return command_table::execute(command);
     }
+    if command[0].eq_ignore_ascii_case(b"LATENCY") {
+        return store.latency.execute(command);
+    }
     if let Some(response) = stream_groups::execute(command, store) {
         return response;
     }
@@ -1634,7 +1639,9 @@ fn validate_queued(command: &[Vec<u8>]) -> Result<(), Vec<u8>> {
     }
     let name = &command[0];
     let arity = command.len();
-    let valid = if let Some(valid) = connection::valid_arity(command) {
+    let valid = if let Some(valid) = latency::Monitor::valid_arity(command) {
+        valid
+    } else if let Some(valid) = connection::valid_arity(command) {
         valid
     } else if let Some(valid) = stream_groups::valid_arity(command) {
         valid
@@ -1830,6 +1837,14 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         } else {
             None
         };
+        let queued_only = transaction.is_some()
+            && !command[0].eq_ignore_ascii_case(b"EXEC")
+            && !command[0].eq_ignore_ascii_case(b"DISCARD");
+        let latency_started = if queued_only {
+            None
+        } else {
+            store.latency.start(&command)
+        };
         let response = if command[0].eq_ignore_ascii_case(b"AUTH") && transaction.is_none() {
             store.auth.authenticate(&command, &mut authenticated)
         } else if let Some(error) = route_error {
@@ -1972,6 +1987,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             }
             response
         };
+        store.latency.record(latency_started);
         subscription.write(&response)?;
     }
     Ok(())
@@ -2141,6 +2157,7 @@ fn main() -> io::Result<()> {
         staged_keys: Mutex::new(None),
         eviction: eviction::Eviction::new(maxmemory, maxmemory_policy),
         expiry: expiry::Expiry::default(),
+        latency: latency::Monitor::default(),
         clients: Arc::new(clients::Limits::new(maxclients)),
         aof_rewrite: aof::Rewrite::default(),
         auth: auth::Settings::new(requirepass),

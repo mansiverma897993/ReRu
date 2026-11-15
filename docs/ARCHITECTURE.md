@@ -65,6 +65,7 @@ authentication settings, and the pub/sub hub.
 | `lib.rs` | Library root; exports `protocol` for out-of-tree tooling such as `fuzz/` |
 | `protocol.rs` | RESP2 reader and reply writers; size and argument limits |
 | `connection.rs` | `HELLO`, `SELECT`, `CLIENT`, `RESET`, per-socket metadata |
+| `latency.rs` | Command latency threshold, per-second spike samples, and `LATENCY` inspection/reset commands |
 | `cache.rs` | String and cache commands, conditional writes, expiry on access |
 | `list_ops.rs` | List commands and blocking pops/moves |
 | `collections.rs` | Hash and set commands |
