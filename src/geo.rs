@@ -137,8 +137,9 @@ fn geohash(longitude: f64, latitude: f64) -> Vec<u8> {
     text
 }
 
-// Redis prints coordinates with the shortest round-trip digits and uses
-// exponent form below 1e-4, like %.17g.
+// Redis prints coordinates with the shortest round-trip digits. It keeps
+// fixed notation while the least significant digit stays right of 1e-7 and
+// the decimal exponent is small, and uses exponent form otherwise.
 fn coordinate_text(value: f64) -> Vec<u8> {
     if value == 0.0 {
         return if value.is_sign_negative() {
@@ -653,6 +654,7 @@ mod tests {
     #[test]
     fn coordinate_text_matches_redis_d2string_rules() {
         assert_eq!(coordinate_text(0.0), b"0");
+        // Defensive: a decoded cell centre is never exactly zero.
         assert_eq!(coordinate_text(-0.0), b"-0");
         assert_eq!(coordinate_text(13.361389338970184), b"13.361389338970184");
         assert_eq!(coordinate_text(-73.50000232458115), b"-73.50000232458115");
