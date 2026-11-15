@@ -8,6 +8,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-11-15
+
 ### Added
 
 - Command latency monitoring with the `latency-monitor-threshold` runtime
@@ -18,10 +20,6 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   label for the stored value, and every present key reports one reference.
 - `LCS` with `LEN`, `IDX`, `MINMATCHLEN`, and `WITHMATCHLEN`. All forms are
   capped at 8,000,000 table cells.
-
-## [0.1.0-alpha.2] - 2026-11-14
-
-### Added
 
 - Static two-node Cluster routing with CRC16/hash-tag slots, `CLUSTER KEYSLOT`,
   `CLUSTER SHARDS`, `CLUSTER SLOTS`, `MOVED`, and `CROSSSLOT` replies. Dynamic
