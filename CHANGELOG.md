@@ -27,8 +27,6 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   label for the stored value, and every present key reports one reference.
 - `LCS` with `LEN`, `IDX`, `MINMATCHLEN`, and `WITHMATCHLEN`. All forms are
   capped at 8,000,000 table cells.
-
-
 - Static two-node Cluster routing with CRC16/hash-tag slots, `CLUSTER KEYSLOT`,
   `CLUSTER SHARDS`, `CLUSTER SLOTS`, `MOVED`, and `CROSSSLOT` replies. Dynamic
   membership, migration, and failover remain unsupported.
