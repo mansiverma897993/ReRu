@@ -209,3 +209,35 @@ fn sorted_sets_and_bitmaps_survive_restart_and_replicate() {
     std::fs::remove_file(directory.join("data.bak")).unwrap();
     std::fs::remove_dir(directory).unwrap();
 }
+
+#[test]
+fn bit_ranges_clamp_negative_ends_and_distinguish_missing_keys() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"SET", b"bits", b"Hello World"]), ok());
+    assert_eq!(c.call(&[b"BITCOUNT", b"bits", b"0", b"-100"]), integer(2));
+    assert_eq!(
+        c.call(&[b"BITCOUNT", b"bits", b"-100", b"-100"]),
+        integer(2)
+    );
+    assert_eq!(
+        c.call(&[b"BITPOS", b"bits", b"0", b"0", b"-100"]),
+        integer(0)
+    );
+    assert_eq!(
+        c.call(&[b"BITPOS", b"bits", b"1", b"0", b"-100"]),
+        integer(1)
+    );
+
+    assert_eq!(c.call(&[b"SET", b"empty-bits", b""]), ok());
+    assert_eq!(c.call(&[b"BITPOS", b"empty-bits", b"0"]), integer(-1));
+    assert_eq!(c.call(&[b"BITPOS", b"empty-bits", b"1"]), integer(-1));
+
+    assert_eq!(c.call(&[b"DEL", b"missing-bits"]), integer(0));
+    assert_eq!(c.call(&[b"BITPOS", b"missing-bits", b"0"]), integer(0));
+    assert_eq!(
+        c.call(&[b"BITPOS", b"missing-bits", b"0", b"5", b"3"]),
+        integer(0)
+    );
+    assert_eq!(c.call(&[b"BITPOS", b"missing-bits", b"1"]), integer(-1));
+}

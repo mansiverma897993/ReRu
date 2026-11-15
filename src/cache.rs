@@ -689,7 +689,7 @@ fn getrange(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     };
     let len = bytes.len() as i128;
     let from = range_index(start, len).max(0).min(len) as usize;
-    let to = range_index(end, len).max(-1).min(len - 1);
+    let to = range_index(end, len).max(0).min(len - 1);
     if to < from as i128 {
         protocol::bulk(b"")
     } else {

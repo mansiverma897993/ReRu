@@ -339,7 +339,7 @@ fn span(length: usize, start: i64, end: i64) -> Option<(usize, usize)> {
         }
     };
     let from = index(start).max(0).min(length);
-    let to = index(end).max(-1).min(length - 1);
+    let to = index(end).max(0).min(length - 1);
     (from <= to).then_some((from as usize, (to + 1) as usize))
 }
 
@@ -549,7 +549,10 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
             } else {
                 8
             };
-            let bytes = data.map_or(&[][..], Vec::as_slice);
+            let Some(bytes) = data else {
+                // A missing key answers 0 when looking for zero bits.
+                return Some(integer(if target == 0 { 0 } else { -1 }));
+            };
             let bounds = if command.len() >= 5 {
                 match bit_span(bytes.len(), command, 3, 4, width) {
                     Ok(bounds) => bounds,
@@ -566,7 +569,8 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
                 Some((0, bytes.len() * 8))
             };
             let found = bounds.map_or(-1, |(from, to)| find_bit(bytes, target, from, to));
-            let implicit_zero = target == 0 && command.len() < 5 && bounds.is_some();
+            let implicit_zero =
+                target == 0 && command.len() < 5 && bounds.is_some() && !bytes.is_empty();
             integer(if found >= 0 {
                 found
             } else if implicit_zero {
