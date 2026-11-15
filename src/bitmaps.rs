@@ -522,6 +522,19 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
             } else {
                 8
             };
+            if command.len() >= 4 {
+                let start = match signed(&command[2]) {
+                    Ok(value) => value,
+                    Err(error) => return Some(error),
+                };
+                let end = match signed(&command[3]) {
+                    Ok(value) => value,
+                    Err(error) => return Some(error),
+                };
+                if start < 0 && end < 0 && start > end {
+                    return Some(integer(0));
+                }
+            }
             let bytes = data.map_or(&[][..], Vec::as_slice);
             let bounds = if command.len() >= 4 {
                 match bit_span(bytes.len(), command, 2, 3, width) {
@@ -549,12 +562,11 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
             } else {
                 8
             };
-            let Some(bytes) = data else {
-                // A missing key answers 0 when looking for zero bits.
-                return Some(integer(if target == 0 { 0 } else { -1 }));
-            };
+            // Validate offsets before the missing-key shortcut so bad arguments
+            // still error, then treat a missing key as an empty string.
+            let length = data.map_or(0, |bytes| bytes.len());
             let bounds = if command.len() >= 5 {
-                match bit_span(bytes.len(), command, 3, 4, width) {
+                match bit_span(length, command, 3, 4, width) {
                     Ok(bounds) => bounds,
                     Err(error) => return Some(error),
                 }
@@ -563,10 +575,13 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
                     Ok(value) => value,
                     Err(error) => return Some(error),
                 };
-                span(bytes.len() * 8 / width, start, -1)
-                    .map(|(from, to)| (from * width, to * width))
+                span(length * 8 / width, start, -1).map(|(from, to)| (from * width, to * width))
             } else {
-                Some((0, bytes.len() * 8))
+                Some((0, length * 8))
+            };
+            let Some(bytes) = data else {
+                // A missing key answers 0 when looking for zero bits.
+                return Some(integer(if target == 0 { 0 } else { -1 }));
             };
             let found = bounds.map_or(-1, |(from, to)| find_bit(bytes, target, from, to));
             let implicit_zero =

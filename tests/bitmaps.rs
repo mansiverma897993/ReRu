@@ -229,15 +229,33 @@ fn bit_ranges_clamp_negative_ends_and_distinguish_missing_keys() {
         integer(1)
     );
 
+    assert_eq!(c.call(&[b"BITCOUNT", b"bits", b"-11", b"-12"]), integer(0));
+    assert_eq!(
+        c.call(&[b"BITPOS", b"bits", b"0", b"-11", b"-12"]),
+        integer(0)
+    );
+
     assert_eq!(c.call(&[b"SET", b"empty-bits", b""]), ok());
-    assert_eq!(c.call(&[b"BITPOS", b"empty-bits", b"0"]), integer(-1));
-    assert_eq!(c.call(&[b"BITPOS", b"empty-bits", b"1"]), integer(-1));
+    assert_eq!(
+        c.call(&[b"BITPOS", b"empty-bits", b"0", b"0", b"-1"]),
+        integer(-1)
+    );
 
     assert_eq!(c.call(&[b"DEL", b"missing-bits"]), integer(0));
-    assert_eq!(c.call(&[b"BITPOS", b"missing-bits", b"0"]), integer(0));
+    assert_eq!(
+        c.call(&[b"BITPOS", b"missing-bits", b"0", b"0", b"-1"]),
+        integer(0)
+    );
     assert_eq!(
         c.call(&[b"BITPOS", b"missing-bits", b"0", b"5", b"3"]),
         integer(0)
     );
-    assert_eq!(c.call(&[b"BITPOS", b"missing-bits", b"1"]), integer(-1));
+    assert_eq!(
+        c.call(&[b"BITPOS", b"missing-bits", b"0", b"0", b"-1", b"BIT"]),
+        integer(0)
+    );
+    assert_eq!(
+        c.call(&[b"BITPOS", b"missing-bits", b"0", b"abc", b"0"]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
 }

@@ -687,6 +687,11 @@ fn getrange(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         Some(_) => return wrong_type(),
         None => return protocol::bulk(b""),
     };
+    // Redis returns an empty range before converting when both indexes are
+    // negative and start is past end.
+    if start < 0 && end < 0 && start > end {
+        return protocol::bulk(b"");
+    }
     let len = bytes.len() as i128;
     let from = range_index(start, len).max(0).min(len) as usize;
     let to = range_index(end, len).max(0).min(len - 1);
