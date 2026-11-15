@@ -22,8 +22,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - Out-of-range score and weight literals are rejected instead of storing
   infinity.
 - Arity errors on `EXEC`, `DISCARD`, `MULTI`, and `WATCH` abort the queued
-  transaction, and variadic `PING`, `INFO`, `FLUSHDB`, and `FLUSHALL` queue
-  before failing inside `EXEC`.
+  transaction. Variadic `PING`, `FLUSHDB`, and `FLUSHALL` queue and report
+  their argument error inside `EXEC`; `INFO` accepts multiple sections and the
+  `all` alias, and `FLUSHDB`/`FLUSHALL` reject excess arguments with
+  `ERR syntax error`. Replicas now skip eviction when `maxmemory` is lowered.
 - `CONFIG SET` is accepted on a replica, and `COPY` with identical keys returns
   the Redis error.
 

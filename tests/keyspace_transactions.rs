@@ -401,6 +401,10 @@ fn transaction_control_arity_errors_abort_and_variadic_commands_queue() {
     let sections = String::from_utf8(sections).unwrap();
     assert!(sections.contains("# Memory"));
     assert!(sections.contains("# Stats"));
+    let Reply::Bulk(Some(all)) = client.call(&[b"INFO", b"all"]) else {
+        panic!("INFO all must return a bulk string")
+    };
+    assert!(String::from_utf8(all).unwrap().contains("# Memory"));
     assert_eq!(client.call(&[b"MULTI"]), ok());
     assert_eq!(client.call(&[b"SET", b"t3", b"v"]), queued());
     assert_eq!(client.call(&[b"PING", b"a", b"b"]), queued());

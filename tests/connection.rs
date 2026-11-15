@@ -350,6 +350,25 @@ fn replica_reports_role_and_accepts_connection_metadata() {
         c.call(&[b"CONFIG", b"GET", b"maxclients"]),
         array(vec![bulk(b"maxclients"), bulk(b"500")])
     );
+
+    // Replicas keep their dataset when maxmemory is lowered, like Redis.
+    let mut writer = Client::new(&primary);
+    assert_eq!(writer.call(&[b"SET", b"replicated", b"value"]), ok());
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if c.call(&[b"GET", b"replicated"]) == bulk(b"value") {
+            break;
+        }
+        assert!(std::time::Instant::now() < until, "replica did not sync");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        c.call(&[b"CONFIG", b"SET", b"maxmemory-policy", b"allkeys-lru"]),
+        ok()
+    );
+    assert_eq!(c.call(&[b"CONFIG", b"SET", b"maxmemory", b"1"]), ok());
+    assert_eq!(c.call(&[b"DBSIZE"]), integer(1));
+    assert_eq!(c.call(&[b"GET", b"replicated"]), bulk(b"value"));
 }
 
 #[test]

@@ -131,18 +131,26 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
 }
 
 pub fn info(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
-    // Redis 7 accepts INFO <section> [<section> ...].
+    // Redis 7 accepts INFO <section> [<section> ...]; `all`, `everything`, and
+    // `default` keep their meaning as aliases for the full report.
     let sections = &command[1..];
-    let wanted = |name: &[u8]| {
-        sections.is_empty()
-            || sections
+    let all = sections.is_empty()
+        || sections.iter().any(|section| {
+            [b"all".as_slice(), b"everything", b"default"]
                 .iter()
-                .any(|section| section.eq_ignore_ascii_case(name))
+                .any(|alias| section.eq_ignore_ascii_case(alias))
+        });
+    let wanted = |name: &[u8]| {
+        all || sections
+            .iter()
+            .any(|section| section.eq_ignore_ascii_case(name))
     };
-    let memory = wanted(b"memory");
-    let stats = wanted(b"stats");
     let mut report = String::new();
-    if memory {
+    // Redis emits clients, memory, persistence, then stats.
+    if wanted(b"clients") {
+        report.push_str(&store.clients.info());
+    }
+    if wanted(b"memory") {
         let settings = store.eviction.settings();
         let entries = store.entries.lock().unwrap();
         let used = dataset_bytes(&entries);
@@ -158,7 +166,11 @@ pub fn info(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             store.expiry.indexed_keys()
         ));
     }
-    if stats {
+    if wanted(b"persistence") {
+        report.push_str(&crate::rdb::info(store));
+        report.push_str(&crate::aof::info(store));
+    }
+    if wanted(b"stats") {
         report.push_str(&format!(
             "# Stats\r\nevicted_keys:{}\r\n\r\n",
             store.eviction.evicted_keys.load(Ordering::Relaxed)
@@ -168,13 +180,6 @@ pub fn info(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             store.expiry.active_expired_keys()
         ));
         report.push_str(&store.clients.stats());
-    }
-    if wanted(b"clients") {
-        report.push_str(&store.clients.info());
-    }
-    if wanted(b"persistence") {
-        report.push_str(&crate::rdb::info(store));
-        report.push_str(&crate::aof::info(store));
     }
     protocol::bulk(report.as_bytes())
 }
@@ -491,7 +496,7 @@ impl Eviction {
 
     pub fn evict(&self, store: &Store) -> bool {
         let settings = self.settings();
-        if settings.maxmemory == 0 || settings.policy == Policy::NoEviction {
+        if store.read_only || settings.maxmemory == 0 || settings.policy == Policy::NoEviction {
             return true;
         }
         let mut entries = store.entries.lock().unwrap();
