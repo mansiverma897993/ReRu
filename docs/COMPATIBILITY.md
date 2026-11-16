@@ -314,7 +314,8 @@ stream, group and consumer names are supported.
 NOACK. `>` distributes new entries; explicit IDs replay that consumer's pending
 entries. Deleted or trimmed payloads remain pending and replay as null payloads.
 `XACK` removes pending references after resolving the key, type, and group, so
-ID syntax is only checked once the key is known. `XDEL` follows the same order. `XPENDING` supports summary and range forms,
+ID syntax is checked only after those lookups. `XDEL` resolves the key and type
+the same way. `XPENDING` supports summary and range forms,
 IDLE, exclusive bounds and a consumer filter. `XCLAIM` supports IDLE, TIME,
 RETRYCOUNT, FORCE, JUSTID and LASTID, and registers its consumer even when it
 claims nothing. `XAUTOCLAIM` implements bounded scanning (10 x
