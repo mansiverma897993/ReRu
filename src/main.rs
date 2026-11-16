@@ -372,7 +372,7 @@ fn execute_checked(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
 }
 
 fn misconf(error: &io::Error) -> Vec<u8> {
-    format!("-MISCONF Errors writing to the AOF file: {error}\r\n").into_bytes()
+    format!("-MISCONF Errors persisting the dataset: {error}\r\n").into_bytes()
 }
 
 fn save_and_publish(store: &Store) -> io::Result<()> {

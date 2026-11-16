@@ -2,7 +2,7 @@
 use std::io::{self, Cursor, Read};
 
 const MAGIC: &[u8; 8] = b"RERUREP1";
-pub const MAX_FRAME: usize = 256 * 1024 * 1024;
+pub const MAX_FRAME: usize = 512 * 1024 * 1024;
 
 pub struct Update<'a> {
     pub full_sync: bool,

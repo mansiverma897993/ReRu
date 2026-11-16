@@ -437,9 +437,11 @@ Behavior reference: [Redis BGREWRITEAOF](https://redis.io/docs/latest/commands/b
 
 ## Client connection lifecycle
 
-The RESP2 parser accepts up to 1,048,576 arguments per command and 512 MiB of
-argument bytes per command, matching Redis's defaults. Frames above either limit
-close the connection without a reply on this revision.
+The RESP2 parser accepts up to 1,048,576 arguments and 256 MiB of argument
+bytes per command. These are ReRu limits, below Redis's INT_MAX argument count,
+512 MiB `proto-max-bulk-len`, and 1 GiB query buffer, and keep one command
+within the 512 MiB snapshot, RDB, and replication limits. Frames above either
+limit close the connection without a reply on this revision.
 
 `HELLO` and `HELLO 2` return a RESP2 properties array containing ReRu's actual
 name/version, protocol 2, stable connection ID, standalone mode, primary/replica

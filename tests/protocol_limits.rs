@@ -6,6 +6,10 @@ mod common;
 
 use client::{integer, ok, Client, Reply};
 
+fn snapshot_path() -> std::path::PathBuf {
+    common::temp_path("protocol-large", ".snap")
+}
+
 #[test]
 fn commands_with_more_than_1024_arguments_are_accepted() {
     let server = common::Server::start();
@@ -37,4 +41,26 @@ fn values_above_the_old_64_mib_limit_are_accepted() {
     assert_eq!(c.call(&[b"SET", b"large", &value]), ok());
     assert_eq!(c.call(&[b"STRLEN", b"large"]), integer(value.len() as i64));
     assert_eq!(c.call(&[b"GET", b"large"]), Reply::Bulk(Some(value)));
+}
+
+#[test]
+fn large_values_survive_a_snapshot_restart() {
+    let path = snapshot_path();
+    let filename = path.to_str().unwrap().to_owned();
+    let value = vec![b'y'; 70 * 1024 * 1024];
+    {
+        let server = common::Server::start_with(&["--snapshot", &filename]);
+        let mut c = Client::new(&server);
+        // Snapshot mode persists synchronously before the reply.
+        assert_eq!(c.call(&[b"SET", b"snap-large", &value]), ok());
+    }
+    {
+        let server = common::Server::start_with(&["--snapshot", &filename]);
+        let mut c = Client::new(&server);
+        assert_eq!(
+            c.call(&[b"STRLEN", b"snap-large"]),
+            integer(value.len() as i64)
+        );
+    }
+    let _ = std::fs::remove_file(path);
 }
