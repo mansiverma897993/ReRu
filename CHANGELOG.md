@@ -57,9 +57,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - Sorted-set score replies use Redis-style formatting: exact integers print
   without an exponent and small or very large magnitudes use exponent form
   (`1e+300`, `1e-7`, `1e+20`) instead of a fully expanded decimal. Digit
-  selection uses Rust's shortest round-trip algorithm, so rare values can end in
-  a different last digit or keep fixed form where Redis's Grisu2 chooses
-  exponent form.
+  selection uses Rust's shortest round-trip algorithm, so some values differ
+  from Redis's Grisu2 in trailing digits, and values between about `1e18` and
+  `1e23` can print in exponent form where Redis keeps a fixed decimal.
 - `SPOP`, `SRANDMEMBER`, and `HRANDFIELD` return the whole collection for a
   positive count above its size instead of a count error, and validate the count
   before the key lookup. `SRANDMEMBER`/`HRANDFIELD` reject `i64::MIN` with

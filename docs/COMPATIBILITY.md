@@ -256,9 +256,10 @@ the ordering condition documented by Redis. Score replies follow Redis's
 `fpconv_dtoa` rules: a value that fits exactly in half the `i64` range prints as
 an integer, other values use shortest round-trip digits with Redis's fixed
 versus exponent thresholds. Digit selection is Rust's correctly rounded
-shortest form, not Grisu2, so about 0.1% of high-precision values differ in the
-last digit, and values near `1e21`–`1e24` can keep fixed form where Redis prints
-an exponent (for example `1e23` is `1e+23` here and
+shortest form, not Grisu2, so about 0.1% of random high-precision values differ
+in trailing digits (sometimes a different last digit, sometimes fewer or more
+digits), and values between about `1e18` and `1e23` can print in exponent form
+where Redis keeps a fixed decimal (for example `1e23` is `1e+23` here and
 `99999999999999990000000` in Redis). Bitmap growth is capped at 64 MiB per value, below Redis's
 maximum; this is an explicit ReRu resource limit.
 `BITFIELD` and `BITFIELD_RO` support integer widths up to `i64` and `u63`.
