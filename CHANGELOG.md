@@ -63,6 +63,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `XREAD` and `XREADGROUP` treat `COUNT 0` or a negative count as unlimited.
 - `XACK` and `XDEL` resolve the key, type, and group before parsing IDs, so a
   missing key replies 0 and a wrong type replies WRONGTYPE.
+- `SET` and `GETEX` accept repeated flags and repeated expiry options with the
+  same unit (last wins); mixing units or combining KEEPTTL/PERSIST with an
+  expiry is a syntax error.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

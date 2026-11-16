@@ -59,7 +59,7 @@ fn parse(name: &[u8]) -> Option<Command> {
 pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
     parse(&command[0]).map(|kind| match kind {
         Command::Set => command.len() >= 3,
-        Command::GetEx => command.len() == 2 || command.len() == 3 || command.len() == 4,
+        Command::GetEx => command.len() >= 2,
         Command::GetDel | Command::StrLen => command.len() == 2,
         Command::MGet => command.len() >= 2,
         Command::MSet | Command::MSetNx => command.len() >= 3 && command.len() % 2 == 1,
@@ -330,29 +330,6 @@ fn deadline(option: &[u8], bytes: &[u8], command: &str) -> Result<Instant, Vec<u
     Instant::now().checked_add(remaining).ok_or_else(invalid)
 }
 
-fn expiry_arguments(
-    command: &[Vec<u8>],
-    first: usize,
-    allow_keep: bool,
-    name: &str,
-) -> Result<Expiration, Vec<u8>> {
-    if first == command.len() {
-        return Ok(Expiration::Reset);
-    }
-    let option = &command[first];
-    if allow_keep && command.len() == first + 1 && option.eq_ignore_ascii_case(b"KEEPTTL") {
-        return Ok(Expiration::Keep);
-    }
-    if command.len() != first + 2
-        || ![b"EX".as_slice(), b"PX", b"EXAT", b"PXAT"]
-            .iter()
-            .any(|candidate| option.eq_ignore_ascii_case(candidate))
-    {
-        return Err(protocol::error("syntax error"));
-    }
-    Ok(Expiration::At(deadline(option, &command[first + 1], name)?))
-}
-
 struct SetOptions {
     nx: bool,
     xx: bool,
@@ -360,36 +337,47 @@ struct SetOptions {
     expiration: Expiration,
 }
 
+fn expiry_unit(option: &[u8]) -> Option<Vec<u8>> {
+    [b"EX".as_slice(), b"PX", b"EXAT", b"PXAT"]
+        .iter()
+        .find(|candidate| option.eq_ignore_ascii_case(candidate))
+        .map(|candidate| candidate.to_vec())
+}
+
 fn set_options(command: &[Vec<u8>]) -> Result<SetOptions, Vec<u8>> {
     let mut nx = false;
     let mut xx = false;
     let mut get = false;
-    let mut expiration = Expiration::Reset;
-    let mut has_expiry = false;
+    let mut keep_ttl = false;
+    let mut expiry: Option<(Vec<u8>, Expiration)> = None;
     let mut index = 3;
     while index < command.len() {
         let option = &command[index];
-        if option.eq_ignore_ascii_case(b"NX") && !nx {
+        if option.eq_ignore_ascii_case(b"NX") {
             nx = true;
             index += 1;
-        } else if option.eq_ignore_ascii_case(b"XX") && !xx {
+        } else if option.eq_ignore_ascii_case(b"XX") {
             xx = true;
             index += 1;
-        } else if option.eq_ignore_ascii_case(b"GET") && !get {
+        } else if option.eq_ignore_ascii_case(b"GET") {
             get = true;
             index += 1;
-        } else if !has_expiry {
-            let end = if option.eq_ignore_ascii_case(b"KEEPTTL") {
-                index + 1
-            } else {
-                index + 2
-            };
-            if end > command.len() {
+        } else if option.eq_ignore_ascii_case(b"KEEPTTL") {
+            if expiry.is_some() {
                 return Err(protocol::error("syntax error"));
             }
-            expiration = expiry_arguments(&command[..end], index, true, "set")?;
-            has_expiry = true;
-            index = end;
+            keep_ttl = true;
+            index += 1;
+        } else if let Some(unit) = expiry_unit(option) {
+            if keep_ttl || index + 1 >= command.len() {
+                return Err(protocol::error("syntax error"));
+            }
+            let value = deadline(option, &command[index + 1], "set")?;
+            if expiry.as_ref().is_some_and(|(current, _)| *current != unit) {
+                return Err(protocol::error("syntax error"));
+            }
+            expiry = Some((unit, Expiration::At(value)));
+            index += 2;
         } else {
             return Err(protocol::error("syntax error"));
         }
@@ -397,6 +385,11 @@ fn set_options(command: &[Vec<u8>]) -> Result<SetOptions, Vec<u8>> {
     if nx && xx {
         return Err(protocol::error("syntax error"));
     }
+    let expiration = match expiry {
+        Some((_, expiration)) => expiration,
+        None if keep_ttl => Expiration::Keep,
+        None => Expiration::Reset,
+    };
     Ok(SetOptions {
         nx,
         xx,
@@ -453,20 +446,44 @@ fn set(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     }
 }
 
-fn getex(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
-    let expiration = if command.len() == 2 {
-        Expiration::Reset
-    } else if command.len() == 3 && command[2].eq_ignore_ascii_case(b"PERSIST") {
-        Expiration::Keep
-    } else {
-        match expiry_arguments(command, 2, false, "getex") {
-            Ok(value) => value,
-            Err(error) => return error,
+fn getex_options(command: &[Vec<u8>]) -> Result<Expiration, Vec<u8>> {
+    let mut persist = false;
+    let mut expiry: Option<(Vec<u8>, Expiration)> = None;
+    let mut index = 2;
+    while index < command.len() {
+        let option = &command[index];
+        if option.eq_ignore_ascii_case(b"PERSIST") {
+            if expiry.is_some() {
+                return Err(protocol::error("syntax error"));
+            }
+            persist = true;
+            index += 1;
+        } else if let Some(unit) = expiry_unit(option) {
+            if persist || index + 1 >= command.len() {
+                return Err(protocol::error("syntax error"));
+            }
+            let value = deadline(option, &command[index + 1], "getex")?;
+            if expiry.as_ref().is_some_and(|(current, _)| *current != unit) {
+                return Err(protocol::error("syntax error"));
+            }
+            expiry = Some((unit, Expiration::At(value)));
+            index += 2;
+        } else {
+            return Err(protocol::error("syntax error"));
         }
-    };
-    if command.len() == 3 && !command[2].eq_ignore_ascii_case(b"PERSIST") {
-        return protocol::error("syntax error");
     }
+    Ok(match expiry {
+        Some((_, expiration)) => expiration,
+        None if persist => Expiration::Keep,
+        None => Expiration::Reset,
+    })
+}
+
+fn getex(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
+    let expiration = match getex_options(command) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
     let key = &command[1];
     let mut entries = store.entries.lock().unwrap();
     remove_expired(&mut entries, key);

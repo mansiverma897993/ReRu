@@ -444,7 +444,7 @@ fn variadic_commands_report_excess_arguments_inside_exec() {
         ),
         (
             &[b"GETEX", b"k", b"PERSIST", b"EX", b"1"],
-            b"ERR wrong number of arguments for 'getex' command",
+            b"ERR syntax error",
         ),
         (
             &[b"HSET", b"h", b"f", b"v", b"f2"],
