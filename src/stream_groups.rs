@@ -49,9 +49,7 @@ fn id(raw: &[u8]) -> Result<StreamId> {
     StreamId::parse_query(raw).map_err(protocol::error)
 }
 fn number(raw: &[u8]) -> Result<u64> {
-    std::str::from_utf8(raw)
-        .ok()
-        .and_then(|s| s.parse::<i64>().ok())
+    protocol::parse_int(raw)
         .filter(|n| *n >= 0)
         .map(|n| n as u64)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
@@ -292,7 +290,7 @@ fn parse_read(c: &[Vec<u8>]) -> Result<ReadOptions<'_>> {
             consumer = Some(c[i + 2].as_slice());
             i += 3;
         } else if c[i].eq_ignore_ascii_case(b"COUNT") && i + 1 < c.len() {
-            let parsed = crate::list_ops::parse_redis_int(&c[i + 1])
+            let parsed = crate::protocol::parse_int(&c[i + 1])
                 .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
             count = if parsed <= 0 {
                 usize::MAX

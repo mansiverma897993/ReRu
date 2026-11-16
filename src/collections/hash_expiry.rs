@@ -164,9 +164,7 @@ pub(super) fn is_mutating(command: &[Vec<u8>]) -> bool {
 }
 
 fn parse_number(bytes: &[u8]) -> Result<i64, Vec<u8>> {
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|value| value.parse().ok())
+    protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
 
@@ -180,12 +178,29 @@ fn parse_fields(command: &[Vec<u8>], at: usize, pairs: bool) -> Result<&[Vec<u8>
     let count = command
         .get(at + 1)
         .ok_or_else(|| protocol::error("syntax error"))?;
-    let count = usize::try_from(parse_number(count)?)
+    let invalid_count = || {
+        protocol::error(if pairs {
+            "invalid number of fields"
+        } else {
+            "Parameter `numFields` should be greater than 0"
+        })
+    };
+    // Redis reads the count as a 32-bit integer; larger values are rejected
+    // before the argument count is compared.
+    let parsed = parse_number(count).map_err(|_| invalid_count())?;
+    let count = usize::try_from(parsed)
         .ok()
-        .filter(|count| *count > 0)
-        .ok_or_else(|| protocol::error("numfields should be greater than 0"))?;
+        .filter(|count| *count > 0 && parsed <= i64::from(i32::MAX))
+        .ok_or_else(invalid_count)?;
     let width = if pairs { 2 } else { 1 };
-    if count.checked_mul(width).and_then(|n| at.checked_add(2 + n)) != Some(command.len()) {
+    let Some(end) = at.checked_add(2).and_then(|base| {
+        count
+            .checked_mul(width)
+            .and_then(|fields| base.checked_add(fields))
+    }) else {
+        return Err(invalid_count());
+    };
+    if end != command.len() {
         return Err(protocol::error(if pairs {
             "syntax error"
         } else {

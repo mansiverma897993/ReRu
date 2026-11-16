@@ -305,7 +305,7 @@ enum Expiration {
 
 fn deadline(option: &[u8], bytes: &[u8], command: &str) -> Result<Instant, Vec<u8>> {
     let invalid = || protocol::error(&format!("invalid expire time in '{command}' command"));
-    let amount = crate::list_ops::parse_redis_int(bytes)
+    let amount = protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
     if amount <= 0 {
         return Err(invalid());
@@ -588,10 +588,7 @@ fn change_integer(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> 
     let amount = if matches!(kind, Command::Decr) {
         1
     } else {
-        match std::str::from_utf8(&command[2])
-            .ok()
-            .and_then(|value| value.parse::<i64>().ok())
-        {
+        match protocol::parse_int(&command[2]) {
             Some(value) => value,
             None => return protocol::error("value is not an integer or out of range"),
         }
@@ -600,10 +597,7 @@ fn change_integer(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> 
     let mut entries = store.entries.lock().unwrap();
     remove_expired(&mut entries, key);
     let old = match entries.get(key).map(|entry| &entry.value) {
-        Some(Value::String(value)) => match std::str::from_utf8(value)
-            .ok()
-            .and_then(|value| value.parse::<i64>().ok())
-        {
+        Some(Value::String(value)) => match protocol::parse_int(value) {
             Some(value) => value,
             None => return protocol::error("value is not an integer or out of range"),
         },
@@ -684,9 +678,7 @@ fn range_index(index: i64, len: i128) -> i128 {
 
 fn getrange(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     let parse = |value: &[u8]| {
-        std::str::from_utf8(value)
-            .ok()
-            .and_then(|value| value.parse::<i64>().ok())
+        protocol::parse_int(value)
             .ok_or_else(|| protocol::error("value is not an integer or out of range"))
     };
     let start = match parse(&command[2]) {
@@ -720,13 +712,11 @@ fn getrange(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
 }
 
 fn setrange(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
-    let offset = match std::str::from_utf8(&command[2])
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-    {
-        Some(offset) => offset,
-        None => return protocol::error("value is not an integer or out of range"),
-    };
+    let offset =
+        match protocol::parse_int(&command[2]).and_then(|value| usize::try_from(value).ok()) {
+            Some(offset) => offset,
+            None => return protocol::error("value is not an integer or out of range"),
+        };
     let key = &command[1];
     let mut entries = store.entries.lock().unwrap();
     remove_expired(&mut entries, key);

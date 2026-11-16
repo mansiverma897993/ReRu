@@ -54,9 +54,9 @@ fn line<R: BufRead>(reader: &mut R, reason: &'static str) -> io::Result<Vec<u8>>
 }
 
 fn number(bytes: &[u8]) -> io::Result<usize> {
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|text| text.parse::<usize>().ok())
+    parse_int(bytes)
+        .filter(|value| *value >= 0)
+        .and_then(|value| usize::try_from(value).ok())
         .ok_or_else(|| invalid("invalid bulk length"))
 }
 
@@ -83,10 +83,7 @@ fn read_command_with_limits<R: BufRead>(
     if header.is_empty() {
         return Err(invalid("invalid multibulk length"));
     }
-    let count = std::str::from_utf8(&header[1..])
-        .ok()
-        .and_then(|text| text.parse::<i64>().ok())
-        .ok_or_else(|| invalid("invalid multibulk length"))?;
+    let count = parse_int(&header[1..]).ok_or_else(|| invalid("invalid multibulk length"))?;
     if count <= 0 {
         // Redis ignores *0 and *-1 frames.
         return Ok(Some(Vec::new()));
@@ -126,6 +123,41 @@ fn read_command_with_limits<R: BufRead>(
         args.push(value);
     }
     Ok(Some(args))
+}
+
+/// Parse an integer the way Redis's `string2ll` does: an optional `-`, no `+`,
+/// no leading zeros unless the value is exactly `0`, and an `i64` range.
+pub fn parse_int(bytes: &[u8]) -> Option<i64> {
+    if bytes == b"0" {
+        return Some(0);
+    }
+    let (negative, digits) = match bytes.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        _ => (false, bytes),
+    };
+    match digits.first() {
+        Some(first) if (b'1'..=b'9').contains(first) => {}
+        _ => return None,
+    }
+    let mut magnitude: i128 = 0;
+    for byte in digits {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        magnitude = magnitude
+            .checked_mul(10)?
+            .checked_add(i128::from(byte - b'0'))?;
+    }
+    i64::try_from(if negative { -magnitude } else { magnitude }).ok()
+}
+
+/// Scan cursors use Redis's lenient `strtoull` form, which accepts `+0`, `00`,
+/// and `-0` (parsed as zero) but rejects other negatives.
+pub fn parse_cursor(bytes: &[u8]) -> Option<usize> {
+    if bytes == b"-0" {
+        return Some(0);
+    }
+    std::str::from_utf8(bytes).ok()?.parse().ok()
 }
 
 pub fn error(message: &str) -> Vec<u8> {

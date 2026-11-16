@@ -317,9 +317,7 @@ fn parse_score(bytes: &[u8]) -> Result<f64, Vec<u8>> {
 }
 
 fn parse_index(bytes: &[u8]) -> Result<i64, Vec<u8>> {
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|text| text.parse::<i64>().ok())
+    protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
 
@@ -716,10 +714,7 @@ fn range(command: &[Vec<u8>], scores: Option<&SortedSet>, kind: Command) -> Vec<
 }
 
 fn scan(command: &[Vec<u8>], scores: Option<&SortedSet>) -> Vec<u8> {
-    let cursor = match std::str::from_utf8(&command[2])
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-    {
+    let cursor = match protocol::parse_cursor(&command[2]) {
         Some(value) => value,
         None => return protocol::error("invalid cursor"),
     };
@@ -732,12 +727,12 @@ fn scan(command: &[Vec<u8>], scores: Option<&SortedSet>) -> Vec<u8> {
         if pair[0].eq_ignore_ascii_case(b"MATCH") {
             pattern = Some(pair[1].as_slice());
         } else if pair[0].eq_ignore_ascii_case(b"COUNT") {
-            count = match std::str::from_utf8(&pair[1])
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .filter(|value| *value > 0)
-            {
-                Some(value) => value,
+            count = match protocol::parse_int(&pair[1]) {
+                Some(value) if value > 0 => match usize::try_from(value) {
+                    Ok(value) => value,
+                    Err(_) => return protocol::error("value is not an integer or out of range"),
+                },
+                Some(_) => return protocol::error("syntax error"),
                 None => return protocol::error("value is not an integer or out of range"),
             };
         } else {
@@ -1017,14 +1012,9 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         }
         Command::PopMin | Command::PopMax => {
             let count = if command.len() == 3 {
-                match std::str::from_utf8(&command[2])
-                    .ok()
-                    .and_then(|value| value.parse::<usize>().ok())
-                {
-                    Some(value) => value,
-                    None => {
-                        return Some(protocol::error("value is not an integer or out of range"))
-                    }
+                match crate::list_ops::parse_count(&command[2]) {
+                    Ok(value) => value,
+                    Err(error) => return Some(error),
                 }
             } else {
                 1
