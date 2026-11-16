@@ -349,14 +349,20 @@ fn set_options(command: &[Vec<u8>]) -> Result<SetOptions, Vec<u8>> {
     let mut xx = false;
     let mut get = false;
     let mut keep_ttl = false;
-    let mut expiry: Option<(&'static [u8], Expiration)> = None;
+    let mut expiry: Option<(&'static [u8], &[u8])> = None;
     let mut index = 3;
     while index < command.len() {
         let option = &command[index];
         if option.eq_ignore_ascii_case(b"NX") {
+            if xx {
+                return Err(protocol::error("syntax error"));
+            }
             nx = true;
             index += 1;
         } else if option.eq_ignore_ascii_case(b"XX") {
+            if nx {
+                return Err(protocol::error("syntax error"));
+            }
             xx = true;
             index += 1;
         } else if option.eq_ignore_ascii_case(b"GET") {
@@ -372,21 +378,18 @@ fn set_options(command: &[Vec<u8>]) -> Result<SetOptions, Vec<u8>> {
             if keep_ttl || index + 1 >= command.len() {
                 return Err(protocol::error("syntax error"));
             }
-            let value = deadline(option, &command[index + 1], "set")?;
-            if expiry.as_ref().is_some_and(|(current, _)| *current != unit) {
+            if expiry.is_some_and(|(current, _)| current != unit) {
                 return Err(protocol::error("syntax error"));
             }
-            expiry = Some((unit, Expiration::At(value)));
+            // Redis parses only the last value of a repeated unit.
+            expiry = Some((unit, &command[index + 1]));
             index += 2;
         } else {
             return Err(protocol::error("syntax error"));
         }
     }
-    if nx && xx {
-        return Err(protocol::error("syntax error"));
-    }
     let expiration = match expiry {
-        Some((_, expiration)) => expiration,
+        Some((unit, value)) => Expiration::At(deadline(unit, value, "set")?),
         None if keep_ttl => Expiration::Keep,
         None => Expiration::Reset,
     };
@@ -448,7 +451,7 @@ fn set(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
 
 fn getex_options(command: &[Vec<u8>]) -> Result<Expiration, Vec<u8>> {
     let mut persist = false;
-    let mut expiry: Option<(&'static [u8], Expiration)> = None;
+    let mut expiry: Option<(&'static [u8], &[u8])> = None;
     let mut index = 2;
     while index < command.len() {
         let option = &command[index];
@@ -462,18 +465,18 @@ fn getex_options(command: &[Vec<u8>]) -> Result<Expiration, Vec<u8>> {
             if persist || index + 1 >= command.len() {
                 return Err(protocol::error("syntax error"));
             }
-            let value = deadline(option, &command[index + 1], "getex")?;
-            if expiry.as_ref().is_some_and(|(current, _)| *current != unit) {
+            if expiry.is_some_and(|(current, _)| current != unit) {
                 return Err(protocol::error("syntax error"));
             }
-            expiry = Some((unit, Expiration::At(value)));
+            // Redis parses only the last value of a repeated unit.
+            expiry = Some((unit, &command[index + 1]));
             index += 2;
         } else {
             return Err(protocol::error("syntax error"));
         }
     }
     Ok(match expiry {
-        Some((_, expiration)) => expiration,
+        Some((unit, value)) => Expiration::At(deadline(unit, value, "getex")?),
         None if persist => Expiration::Keep,
         None => Expiration::Reset,
     })
