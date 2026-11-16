@@ -841,3 +841,40 @@ fn xautoclaim_counts_tombstone_deletions_against_count() {
         ])
     );
 }
+
+#[test]
+fn xclaim_and_xautoclaim_register_consumers_without_claims() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"ghost", b"0", b"9-9"]),
+        array(vec![])
+    );
+    assert!(matches!(
+        c.call(&[b"XINFO", b"CONSUMERS", b"s", b"g"]),
+        Reply::Array(Some(rows)) if rows.len() == 1
+    ));
+    assert!(matches!(
+        &c.call(&[b"XINFO", b"CONSUMERS", b"s", b"g"]),
+        Reply::Array(Some(rows))
+            if matches!(&rows[0], Reply::Array(Some(fields))
+                if fields[1] == bulk(b"ghost") && fields[3] == integer(0))
+    ));
+
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"newbie", b"0", b"0-0"]),
+        array(vec![bulk(b"0-0"), array(vec![]), array(vec![])])
+    );
+    assert!(matches!(
+        c.call(&[b"XINFO", b"GROUPS", b"s"]),
+        Reply::Array(Some(rows))
+            if matches!(&rows[0], Reply::Array(Some(fields))
+                if fields.iter().any(|field| field == &integer(2)))
+    ));
+}

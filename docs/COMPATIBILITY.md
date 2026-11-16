@@ -315,7 +315,8 @@ NOACK. `>` distributes new entries; explicit IDs replay that consumer's pending
 entries. Deleted or trimmed payloads remain pending and replay as null payloads.
 `XACK` removes pending references. `XPENDING` supports summary and range forms,
 IDLE, exclusive bounds and a consumer filter. `XCLAIM` supports IDLE, TIME,
-RETRYCOUNT, FORCE, JUSTID and LASTID. `XAUTOCLAIM` implements bounded scanning (10 x
+RETRYCOUNT, FORCE, JUSTID and LASTID, and registers its consumer even when it
+claims nothing. `XAUTOCLAIM` implements bounded scanning (10 x
 COUNT), a COUNT shared by claims and deleted pending entries, JUSTID, and the
 Redis 7 deleted-ID reply. These provide at-least-once
 processing primitives, not exactly-once application execution.
