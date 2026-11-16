@@ -61,6 +61,12 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   connection inside `EXEC` are delivered after the transaction reply, and
   `EXEC` inside subscribed mode replies `EXECABORT`. The subscribed-mode
   rejection message now uses Redis's text.
+- Sorted-set score replies use Redis-style formatting: exact integers print
+  without an exponent and small or very large magnitudes use exponent form
+  (`1e+300`, `1e-7`, `1e+20`) instead of a fully expanded decimal. Digit
+  selection uses Rust's shortest round-trip algorithm, so some values differ
+  from Redis's Grisu2 in trailing digits, and values between about `1e18` and
+  `1e23` can print in exponent form where Redis keeps a fixed decimal.
 - `SPOP`, `SRANDMEMBER`, and `HRANDFIELD` return the whole collection for a
   positive count above its size instead of a count error, and validate the count
   before the key lookup. `SRANDMEMBER`/`HRANDFIELD` reject `i64::MIN` with
@@ -95,11 +101,6 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   label for the stored value, and every present key reports one reference.
 - `LCS` with `LEN`, `IDX`, `MINMATCHLEN`, and `WITHMATCHLEN`. All forms are
   capped at 8,000,000 table cells.
-<<<<<<< HEAD
-
-
-=======
->>>>>>> origin/main
 - Static two-node Cluster routing with CRC16/hash-tag slots, `CLUSTER KEYSLOT`,
   `CLUSTER SHARDS`, `CLUSTER SLOTS`, `MOVED`, and `CROSSSLOT` replies. Dynamic
   membership, migration, and failover remain unsupported.
