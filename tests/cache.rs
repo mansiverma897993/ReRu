@@ -756,13 +756,20 @@ fn expiry_parse_errors_match_redis_text() {
         &[b"SET".as_slice(), b"k", b"v", b"EX", b"abc"] as &[&[u8]],
         &[b"SET", b"k", b"v", b"EX", b"1.5"],
         &[b"SET", b"k", b"v", b"EX", b"99999999999999999999"],
+        &[b"SET", b"k", b"v", b"EX", b"9223372036854775808"],
+        &[b"SET", b"k", b"v", b"EX", b"+1"],
+        &[b"SET", b"k", b"v", b"EX", b"01"],
+        &[b"SET", b"k", b"v", b"EX", b"-0"],
+        &[b"SET", b"k", b"v", b"EXAT", b"01"],
         &[b"SETEX", b"k", b"1.5", b"v"],
         &[b"PSETEX", b"k", b"1.5", b"v"],
         &[b"GETEX", b"k", b"EX", b"abc"],
         &[b"GETEX", b"k", b"PX", b"1.5"],
+        &[b"GETEX", b"k", b"EXAT", b"+1"],
     ] {
         assert_eq!(c.call(command), integer, "{command:?}");
     }
+    let before = c.call(&[b"GET", b"k"]);
     for (command, name) in [
         (
             &[b"SET".as_slice(), b"k", b"v", b"EX", b"0"] as &[&[u8]],
@@ -773,11 +780,15 @@ fn expiry_parse_errors_match_redis_text() {
         (&[b"PSETEX", b"k", b"-1", b"v"], "psetex"),
         (&[b"GETEX", b"k", b"EX", b"0"], "getex"),
         (&[b"GETEX", b"k", b"EX", b"-1"], "getex"),
+        (&[b"SET", b"k", b"v", b"EX", b"9223372036854776"], "set"),
+        (&[b"SETEX", b"k", b"9223372036854776", b"v"], "setex"),
+        (&[b"SET", b"k", b"v", b"EXAT", b"0"], "set"),
     ] {
         assert_eq!(
             c.call(command),
             Reply::Error(format!("ERR invalid expire time in '{name}' command").into_bytes()),
             "{command:?}"
         );
+        assert_eq!(c.call(&[b"GET", b"k"]), before, "{command:?}");
     }
 }
