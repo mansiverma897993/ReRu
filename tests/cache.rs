@@ -750,7 +750,7 @@ fn set_and_getex_accept_repeated_options_like_redis() {
 fn expiry_parse_errors_match_redis_text() {
     let server = common::Server::start();
     let mut c = Client::new(&server);
-    assert_eq!(c.call(&[b"SET", b"k", b"v"]), ok());
+    assert_eq!(c.call(&[b"SET", b"k", b"v", b"EX", b"100"]), ok());
     let integer = Reply::Error(b"ERR value is not an integer or out of range".to_vec());
     for command in [
         &[b"SET".as_slice(), b"k", b"v", b"EX", b"abc"] as &[&[u8]],
@@ -790,5 +790,9 @@ fn expiry_parse_errors_match_redis_text() {
             "{command:?}"
         );
         assert_eq!(c.call(&[b"GET", b"k"]), before, "{command:?}");
+        assert!(
+            matches!(c.call(&[b"PTTL", b"k"]), Reply::Integer(ttl) if ttl > 0),
+            "{command:?}"
+        );
     }
 }

@@ -67,8 +67,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   same unit (last wins); mixing units or combining KEEPTTL/PERSIST with an
   expiry is a syntax error.
 - `SET`, `SETEX`, `PSETEX`, and `GETEX` report `value is not an integer or out of
-  range` for non-numeric or non-canonical expiry arguments, and reject
-  non-positive or overflowing values with `invalid expire time`.
+  range` for non-canonical or out-of-range integers, and reject zero, negative,
+  or second-to-millisecond overflow with `invalid expire time`.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
