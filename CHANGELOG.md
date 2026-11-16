@@ -54,6 +54,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
+- `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, and `PUNSUBSCRIBE` inside `MULTI`
+  are queued and run by `EXEC`; the connection enters subscribed mode with the
+  acknowledgements nested in the `EXEC` reply. The subscribed-mode rejection
+  message now uses Redis's text.
 - `SPOP`, `SRANDMEMBER`, and `HRANDFIELD` return the whole collection for a
   positive count above its size instead of a count error, and validate the count
   before the key lookup. `SRANDMEMBER`/`HRANDFIELD` reject `i64::MIN` with

@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const REPLY_IDLE: Duration = Duration::from_secs(30);
+const ACK_IDLE: Duration = Duration::from_millis(100);
 // Acknowledgements still run under command_gate: allow a healthy batch to make
 // progress but cap the whole batch and any single stall.
-const ACK_IDLE: Duration = Duration::from_millis(100);
 const ACK_TOTAL: Duration = Duration::from_millis(750);
 // Publish deliveries run under the gate too, so one publish is capped tightly.
 const PUBLISH_IDLE: Duration = Duration::from_millis(20);
@@ -110,16 +110,34 @@ impl ClientSubscription<'_> {
     // The caller holds command_gate while writing these replies. This keeps
     // subscription acknowledgements ahead of later PUBLISH deliveries.
     pub fn change(&self, command: &[Vec<u8>]) -> io::Result<()> {
+        let deadline = Instant::now() + ACK_TOTAL;
+        let frames = self.change_frames(command, deadline)?;
+        for frame in frames {
+            let writer = self.writer()?;
+            let mut writer = writer.lock().unwrap();
+            write_frame(&mut writer, &frame, ACK_IDLE, deadline)?;
+        }
+        Ok(())
+    }
+
+    /// Apply a subscription change and return the acknowledgement frames
+    /// without writing them, so EXEC can nest them in its own reply.
+    pub fn change_frame(&self, command: &[Vec<u8>]) -> io::Result<Vec<u8>> {
+        let deadline = Instant::now() + ACK_TOTAL;
+        Ok(self.change_frames(command, deadline)?.concat())
+    }
+
+    fn change_frames(&self, command: &[Vec<u8>], deadline: Instant) -> io::Result<Vec<Vec<u8>>> {
         let name = command[0].as_slice();
         let adding =
             name.eq_ignore_ascii_case(b"SUBSCRIBE") || name.eq_ignore_ascii_case(b"PSUBSCRIBE");
         let pattern =
             name.eq_ignore_ascii_case(b"PSUBSCRIBE") || name.eq_ignore_ascii_case(b"PUNSUBSCRIBE");
         if adding && command.len() == 1 {
-            return self.write(&protocol::error(&format!(
+            return Ok(vec![protocol::error(&format!(
                 "wrong number of arguments for '{}' command",
                 String::from_utf8_lossy(name).to_ascii_lowercase()
-            )));
+            ))]);
         }
         let kind = if adding {
             if pattern {
@@ -132,7 +150,6 @@ impl ClientSubscription<'_> {
         } else {
             b"unsubscribe".as_slice()
         };
-        let deadline = Instant::now() + ACK_TOTAL;
         let mut listeners = self.hub.listeners.lock().unwrap();
         let Some(listener) = listeners.get_mut(&self.id) else {
             // A failed publish removed this subscriber. Close the connection
@@ -158,6 +175,7 @@ impl ClientSubscription<'_> {
         } else {
             command[1..].iter().cloned().map(Some).collect()
         };
+        let mut frames = Vec::new();
         for item in items {
             if Instant::now() >= deadline {
                 return Err(io::Error::new(
@@ -178,23 +196,23 @@ impl ClientSubscription<'_> {
                 }
             }
             let count = listener.channels.len() + listener.patterns.len();
-            let frame = acknowledgement(kind, item.as_deref(), count);
-            let mut writer = listener.writer.lock().unwrap();
-            write_frame(&mut writer, &frame, ACK_IDLE, deadline)?;
+            frames.push(acknowledgement(kind, item.as_deref(), count));
         }
-        Ok(())
+        Ok(frames)
     }
 
-    pub fn write(&self, reply: &[u8]) -> io::Result<()> {
-        let writer = self
-            .hub
+    fn writer(&self) -> io::Result<Writer> {
+        self.hub
             .listeners
             .lock()
             .unwrap()
             .get(&self.id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "subscriber disconnected"))?
-            .writer
-            .clone();
+            .map(|listener| listener.writer.clone())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "subscriber disconnected"))
+    }
+
+    pub fn write(&self, reply: &[u8]) -> io::Result<()> {
+        let writer = self.writer()?;
         let mut writer = writer.lock().unwrap();
         let deadline = Instant::now() + REPLY_IDLE;
         write_frame(&mut writer, reply, REPLY_IDLE, deadline)

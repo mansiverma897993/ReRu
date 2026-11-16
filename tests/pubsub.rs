@@ -5,7 +5,7 @@ mod client;
 #[allow(dead_code)]
 mod common;
 
-use client::{array, integer, ok, Client, Reply};
+use client::{array, integer, ok, queued, Client, Reply};
 use common::Server;
 use std::time::{Duration, Instant};
 
@@ -303,4 +303,73 @@ fn pubsub_numpat_handles_binary_and_duplicate_patterns() {
         Client::new(&server).call(&[b"PUBSUB", b"NUMPAT"]),
         integer(2)
     );
+}
+
+#[test]
+fn subscribe_inside_multi_queues_and_enters_subscribed_mode() {
+    let server = Server::start();
+    let mut publisher = Client::new(&server);
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"MULTI"]), ok());
+    assert_eq!(c.call(&[b"SET", b"k", b"v"]), queued());
+    assert_eq!(c.call(&[b"SUBSCRIBE", b"news"]), queued());
+    assert_eq!(
+        c.call(&[b"EXEC"]),
+        array(vec![ok(), ack(b"subscribe", Some(b"news"), 1)])
+    );
+
+    assert_eq!(
+        c.call(&[b"GET", b"k"]),
+        Reply::Error(
+            b"ERR Can't execute 'get': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
+                .to_vec()
+        )
+    );
+    assert_eq!(c.call(&[b"PING"]), array(vec![bulk(b"pong"), bulk(b"")]));
+    assert_eq!(publisher.call(&[b"PUBLISH", b"news", b"hello"]), integer(1));
+    assert_eq!(
+        c.read(),
+        array(vec![bulk(b"message"), bulk(b"news"), bulk(b"hello")])
+    );
+    assert_eq!(
+        c.call(&[b"UNSUBSCRIBE", b"news"]),
+        ack(b"unsubscribe", Some(b"news"), 0)
+    );
+    assert_eq!(c.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
+}
+
+#[test]
+fn subscribe_inside_multi_validates_arity_and_discard_clears_it() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"MULTI"]), ok());
+    assert_eq!(
+        c.call(&[b"SUBSCRIBE"]),
+        Reply::Error(b"ERR wrong number of arguments for 'subscribe' command".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"EXEC"]),
+        Reply::Error(b"EXECABORT Transaction discarded because of previous errors.".to_vec())
+    );
+
+    assert_eq!(c.call(&[b"MULTI"]), ok());
+    assert_eq!(c.call(&[b"PSUBSCRIBE", b"cache:*"]), queued());
+    assert_eq!(c.call(&[b"DISCARD"]), ok());
+    assert_eq!(c.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
+
+    assert_eq!(c.call(&[b"MULTI"]), ok());
+    assert_eq!(c.call(&[b"SUBSCRIBE", b"a"]), queued());
+    assert_eq!(c.call(&[b"SUBSCRIBE", b"b"]), queued());
+    assert_eq!(
+        c.call(&[b"EXEC"]),
+        array(vec![
+            ack(b"subscribe", Some(b"a"), 1),
+            ack(b"subscribe", Some(b"b"), 2),
+        ])
+    );
+    assert_eq!(
+        c.call(&[b"UNSUBSCRIBE"]),
+        ack(b"unsubscribe", Some(b"a"), 1)
+    );
+    assert_eq!(c.read(), ack(b"unsubscribe", Some(b"b"), 0));
 }

@@ -1817,16 +1817,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             subscription.write(b"+OK\r\n")?;
             return Ok(());
         }
-        if pubsub::is_subscription_command(&command) {
-            if transaction.is_some() {
-                transaction_error = true;
-                subscription.write(&protocol::error(
-                    "Pub/Sub command inside MULTI is not allowed",
-                ))?;
-            } else {
-                let _gate = store.command_gate.lock().unwrap();
-                subscription.change(&command)?;
-            }
+        if pubsub::is_subscription_command(&command) && transaction.is_none() {
+            let _gate = store.command_gate.lock().unwrap();
+            subscription.change(&command)?;
             continue;
         }
         if subscription.active() {
@@ -1843,9 +1836,10 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                 let _gate = store.command_gate.lock().unwrap();
                 subscription.write(&reply)?;
             } else {
-                subscription.write(&protocol::error(
-                    "Can't execute command while subscribed; only (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING, RESET and QUIT are allowed",
-                ))?;
+                let name = String::from_utf8_lossy(&command[0]).to_ascii_lowercase();
+                subscription.write(&protocol::error(&format!(
+                    "Can't execute '{name}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
+                )))?;
             }
             continue;
         }
@@ -1865,6 +1859,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         } else {
             store.latency.start(&command)
         };
+        let mut replied_early = false;
         let response = if command[0].eq_ignore_ascii_case(b"AUTH") && transaction.is_none() {
             store.auth.authenticate(&command, &mut authenticated)
         } else if let Some(error) = route_error {
@@ -1947,9 +1942,14 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                         let writes = queued.iter().any(|command| {
                             is_mutating(command) || hyperloglog::may_update_cache(command)
                         });
+                        let subscribes = queued
+                            .iter()
+                            .any(|command| pubsub::is_subscription_command(command));
                         for queued_command in queued {
                             let result = if queued_command[0].eq_ignore_ascii_case(b"AUTH") {
                                 store.auth.authenticate(&queued_command, &mut authenticated)
+                            } else if pubsub::is_subscription_command(&queued_command) {
+                                subscription.change_frame(&queued_command)?
                             } else if let Some(response) =
                                 session.execute(&queued_command, &store, &mut authenticated)
                             {
@@ -1963,6 +1963,12 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                             if let Err(error) = save_and_publish(&store) {
                                 response = misconf(&error);
                             }
+                        }
+                        if subscribes {
+                            // Writes to the socket while the gate is held so no
+                            // delivery can overtake the EXEC reply.
+                            subscription.write(&response)?;
+                            replied_early = true;
                         }
                         response
                     }
@@ -2026,7 +2032,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             response
         };
         store.latency.record(latency_started);
-        subscription.write(&response)?;
+        if !replied_early {
+            subscription.write(&response)?;
+        }
     }
     Ok(())
 }
