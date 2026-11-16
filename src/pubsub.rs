@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const REPLY_IDLE: Duration = Duration::from_secs(30);
+const ACK_IDLE: Duration = Duration::from_millis(100);
 // Acknowledgements still run under command_gate: allow a healthy batch to make
 // progress but cap the whole batch and any single stall.
-const ACK_IDLE: Duration = Duration::from_millis(100);
-const ACK_TOTAL: Duration = Duration::from_millis(750);
+pub(crate) const ACK_TOTAL: Duration = Duration::from_millis(750);
 // Publish deliveries run under the gate too, so one publish is capped tightly.
 const PUBLISH_IDLE: Duration = Duration::from_millis(20);
 const PUBLISH_TOTAL: Duration = Duration::from_millis(100);
@@ -71,6 +71,12 @@ struct Listener {
     writer: Writer,
     channels: HashSet<Vec<u8>>,
     patterns: HashSet<Vec<u8>>,
+    held: bool,
+    deferred: Vec<u8>,
+}
+
+fn disconnected() -> io::Error {
+    io::Error::new(io::ErrorKind::BrokenPipe, "subscriber disconnected")
 }
 
 pub struct ClientSubscription<'a> {
@@ -110,16 +116,52 @@ impl ClientSubscription<'_> {
     // The caller holds command_gate while writing these replies. This keeps
     // subscription acknowledgements ahead of later PUBLISH deliveries.
     pub fn change(&self, command: &[Vec<u8>]) -> io::Result<()> {
+        let deadline = Instant::now() + ACK_TOTAL;
+        let mut listeners = self.hub.listeners.lock().unwrap();
+        let Some(listener) = listeners.get_mut(&self.id) else {
+            return Err(disconnected());
+        };
+        Self::apply_change(listener, command, deadline, |writer, frame, deadline| {
+            let mut writer = writer.lock().unwrap();
+            write_frame(&mut writer, frame, ACK_IDLE, deadline)
+        })
+    }
+
+    /// Apply a subscription change and return the acknowledgement frames
+    /// without writing them, so EXEC can nest them in its own reply.
+    pub fn change_frame(&self, command: &[Vec<u8>], deadline: Instant) -> io::Result<Vec<u8>> {
+        let mut listeners = self.hub.listeners.lock().unwrap();
+        let Some(listener) = listeners.get_mut(&self.id) else {
+            return Err(disconnected());
+        };
+        let mut frames = Vec::new();
+        Self::apply_change(listener, command, deadline, |_, frame, _| {
+            frames.extend_from_slice(frame);
+            Ok(())
+        })?;
+        Ok(frames)
+    }
+
+    fn apply_change(
+        listener: &mut Listener,
+        command: &[Vec<u8>],
+        deadline: Instant,
+        mut emit: impl FnMut(&Writer, &[u8], Instant) -> io::Result<()>,
+    ) -> io::Result<()> {
         let name = command[0].as_slice();
         let adding =
             name.eq_ignore_ascii_case(b"SUBSCRIBE") || name.eq_ignore_ascii_case(b"PSUBSCRIBE");
         let pattern =
             name.eq_ignore_ascii_case(b"PSUBSCRIBE") || name.eq_ignore_ascii_case(b"PUNSUBSCRIBE");
         if adding && command.len() == 1 {
-            return self.write(&protocol::error(&format!(
-                "wrong number of arguments for '{}' command",
-                String::from_utf8_lossy(name).to_ascii_lowercase()
-            )));
+            return emit(
+                &listener.writer,
+                &protocol::error(&format!(
+                    "wrong number of arguments for '{}' command",
+                    String::from_utf8_lossy(name).to_ascii_lowercase()
+                )),
+                deadline,
+            );
         }
         let kind = if adding {
             if pattern {
@@ -131,16 +173,6 @@ impl ClientSubscription<'_> {
             b"punsubscribe".as_slice()
         } else {
             b"unsubscribe".as_slice()
-        };
-        let deadline = Instant::now() + ACK_TOTAL;
-        let mut listeners = self.hub.listeners.lock().unwrap();
-        let Some(listener) = listeners.get_mut(&self.id) else {
-            // A failed publish removed this subscriber. Close the connection
-            // instead of unwrapping an entry that no longer exists.
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "subscriber disconnected",
-            ));
         };
         let items: Vec<Option<Vec<u8>>> = if !adding && command.len() == 1 {
             let subscriptions = if pattern {
@@ -179,22 +211,66 @@ impl ClientSubscription<'_> {
             }
             let count = listener.channels.len() + listener.patterns.len();
             let frame = acknowledgement(kind, item.as_deref(), count);
-            let mut writer = listener.writer.lock().unwrap();
-            write_frame(&mut writer, &frame, ACK_IDLE, deadline)?;
+            emit(&listener.writer, &frame, deadline)?;
         }
         Ok(())
     }
 
-    pub fn write(&self, reply: &[u8]) -> io::Result<()> {
-        let writer = self
-            .hub
+    /// Buffer publish deliveries until `release`, so a message published during
+    /// the client's own EXEC cannot overtake the transaction reply.
+    pub fn hold(&self) {
+        if let Some(listener) = self.hub.listeners.lock().unwrap().get_mut(&self.id) {
+            listener.held = true;
+        }
+    }
+
+    pub fn release(&self) -> io::Result<()> {
+        let deadline = Instant::now() + ACK_TOTAL;
+        loop {
+            let deferred = {
+                let mut listeners = self.hub.listeners.lock().unwrap();
+                let Some(listener) = listeners.get_mut(&self.id) else {
+                    return Err(disconnected());
+                };
+                let deferred = std::mem::take(&mut listener.deferred);
+                if deferred.is_empty() {
+                    // Clear the hold in the same critical section as the take,
+                    // so a publish cannot append between them and be stranded.
+                    listener.held = false;
+                }
+                deferred
+            };
+            if deferred.is_empty() {
+                return Ok(());
+            }
+            self.write_bounded(&deferred, ACK_IDLE, deadline)?;
+        }
+    }
+
+    /// Write an EXEC reply under the gate with a bounded budget, so a stalled
+    /// client drops instead of freezing every other client.
+    pub fn write_transaction(&self, reply: &[u8]) -> io::Result<()> {
+        self.write_bounded(reply, ACK_IDLE, Instant::now() + ACK_TOTAL)
+    }
+
+    fn write_bounded(&self, reply: &[u8], idle: Duration, deadline: Instant) -> io::Result<()> {
+        let writer = self.writer()?;
+        let mut writer = writer.lock().unwrap();
+        write_frame(&mut writer, reply, idle, deadline)
+    }
+
+    fn writer(&self) -> io::Result<Writer> {
+        self.hub
             .listeners
             .lock()
             .unwrap()
             .get(&self.id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "subscriber disconnected"))?
-            .writer
-            .clone();
+            .map(|listener| listener.writer.clone())
+            .ok_or_else(disconnected)
+    }
+
+    pub fn write(&self, reply: &[u8]) -> io::Result<()> {
+        let writer = self.writer()?;
         let mut writer = writer.lock().unwrap();
         let deadline = Instant::now() + REPLY_IDLE;
         write_frame(&mut writer, reply, REPLY_IDLE, deadline)
@@ -210,6 +286,8 @@ impl Hub {
                 writer,
                 channels: HashSet::new(),
                 patterns: HashSet::new(),
+                held: false,
+                deferred: Vec::new(),
             },
         );
         ClientSubscription { id, hub: self }
@@ -221,9 +299,23 @@ impl Hub {
         let direct = message_reply(b"message", &[channel, message]);
         let mut count = 0;
         let mut failed = Vec::new();
-        for (id, listener) in listeners.iter() {
+        for (id, listener) in listeners.iter_mut() {
             if Instant::now() >= deadline {
                 break;
+            }
+            if listener.held {
+                if listener.channels.contains(channel) {
+                    listener.deferred.extend_from_slice(&direct);
+                    count += 1;
+                }
+                for pattern in &listener.patterns {
+                    if glob_matches(pattern, channel) {
+                        let reply = message_reply(b"pmessage", &[pattern, channel, message]);
+                        listener.deferred.extend_from_slice(&reply);
+                        count += 1;
+                    }
+                }
+                continue;
             }
             let mut writer = listener.writer.lock().unwrap();
             let mut delivered = true;

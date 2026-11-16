@@ -54,6 +54,13 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
+- `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, and `PUNSUBSCRIBE` inside `MULTI`
+  are queued and run by `EXEC`; the connection enters subscribed mode with the
+  acknowledgements nested in the `EXEC` reply. A `PING` after a subscription in
+  the same `EXEC` uses the subscribed reply shape, messages published to the
+  connection inside `EXEC` are delivered after the transaction reply, and
+  `EXEC` inside subscribed mode replies `EXECABORT`. The subscribed-mode
+  rejection message now uses Redis's text.
 - Sorted-set score replies use Redis-style formatting: exact integers print
   without an exponent and small or very large magnitudes use exponent form
   (`1e+300`, `1e-7`, `1e+20`) instead of a fully expanded decimal. Digit
@@ -94,11 +101,6 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   label for the stored value, and every present key reports one reference.
 - `LCS` with `LEN`, `IDX`, `MINMATCHLEN`, and `WITHMATCHLEN`. All forms are
   capped at 8,000,000 table cells.
-<<<<<<< HEAD
-
-
-=======
->>>>>>> origin/main
 - Static two-node Cluster routing with CRC16/hash-tag slots, `CLUSTER KEYSLOT`,
   `CLUSTER SHARDS`, `CLUSTER SLOTS`, `MOVED`, and `CROSSSLOT` replies. Dynamic
   membership, migration, and failover remain unsupported.

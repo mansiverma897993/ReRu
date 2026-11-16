@@ -548,11 +548,19 @@ Messages are delivered to current subscribers on the same server process.
 Pattern subscriptions use byte-wise, case-sensitive `*`, `?`, bracket ranges,
 and backslash escapes. A direct and matching pattern subscription on one client
 receive separate messages, and `PUBLISH` counts both. Subscribed RESP2 clients
-can issue subscription commands, PING and QUIT. Disconnects remove their
+can issue subscription commands, PING, RESET and QUIT. Subscription commands
+inside `MULTI` are queued and executed by `EXEC`, which nests their
+acknowledgements in its reply and leaves the connection subscribed; an invalid
+subscription arity aborts the transaction. Disconnects remove their
 subscriptions. Delivery is at-most-once; messages are not persisted or
 replicated, and clients on other ReRu servers do not receive them. Writes to a
-subscriber socket are synchronous with a 500 ms timeout; slow-client buffering
-and backpressure do not yet match Redis. Sharded Pub/Sub, keyspace
+subscriber socket are synchronous: acknowledgements get 100 ms of idle progress
+within a 750 ms batch, and an `EXEC` reply from a subscribed client uses the same
+budget so a stalled client is dropped instead of blocking the server, and
+deferred deliveries are flushed afterwards with their own bound. A message
+published to the client's own channels during `EXEC` is held and delivered after
+the transaction reply. Slow-client buffering and backpressure do not yet match
+Redis. Sharded Pub/Sub, keyspace
 notifications, and Pub/Sub ACLs remain pending. RESET clears subscriptions and
 returns the connection to ordinary RESP2 command mode.
 
