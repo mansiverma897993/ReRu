@@ -65,43 +65,15 @@ fn integer(value: usize) -> Vec<u8> {
 }
 
 fn parse_i64(bytes: &[u8]) -> Result<i64, Vec<u8>> {
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
+    protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
-}
-
-/// Parse an integer the way Redis's `string2ll` does: an optional `-`, no `+`,
-/// no leading zeros unless the value is exactly `0`, and an `i64` range.
-pub(crate) fn parse_redis_int(bytes: &[u8]) -> Option<i64> {
-    if bytes == b"0" {
-        return Some(0);
-    }
-    let (negative, digits) = match bytes.split_first() {
-        Some((b'-', rest)) => (true, rest),
-        _ => (false, bytes),
-    };
-    match digits.first() {
-        Some(first) if (b'1'..=b'9').contains(first) => {}
-        _ => return None,
-    }
-    let mut magnitude: i128 = 0;
-    for byte in digits {
-        if !byte.is_ascii_digit() {
-            return None;
-        }
-        magnitude = magnitude
-            .checked_mul(10)?
-            .checked_add(i128::from(byte - b'0'))?;
-    }
-    i64::try_from(if negative { -magnitude } else { magnitude }).ok()
 }
 
 /// Redis reads a count that must not be negative with its own message: a value
 /// that is not a valid integer, a negative value or an overflow all get the
 /// same error.
 pub fn parse_count(bytes: &[u8]) -> Result<usize, Vec<u8>> {
-    match parse_redis_int(bytes) {
+    match protocol::parse_int(bytes) {
         Some(value) if value >= 0 => Ok(value as usize),
         _ => Err(protocol::error("value is out of range, must be positive")),
     }
@@ -268,7 +240,7 @@ fn pos_options(command: &[Vec<u8>]) -> Result<PosOptions, Vec<u8>> {
     }
     for pair in pairs {
         if pair[0].eq_ignore_ascii_case(b"RANK") {
-            options.rank = match parse_redis_int(&pair[1]) {
+            options.rank = match protocol::parse_int(&pair[1]) {
                 Some(i64::MIN) => {
                     return Err(protocol::error(
                         "value is out of range, value must between -9223372036854775807 and 9223372036854775807",
@@ -279,12 +251,12 @@ fn pos_options(command: &[Vec<u8>]) -> Result<PosOptions, Vec<u8>> {
                 None => return Err(protocol::error("value is not an integer or out of range")),
             };
         } else if pair[0].eq_ignore_ascii_case(b"COUNT") {
-            options.count = match parse_redis_int(&pair[1]) {
+            options.count = match protocol::parse_int(&pair[1]) {
                 Some(value) if value >= 0 => Some(value as usize),
                 _ => return Err(protocol::error("COUNT can't be negative")),
             };
         } else if pair[0].eq_ignore_ascii_case(b"MAXLEN") {
-            options.maxlen = match parse_redis_int(&pair[1]) {
+            options.maxlen = match protocol::parse_int(&pair[1]) {
                 Some(value) if value >= 0 => value as usize,
                 _ => return Err(protocol::error("MAXLEN can't be negative")),
             };

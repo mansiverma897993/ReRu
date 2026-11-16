@@ -73,10 +73,7 @@ impl Session {
         let reply = if c[0].eq_ignore_ascii_case(b"HELLO") {
             self.hello(c, store, authenticated)
         } else if c[0].eq_ignore_ascii_case(b"SELECT") {
-            match std::str::from_utf8(&c[1])
-                .ok()
-                .and_then(|s| s.parse::<i64>().ok())
-            {
+            match protocol::parse_int(&c[1]) {
                 Some(0) => b"+OK\r\n".to_vec(),
                 Some(_) => {
                     protocol::error("DB index is out of range (ReRu supports only database 0)")
@@ -117,9 +114,7 @@ impl Session {
 
     fn hello(&mut self, c: &[Vec<u8>], store: &Store, authenticated: &mut bool) -> Vec<u8> {
         if let Some(version) = c.get(1) {
-            let version = std::str::from_utf8(version)
-                .ok()
-                .and_then(|v| v.parse::<i64>().ok());
+            let version = protocol::parse_int(version);
             match version {
                 Some(2) => {}
                 Some(_) => return b"-NOPROTO unsupported protocol version\r\n".to_vec(),

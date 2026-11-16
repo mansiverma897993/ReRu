@@ -72,13 +72,12 @@ fn field_encoding(bytes: &[u8]) -> Result<(u32, bool), Vec<u8>> {
     let (signed, digits) = match bytes.split_first() {
         Some((b'i', digits)) => (true, digits),
         Some((b'u', digits)) => (false, digits),
-        _ => return Err(protocol::error("invalid bitfield type")),
+        _ => return Err(protocol::error(BITFIELD_TYPE_ERROR)),
     };
-    let width = std::str::from_utf8(digits)
-        .ok()
-        .and_then(|text| text.parse::<u32>().ok())
+    let width = protocol::parse_int(digits)
+        .and_then(|value| u32::try_from(value).ok())
         .filter(|width| *width > 0 && *width <= if signed { 64 } else { 63 })
-        .ok_or_else(|| protocol::error("invalid bitfield type"))?;
+        .ok_or_else(|| protocol::error(BITFIELD_TYPE_ERROR))?;
     Ok((width, signed))
 }
 
@@ -88,9 +87,8 @@ fn field_position(bytes: &[u8], width: u32, writing: bool) -> Result<usize, Vec<
     } else {
         (bytes, 1)
     };
-    let index = std::str::from_utf8(number)
-        .ok()
-        .and_then(|text| text.parse::<u64>().ok())
+    let index = protocol::parse_int(number)
+        .and_then(|value| u64::try_from(value).ok())
         .and_then(|value| value.checked_mul(multiplier))
         .ok_or_else(|| protocol::error("bit offset is not an integer or out of range"))?;
     let last = index
@@ -282,14 +280,15 @@ fn bitfield(command: &[Vec<u8>], store: &Store, read_only: bool) -> Vec<u8> {
 fn integer(value: i64) -> Vec<u8> {
     format!(":{value}\r\n").into_bytes()
 }
+const BITFIELD_TYPE_ERROR: &str =
+    "Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.";
+
 fn wrong_type() -> Vec<u8> {
     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()
 }
 
 fn signed(bytes: &[u8]) -> Result<i64, Vec<u8>> {
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|text| text.parse::<i64>().ok())
+    protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
 
@@ -309,10 +308,11 @@ fn offset(bytes: &[u8], writing: bool) -> Result<usize, Vec<u8>> {
 }
 
 fn bit(bytes: &[u8]) -> Result<u8, Vec<u8>> {
-    match bytes {
-        b"0" => Ok(0),
-        b"1" => Ok(1),
-        _ => Err(protocol::error("bit is not an integer or out of range")),
+    match protocol::parse_int(bytes) {
+        Some(0) => Ok(0),
+        Some(1) => Ok(1),
+        Some(_) => Err(protocol::error("The bit argument must be 1 or 0.")),
+        None => Err(protocol::error("value is not an integer or out of range")),
     }
 }
 

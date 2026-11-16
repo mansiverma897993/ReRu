@@ -220,9 +220,8 @@ fn scan_options(command: &[Vec<u8>], hash: bool) -> Result<ScanOptions<'_>, Vec<
             options.pattern = Some(&command[at + 1]);
             at += 2;
         } else if at + 1 < command.len() && command[at].eq_ignore_ascii_case(b"COUNT") {
-            options.count = std::str::from_utf8(&command[at + 1])
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
+            options.count = protocol::parse_int(&command[at + 1])
+                .and_then(|value| usize::try_from(value).ok())
                 .filter(|value| *value > 0)
                 .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
             at += 2;
@@ -499,9 +498,8 @@ fn execute_set(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     use Command::*;
     let mut entries = store.entries.lock().unwrap();
     if matches!(kind, Sintercard) {
-        let numkeys = match std::str::from_utf8(&command[1])
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
+        let numkeys = match protocol::parse_int(&command[1])
+            .and_then(|value| usize::try_from(value).ok())
             .filter(|value| *value > 0)
         {
             Some(value) => value,
@@ -514,12 +512,9 @@ fn execute_set(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         let limit = if end == command.len() {
             0
         } else if end + 2 == command.len() && command[end].eq_ignore_ascii_case(b"LIMIT") {
-            match std::str::from_utf8(&command[end + 1])
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-            {
-                Some(value) => value,
-                None => return protocol::error("LIMIT can't be negative"),
+            match protocol::parse_int(&command[end + 1]) {
+                Some(value) if value >= 0 => value as usize,
+                _ => return protocol::error("LIMIT can't be negative"),
             }
         } else {
             return protocol::error("syntax error");

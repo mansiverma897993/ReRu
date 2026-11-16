@@ -633,9 +633,8 @@ fn parse_multi_pop(command: &[Vec<u8>], blocking: bool) -> Result<MultiPopOption
     } else {
         None
     };
-    let numkeys = std::str::from_utf8(&command[count_at])
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
+    let numkeys = protocol::parse_int(&command[count_at])
+        .and_then(|value| usize::try_from(value).ok())
         .filter(|value| *value > 0)
         .ok_or_else(|| protocol::error("numkeys should be greater than 0"))?;
     let start = count_at + 1;
@@ -653,11 +652,10 @@ fn parse_multi_pop(command: &[Vec<u8>], blocking: bool) -> Result<MultiPopOption
     let count = if command.len() == end + 1 {
         1
     } else if command.len() == end + 3 && command[end + 1].eq_ignore_ascii_case(b"COUNT") {
-        std::str::from_utf8(&command[end + 2])
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
+        protocol::parse_int(&command[end + 2])
+            .and_then(|value| usize::try_from(value).ok())
             .filter(|value| *value > 0)
-            .ok_or_else(|| protocol::error("COUNT should be greater than 0"))?
+            .ok_or_else(|| protocol::error("count should be greater than 0"))?
     } else {
         return Err(protocol::error("syntax error"));
     };
@@ -762,9 +760,8 @@ fn parse_zpop(command: &[Vec<u8>]) -> Result<ZPopOptions<'_>, Vec<u8>> {
     } else {
         None
     };
-    let numkeys = std::str::from_utf8(&command[count_at])
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
+    let numkeys = protocol::parse_int(&command[count_at])
+        .and_then(|value| usize::try_from(value).ok())
         .filter(|value| *value > 0)
         .ok_or_else(|| protocol::error("numkeys should be greater than 0"))?;
     let start = count_at + 1;
@@ -782,11 +779,10 @@ fn parse_zpop(command: &[Vec<u8>]) -> Result<ZPopOptions<'_>, Vec<u8>> {
     let count = if command.len() == end + 1 {
         1
     } else if command.len() == end + 3 && command[end + 1].eq_ignore_ascii_case(b"COUNT") {
-        std::str::from_utf8(&command[end + 2])
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
+        protocol::parse_int(&command[end + 2])
+            .and_then(|value| usize::try_from(value).ok())
             .filter(|value| *value > 0)
-            .ok_or_else(|| protocol::error("COUNT should be greater than 0"))?
+            .ok_or_else(|| protocol::error("count should be greater than 0"))?
     } else {
         return Err(protocol::error("syntax error"));
     };
@@ -984,7 +980,7 @@ fn parse_xread(command: &[Vec<u8>]) -> Result<XReadOptions<'_>, Vec<u8>> {
             return Err(protocol::error("syntax error"));
         }
         if command[index].eq_ignore_ascii_case(b"COUNT") {
-            let value = list_ops::parse_redis_int(&command[index + 1])
+            let value = protocol::parse_int(&command[index + 1])
                 .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
             // Redis treats a zero or negative count as unlimited.
             count = if value <= 0 {
@@ -1218,11 +1214,7 @@ fn execute_command(
                 Some(Entry {
                     value: Value::String(value),
                     ..
-                }) => match std::str::from_utf8(value)
-                    .ok()
-                    .and_then(|text| text.parse::<i64>().ok())
-                    .and_then(|number| number.checked_add(1))
-                {
+                }) => match protocol::parse_int(value).and_then(|number| number.checked_add(1)) {
                     Some(number) => {
                         *value = number.to_string().into_bytes();
                         format!(":{number}\r\n").into_bytes()
@@ -1282,11 +1274,7 @@ fn execute_command(
         if command.len() != 4 {
             protocol::error("wrong number of arguments for 'lrange' command")
         } else {
-            let indexes = [command[2].as_slice(), command[3].as_slice()].map(|bytes| {
-                std::str::from_utf8(bytes)
-                    .ok()
-                    .and_then(|s| s.parse::<i64>().ok())
-            });
+            let indexes = [command[2].as_slice(), command[3].as_slice()].map(protocol::parse_int);
             match indexes {
                 [Some(start), Some(stop)] => {
                     let mut store = store.entries.lock().unwrap();
@@ -1511,7 +1499,7 @@ fn execute_command(
                 return protocol::error(message);
             }
             let count = if command.len() == 6 {
-                match list_ops::parse_redis_int(&command[5]) {
+                match protocol::parse_int(&command[5]) {
                     Some(count) => count,
                     None => return protocol::error("value is not an integer or out of range"),
                 }
@@ -1582,10 +1570,7 @@ fn execute_command(
         } else {
             let threshold = &command[command.len() - 1];
             let maxlen = if command[2].eq_ignore_ascii_case(b"MAXLEN") {
-                match std::str::from_utf8(threshold)
-                    .ok()
-                    .and_then(|value| value.parse::<usize>().ok())
-                {
+                match protocol::parse_int(threshold).and_then(|value| usize::try_from(value).ok()) {
                     Some(value) => Some(value),
                     None => return protocol::error("value is not an integer or out of range"),
                 }

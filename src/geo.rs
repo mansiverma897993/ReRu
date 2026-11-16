@@ -453,12 +453,15 @@ fn parse_search(command: &[Vec<u8>], stored: bool) -> Result<SearchOptions, Vec<
             options.descending = Some(arg.eq_ignore_ascii_case(b"DESC"));
             at += 1;
         } else if arg.eq_ignore_ascii_case(b"COUNT") && options.count.is_none() {
-            let count = command
+            let raw = command
                 .get(at + 1)
-                .and_then(|value| std::str::from_utf8(value).ok())
-                .and_then(|value| value.parse::<usize>().ok())
-                .filter(|value| *value > 0)
-                .ok_or_else(|| protocol::error("COUNT must be greater than 0"))?;
+                .ok_or_else(|| protocol::error("syntax error"))?;
+            let count = match protocol::parse_int(raw).and_then(|value| usize::try_from(value).ok())
+            {
+                Some(value) if value > 0 => value,
+                Some(_) => return Err(protocol::error("COUNT must be > 0")),
+                None => return Err(protocol::error("value is not an integer or out of range")),
+            };
             options.count = Some(count);
             at += 2;
             if command

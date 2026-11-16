@@ -164,9 +164,7 @@ pub(super) fn is_mutating(command: &[Vec<u8>]) -> bool {
 }
 
 fn parse_number(bytes: &[u8]) -> Result<i64, Vec<u8>> {
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|value| value.parse().ok())
+    protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
 

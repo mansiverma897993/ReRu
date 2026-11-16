@@ -54,6 +54,12 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
+- Integer command arguments now use Redis's canonical `string2ll` form across
+  `INCRBY`/`DECRBY`/`INCR`, list and sorted-set indexes and counts, hash and
+  key expiry, bitmap offsets and widths, stream trim limits, `SELECT`, `HELLO`,
+  scan `COUNT`, multi-key `numkeys`/`COUNT`, and geo `COUNT`; values such as
+  `010`, `+1` and `-0` are rejected. Wire-level bulk and multibulk lengths are
+  canonical as well. Scan cursors and stream IDs keep Redis's lenient parsers.
 - `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, and `PUNSUBSCRIBE` inside `MULTI`
   are queued and run by `EXEC`; the connection enters subscribed mode with the
   acknowledgements nested in the `EXEC` reply. A `PING` after a subscription in

@@ -317,9 +317,7 @@ fn parse_score(bytes: &[u8]) -> Result<f64, Vec<u8>> {
 }
 
 fn parse_index(bytes: &[u8]) -> Result<i64, Vec<u8>> {
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|text| text.parse::<i64>().ok())
+    protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
 
@@ -732,9 +730,8 @@ fn scan(command: &[Vec<u8>], scores: Option<&SortedSet>) -> Vec<u8> {
         if pair[0].eq_ignore_ascii_case(b"MATCH") {
             pattern = Some(pair[1].as_slice());
         } else if pair[0].eq_ignore_ascii_case(b"COUNT") {
-            count = match std::str::from_utf8(&pair[1])
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
+            count = match protocol::parse_int(&pair[1])
+                .and_then(|value| usize::try_from(value).ok())
                 .filter(|value| *value > 0)
             {
                 Some(value) => value,
@@ -1017,9 +1014,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         }
         Command::PopMin | Command::PopMax => {
             let count = if command.len() == 3 {
-                match std::str::from_utf8(&command[2])
-                    .ok()
-                    .and_then(|value| value.parse::<usize>().ok())
+                match protocol::parse_int(&command[2]).and_then(|value| usize::try_from(value).ok())
                 {
                     Some(value) => value,
                     None => {

@@ -244,9 +244,8 @@ fn scan(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         if pair[0].eq_ignore_ascii_case(b"MATCH") {
             pattern = Some(pair[1].as_slice());
         } else if pair[0].eq_ignore_ascii_case(b"COUNT") {
-            count = match std::str::from_utf8(&pair[1])
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
+            count = match protocol::parse_int(&pair[1])
+                .and_then(|value| usize::try_from(value).ok())
                 .filter(|value| *value > 0)
             {
                 Some(value) => value,

@@ -126,9 +126,7 @@ pub fn add_command(command: &[Vec<u8>], store: &crate::Store) -> Vec<u8> {
                     .get(i)
                     .ok_or_else(|| protocol::error("syntax error"))?;
                 trim = Some(if maxlen {
-                    let length = std::str::from_utf8(value)
-                        .ok()
-                        .and_then(|s| s.parse::<i64>().ok())
+                    let length = protocol::parse_int(value)
                         .filter(|n| *n >= 0)
                         .and_then(|n| usize::try_from(n).ok())
                         .ok_or_else(|| {
@@ -341,7 +339,7 @@ impl Stream {
 /// overflow check.
 pub(crate) fn timeout_millis(raw: &[u8]) -> Result<u64, &'static str> {
     let value =
-        crate::list_ops::parse_redis_int(raw).ok_or("timeout is not an integer or out of range")?;
+        crate::protocol::parse_int(raw).ok_or("timeout is not an integer or out of range")?;
     if value < 0 {
         return Err("timeout is negative");
     }

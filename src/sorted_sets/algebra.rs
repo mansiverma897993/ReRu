@@ -44,11 +44,27 @@ fn parse<'a>(kind: Command, command: &'a [Vec<u8>]) -> Result<Options<'a>, Vec<u
         _ => unreachable!(),
     };
     let count_at = if destination.is_some() { 2 } else { 1 };
-    let count = std::str::from_utf8(&command[count_at])
-        .ok()
-        .and_then(|text| text.parse::<usize>().ok())
-        .filter(|count| *count > 0)
-        .ok_or_else(|| protocol::error("numkeys should be greater than 0"))?;
+    let count = match protocol::parse_int(&command[count_at])
+        .and_then(|value| usize::try_from(value).ok())
+    {
+        Some(count) if count > 0 => count,
+        Some(_) => {
+            let name = match kind {
+                Command::Union => "zunion",
+                Command::UnionStore => "zunionstore",
+                Command::Intersect => "zinter",
+                Command::IntersectStore => "zinterstore",
+                Command::Difference => "zdiff",
+                Command::DifferenceStore => "zdiffstore",
+                Command::IntersectCard => "zintercard",
+                _ => unreachable!(),
+            };
+            return Err(protocol::error(&format!(
+                "at least 1 input key is needed for '{name}' command"
+            )));
+        }
+        None => return Err(protocol::error("value is not an integer or out of range")),
+    };
     let from = count_at + 1;
     let end = from
         .checked_add(count)
@@ -75,10 +91,10 @@ fn parse<'a>(kind: Command, command: &'a [Vec<u8>]) -> Result<Options<'a>, Vec<u
             let value = command
                 .get(at + 1)
                 .ok_or_else(|| protocol::error("syntax error"))?;
-            options.limit = std::str::from_utf8(value)
-                .ok()
-                .and_then(|text| text.parse::<usize>().ok())
-                .ok_or_else(|| protocol::error("LIMIT can't be negative"))?;
+            options.limit = match protocol::parse_int(value) {
+                Some(limit) if limit >= 0 => limit as usize,
+                _ => return Err(protocol::error("LIMIT can't be negative")),
+            };
             seen_limit = true;
             at += 2;
         } else if matches!(operation, Operation::Union | Operation::Intersect)
