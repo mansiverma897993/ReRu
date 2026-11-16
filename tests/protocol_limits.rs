@@ -6,6 +6,8 @@ mod common;
 
 use client::{integer, ok, Client, Reply};
 
+const LARGE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn snapshot_path() -> std::path::PathBuf {
     common::temp_path("protocol-large", ".snap")
 }
@@ -44,7 +46,7 @@ fn commands_with_more_than_1024_arguments_are_accepted() {
 #[test]
 fn values_above_the_old_64_mib_limit_are_accepted() {
     let server = common::Server::start();
-    let mut c = Client::with_timeout(&server, std::time::Duration::from_secs(30));
+    let mut c = Client::with_read_timeout(&server, LARGE_READ_TIMEOUT);
     let value = vec![b'x'; 65 * 1024 * 1024];
     assert_eq!(c.call(&[b"SET", b"large", &value]), ok());
     assert_eq!(c.call(&[b"STRLEN", b"large"]), integer(value.len() as i64));
@@ -59,13 +61,13 @@ fn large_values_survive_a_snapshot_restart() {
     let value = vec![b'y'; 65 * 1024 * 1024];
     {
         let server = common::Server::start_with(&["--snapshot", &filename]);
-        let mut c = Client::with_timeout(&server, std::time::Duration::from_secs(30));
+        let mut c = Client::with_read_timeout(&server, LARGE_READ_TIMEOUT);
         // Snapshot mode persists synchronously before the reply.
         assert_eq!(c.call(&[b"SET", b"snap-large", &value]), ok());
     }
     {
         let server = common::Server::start_with(&["--snapshot", &filename]);
-        let mut c = Client::with_timeout(&server, std::time::Duration::from_secs(30));
+        let mut c = Client::with_read_timeout(&server, LARGE_READ_TIMEOUT);
         assert_eq!(
             c.call(&[b"STRLEN", b"snap-large"]),
             integer(value.len() as i64)
