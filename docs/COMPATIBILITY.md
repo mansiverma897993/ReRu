@@ -263,7 +263,9 @@ tag; new builds read older tags, but older builds cannot read new snapshots.
 ## HyperLogLog
 
 `PFADD` accepts binary members and creates an empty sketch when called without
-members on a missing key. It returns 1 only when a key is created or a register
+members on a missing key. Non-string keys return the generic WRONGTYPE error,
+while a string whose header is not a valid sketch keeps the
+HyperLogLog-specific message. It returns 1 only when a key is created or a register
 changes; duplicate/no-op additions leave the stored bytes and WATCH unchanged.
 `PFCOUNT` returns zero for missing keys and estimates a multi-key union without
 creating a destination. `PFMERGE` includes the existing destination, supports
