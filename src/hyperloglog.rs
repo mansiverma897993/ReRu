@@ -7,7 +7,8 @@ use crate::{mark_modified, protocol, remove_expired, Entry, Store, Value};
 const REGISTERS: usize = 1 << 14;
 const HEADER: usize = 16;
 const DENSE_BYTES: usize = HEADER + REGISTERS * 6 / 8;
-const WRONGTYPE: &[u8] = b"-WRONGTYPE Key is not a valid HyperLogLog string value.\r\n";
+const HLL_HEADER: &[u8] = b"-WRONGTYPE Key is not a valid HyperLogLog string value.\r\n";
+const WRONGTYPE: &[u8] = b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
 const CORRUPT: &[u8] = b"-INVALIDOBJ Corrupted HLL object detected\r\n";
 type Result<T> = std::result::Result<T, Vec<u8>>;
 
@@ -32,7 +33,7 @@ fn validate_header(bytes: &[u8]) -> Result<()> {
         || bytes[4] > 1
         || (bytes[4] == 0 && bytes.len() != DENSE_BYTES)
     {
-        return Err(WRONGTYPE.to_vec());
+        return Err(HLL_HEADER.to_vec());
     }
     Ok(())
 }

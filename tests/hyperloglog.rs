@@ -342,3 +342,42 @@ fn redis_reference_matches_hashes_estimates_union_sparse_and_dense_exchange() {
         redis.call(&[b"DEL", key]);
     }
 }
+
+#[test]
+fn non_string_keys_use_the_generic_wrong_type_error() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    let generic =
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec());
+    for fixture in [
+        &[b"LPUSH".as_slice(), b"list", b"x"] as &[&[u8]],
+        &[b"HSET", b"hash", b"f", b"v"],
+        &[b"SADD", b"set", b"m"],
+        &[b"ZADD", b"zset", b"1", b"m"],
+        &[b"XADD", b"stream", b"1-0", b"f", b"v"],
+    ] {
+        assert!(matches!(
+            c.call(fixture),
+            Reply::Integer(_) | Reply::Bulk(_)
+        ));
+        let key = fixture[1];
+        assert_eq!(c.call(&[b"PFADD", key, b"a"]), generic);
+    }
+
+    // Multi-key reads and merges report the type error from any position.
+    assert_eq!(c.call(&[b"PFCOUNT", b"set", b"list"]), generic);
+    assert_eq!(c.call(&[b"PFMERGE", b"dest", b"set", b"list"]), generic);
+    assert_eq!(c.call(&[b"EXISTS", b"dest"]), integer(0));
+
+    // A failed merge leaves an existing destination unchanged.
+    assert_eq!(c.call(&[b"PFADD", b"dest", b"keep"]), integer(1));
+    assert_eq!(c.call(&[b"PFMERGE", b"dest", b"list"]), generic);
+    assert_eq!(c.call(&[b"PFCOUNT", b"dest"]), integer(1));
+
+    // A string with a bad header keeps the HyperLogLog-specific error.
+    assert_eq!(c.call(&[b"SET", b"bad-hll", b"not-a-sketch"]), ok());
+    let header = Reply::Error(b"WRONGTYPE Key is not a valid HyperLogLog string value.".to_vec());
+    assert_eq!(c.call(&[b"PFCOUNT", b"bad-hll"]), header);
+    assert_eq!(c.call(&[b"PFADD", b"bad-hll", b"a"]), header);
+    assert_eq!(c.call(&[b"PFMERGE", b"dest", b"bad-hll"]), header);
+}

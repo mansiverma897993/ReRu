@@ -51,6 +51,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `HELLO` reports `replica` on a read-only replica, matching Redis's HELLO role
   field. `INFO` still has no replication section.
 - `PUBSUB NUMPAT` counts unique patterns instead of each client's subscription.
+- `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
+  keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
