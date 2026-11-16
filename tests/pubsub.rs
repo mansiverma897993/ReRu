@@ -405,6 +405,19 @@ fn subscription_commands_inside_exec_follow_redis_order() {
         ])
     );
 
+    // PING keeps its arity check inside a subscribed EXEC.
+    let mut bad_ping = Client::new(&server);
+    assert_eq!(bad_ping.call(&[b"MULTI"]), ok());
+    assert_eq!(bad_ping.call(&[b"SUBSCRIBE", b"q1"]), queued());
+    assert_eq!(bad_ping.call(&[b"PING", b"x", b"y"]), queued());
+    assert_eq!(
+        bad_ping.call(&[b"EXEC"]),
+        array(vec![
+            ack(b"subscribe", Some(b"q1"), 1),
+            Reply::Error(b"ERR wrong number of arguments for 'ping' command".to_vec()),
+        ])
+    );
+
     // Several channels in one queued command produce one ack each.
     let mut multi = Client::new(&server);
     assert_eq!(multi.call(&[b"MULTI"]), ok());

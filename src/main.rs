@@ -1967,12 +1967,16 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                             } else if queued_command[0].eq_ignore_ascii_case(b"PING")
                                 && subscription.active()
                             {
-                                let payload =
-                                    queued_command.get(1).map_or(b"".as_slice(), Vec::as_slice);
-                                let mut reply = b"*2\r\n".to_vec();
-                                reply.extend(protocol::bulk(b"pong"));
-                                reply.extend(protocol::bulk(payload));
-                                reply
+                                if queued_command.len() > 2 {
+                                    protocol::error("wrong number of arguments for 'ping' command")
+                                } else {
+                                    let payload =
+                                        queued_command.get(1).map_or(b"".as_slice(), Vec::as_slice);
+                                    let mut reply = b"*2\r\n".to_vec();
+                                    reply.extend(protocol::bulk(b"pong"));
+                                    reply.extend(protocol::bulk(payload));
+                                    reply
+                                }
                             } else if let Some(response) =
                                 session.execute(&queued_command, &store, &mut authenticated)
                             {

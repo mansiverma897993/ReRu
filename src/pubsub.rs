@@ -225,18 +225,25 @@ impl ClientSubscription<'_> {
     }
 
     pub fn release(&self) -> io::Result<()> {
-        let deferred = {
-            let mut listeners = self.hub.listeners.lock().unwrap();
-            let Some(listener) = listeners.get_mut(&self.id) else {
-                return Err(disconnected());
+        let deadline = Instant::now() + ACK_TOTAL;
+        loop {
+            let deferred = {
+                let mut listeners = self.hub.listeners.lock().unwrap();
+                let Some(listener) = listeners.get_mut(&self.id) else {
+                    return Err(disconnected());
+                };
+                std::mem::take(&mut listener.deferred)
             };
-            listener.held = false;
-            std::mem::take(&mut listener.deferred)
-        };
-        if deferred.is_empty() {
-            return Ok(());
+            if deferred.is_empty() {
+                // Keep holding until every queued frame reached the socket, so
+                // a later publish cannot overtake them.
+                if let Some(listener) = self.hub.listeners.lock().unwrap().get_mut(&self.id) {
+                    listener.held = false;
+                }
+                return Ok(());
+            }
+            self.write_bounded(&deferred, ACK_IDLE, deadline)?;
         }
-        self.write_bounded(&deferred, ACK_IDLE, Instant::now() + ACK_TOTAL)
     }
 
     /// Write an EXEC reply under the gate with a bounded budget, so a stalled
