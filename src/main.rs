@@ -1868,6 +1868,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             store.latency.start(&command)
         };
         let mut replied_early = false;
+        let mut release_subscriptions = false;
         let response = if command[0].eq_ignore_ascii_case(b"AUTH") && transaction.is_none() {
             store.auth.authenticate(&command, &mut authenticated)
         } else if let Some(error) = route_error {
@@ -1993,9 +1994,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                             subscription.write_transaction(&response)?;
                             replied_early = true;
                         }
-                        if holds {
-                            subscription.release()?;
-                        }
+                        release_subscriptions = holds;
                         response
                     }
                 }
@@ -2060,6 +2059,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         store.latency.record(latency_started);
         if !replied_early {
             subscription.write(&response)?;
+        }
+        if release_subscriptions {
+            subscription.release()?;
         }
     }
     Ok(())
