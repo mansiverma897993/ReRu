@@ -60,7 +60,7 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   range now error instead of returning every entry.
 - `XCLAIM` and `XAUTOCLAIM` register their consumer even when no entry is
   claimed, matching Redis's `XINFO CONSUMERS`.
-- `XREAD` and `XREADGROUP` treat `COUNT 0` as unlimited.
+- `XREAD` and `XREADGROUP` treat `COUNT 0` or a negative count as unlimited.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

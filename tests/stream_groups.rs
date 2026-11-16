@@ -914,42 +914,66 @@ fn count_zero_means_unlimited_for_reads() {
             Reply::Bulk(Some(_))
         ));
     }
-    let Reply::Array(Some(streams)) = c.call(&[b"XREAD", b"COUNT", b"0", b"STREAMS", b"s", b"0-0"])
-    else {
-        panic!("XREAD must return an array")
+    let all = || {
+        delivered(vec![
+            entry(b"1-0", b"v"),
+            entry(b"2-0", b"v"),
+            entry(b"3-0", b"v"),
+        ])
     };
-    let Reply::Array(Some(entries)) = &streams[0] else {
-        panic!("XREAD must return per-stream entries")
-    };
-    let Reply::Array(Some(entries)) = &entries[1] else {
-        panic!("XREAD entries must be an array")
-    };
-    assert_eq!(entries.len(), 3);
+
+    assert_eq!(
+        c.call(&[b"XREAD", b"COUNT", b"0", b"STREAMS", b"s", b"0-0"]),
+        all()
+    );
+    assert_eq!(
+        c.call(&[b"XREAD", b"COUNT", b"-1", b"STREAMS", b"s", b"0-0"]),
+        all()
+    );
 
     assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
-    let Reply::Array(Some(streams)) = c.call(&[
-        b"XREADGROUP",
-        b"GROUP",
-        b"g",
-        b"consumer",
-        b"COUNT",
-        b"0",
-        b"STREAMS",
-        b"s",
-        b">",
-    ]) else {
-        panic!("XREADGROUP must return an array")
-    };
-    let Reply::Array(Some(entries)) = &streams[0] else {
-        panic!("XREADGROUP must return per-stream entries")
-    };
-    let Reply::Array(Some(entries)) = &entries[1] else {
-        panic!("XREADGROUP entries must be an array")
-    };
-    assert_eq!(entries.len(), 3);
-
+    assert_eq!(
+        c.call(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"g",
+            b"consumer",
+            b"COUNT",
+            b"0",
+            b"STREAMS",
+            b"s",
+            b">",
+        ]),
+        all()
+    );
     let Reply::Array(Some(pending)) = c.call(&[b"XPENDING", b"s", b"g"]) else {
         panic!("XPENDING must return an array")
     };
     assert_eq!(pending[0], integer(3));
+
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"noack", b"0"]), ok());
+    assert_eq!(
+        c.call(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"noack",
+            b"worker",
+            b"COUNT",
+            b"0",
+            b"NOACK",
+            b"STREAMS",
+            b"s",
+            b">",
+        ]),
+        all()
+    );
+    let Reply::Array(Some(pending)) = c.call(&[b"XPENDING", b"s", b"noack"]) else {
+        panic!("XPENDING must return an array")
+    };
+    assert_eq!(pending[0], integer(0));
+
+    assert!(matches!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"0", b"0-0", b"COUNT", b"0"]),
+        Reply::Error(message) if message.starts_with(b"ERR COUNT must be > 0")
+    ));
 }

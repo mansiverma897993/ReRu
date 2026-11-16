@@ -983,15 +983,24 @@ fn parse_xread(command: &[Vec<u8>]) -> Result<XReadOptions<'_>, Vec<u8>> {
         if index + 1 >= command.len() {
             return Err(protocol::error("syntax error"));
         }
-        let number = std::str::from_utf8(&command[index + 1])
-            .ok()
-            .and_then(|text| text.parse::<usize>().ok())
+        let value = list_ops::parse_redis_int(&command[index + 1])
             .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
         if command[index].eq_ignore_ascii_case(b"COUNT") {
-            // Redis treats COUNT 0 as unlimited for the read commands.
-            count = if number == 0 { usize::MAX } else { number };
+            // Redis treats a zero or negative count as unlimited.
+            count = if value <= 0 {
+                usize::MAX
+            } else {
+                usize::try_from(value).unwrap_or(usize::MAX)
+            };
         } else if command[index].eq_ignore_ascii_case(b"BLOCK") {
-            block = Some(Duration::from_millis(number as u64));
+            if value < 0 {
+                return Err(protocol::error("timeout is out of range"));
+            }
+            let duration = Duration::from_millis(value as u64);
+            if Instant::now().checked_add(duration).is_none() {
+                return Err(protocol::error("timeout is out of range"));
+            }
+            block = Some(duration);
         } else {
             return Err(protocol::error("syntax error"));
         }
