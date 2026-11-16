@@ -285,3 +285,22 @@ fn pubsub_numpat_counts_unique_patterns() {
         integer(1)
     );
 }
+
+#[test]
+fn pubsub_numpat_handles_binary_and_duplicate_patterns() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"PSUBSCRIBE", b"dup:*", b"dup:*"]),
+        ack(b"psubscribe", Some(b"dup:*"), 1)
+    );
+    assert_eq!(c.read(), ack(b"psubscribe", Some(b"dup:*"), 1));
+    assert_eq!(
+        c.call(&[b"PSUBSCRIBE", b"bin\0:*\xff"]),
+        ack(b"psubscribe", Some(b"bin\0:*\xff"), 2)
+    );
+    assert_eq!(
+        Client::new(&server).call(&[b"PUBSUB", b"NUMPAT"]),
+        integer(2)
+    );
+}
