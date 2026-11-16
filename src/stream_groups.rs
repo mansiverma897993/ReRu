@@ -301,7 +301,8 @@ fn parse_read(c: &[Vec<u8>]) -> Result<ReadOptions<'_>> {
             };
             i += 2;
         } else if c[i].eq_ignore_ascii_case(b"BLOCK") && i + 1 < c.len() {
-            let duration = Duration::from_millis(number(&c[i + 1])?);
+            let millis = crate::streams::timeout_millis(&c[i + 1]).map_err(protocol::error)?;
+            let duration = Duration::from_millis(millis);
             if Instant::now().checked_add(duration).is_none() {
                 return Err(protocol::error("timeout is out of range"));
             }

@@ -337,6 +337,24 @@ impl Stream {
     }
 }
 
+/// Parse a blocking timeout the way Redis does, including the epoch-based
+/// overflow check.
+pub(crate) fn timeout_millis(raw: &[u8]) -> Result<u64, &'static str> {
+    let value =
+        crate::list_ops::parse_redis_int(raw).ok_or("timeout is not an integer or out of range")?;
+    if value < 0 {
+        return Err("timeout is negative");
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i128;
+    if i128::from(value) + now > i128::from(i64::MAX) {
+        return Err("timeout is out of range");
+    }
+    Ok(value as u64)
+}
+
 pub(crate) fn parse_bound(raw: &[u8], upper: bool) -> Result<(StreamId, bool), &'static str> {
     if raw == b"-" {
         return Ok((

@@ -983,9 +983,9 @@ fn parse_xread(command: &[Vec<u8>]) -> Result<XReadOptions<'_>, Vec<u8>> {
         if index + 1 >= command.len() {
             return Err(protocol::error("syntax error"));
         }
-        let value = list_ops::parse_redis_int(&command[index + 1])
-            .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
         if command[index].eq_ignore_ascii_case(b"COUNT") {
+            let value = list_ops::parse_redis_int(&command[index + 1])
+                .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
             // Redis treats a zero or negative count as unlimited.
             count = if value <= 0 {
                 usize::MAX
@@ -993,10 +993,8 @@ fn parse_xread(command: &[Vec<u8>]) -> Result<XReadOptions<'_>, Vec<u8>> {
                 usize::try_from(value).unwrap_or(usize::MAX)
             };
         } else if command[index].eq_ignore_ascii_case(b"BLOCK") {
-            if value < 0 {
-                return Err(protocol::error("timeout is out of range"));
-            }
-            let duration = Duration::from_millis(value as u64);
+            let millis = streams::timeout_millis(&command[index + 1]).map_err(protocol::error)?;
+            let duration = Duration::from_millis(millis);
             if Instant::now().checked_add(duration).is_none() {
                 return Err(protocol::error("timeout is out of range"));
             }

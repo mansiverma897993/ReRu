@@ -977,3 +977,86 @@ fn count_zero_means_unlimited_for_reads() {
         Reply::Error(message) if message.starts_with(b"ERR COUNT must be > 0")
     ));
 }
+
+#[test]
+fn negative_counts_are_unlimited_and_block_errors_match_redis() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    for index in 1..=3 {
+        let id = format!("{index}-0");
+        assert!(matches!(
+            c.call(&[b"XADD", b"s", id.as_bytes(), b"f", b"v"]),
+            Reply::Bulk(Some(_))
+        ));
+    }
+    let all = || {
+        delivered(vec![
+            entry(b"1-0", b"v"),
+            entry(b"2-0", b"v"),
+            entry(b"3-0", b"v"),
+        ])
+    };
+
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"neg", b"0"]), ok());
+    assert_eq!(
+        c.call(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"neg",
+            b"c",
+            b"COUNT",
+            b"-1",
+            b"STREAMS",
+            b"s",
+            b">",
+        ]),
+        all()
+    );
+
+    let negative = Reply::Error(b"ERR timeout is negative".to_vec());
+    assert_eq!(
+        c.call(&[b"XREAD", b"BLOCK", b"-1", b"STREAMS", b"s", b"$"]),
+        negative
+    );
+    assert_eq!(
+        c.call(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"neg",
+            b"c",
+            b"BLOCK",
+            b"-1",
+            b"STREAMS",
+            b"s",
+            b">",
+        ]),
+        negative
+    );
+
+    let overflow = Reply::Error(b"ERR timeout is out of range".to_vec());
+    assert_eq!(
+        c.call(&[
+            b"XREAD",
+            b"BLOCK",
+            b"9223372036854775807",
+            b"STREAMS",
+            b"s",
+            b"$",
+        ]),
+        overflow
+    );
+    assert_eq!(
+        c.call(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"neg",
+            b"c",
+            b"BLOCK",
+            b"9223372036854775807",
+            b"STREAMS",
+            b"s",
+            b">",
+        ]),
+        overflow
+    );
+}
