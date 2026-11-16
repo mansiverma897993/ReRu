@@ -84,7 +84,7 @@ authentication settings, and the pub/sub hub.
 | `persistence.rs` | ReRu snapshot format (save, load, frames) |
 | `aof.rs` | Append-only file: replay, append, background rewrite |
 | `rdb.rs` | Redis RDB subset: load, `SAVE`, `BGSAVE`, `DUMP`, `RESTORE` |
-| `replication.rs` | Replica bookkeeping and `INFO` role reporting |
+| `replication.rs` | Replica frame encoding and replica connection bookkeeping |
 | `auth.rs` | Default-user password settings and password-file parsing |
 
 Each module owns its command handlers as `pub fn` functions that take the

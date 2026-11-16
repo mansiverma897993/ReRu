@@ -177,7 +177,11 @@ impl Session {
             ),
             (
                 b"role",
-                protocol::bulk(if store.read_only { b"slave" } else { b"master" }),
+                protocol::bulk(if store.read_only {
+                    b"replica"
+                } else {
+                    b"master"
+                }),
             ),
             (b"modules", b"*0\r\n".to_vec()),
         ] {
