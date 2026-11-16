@@ -430,6 +430,18 @@ fn lookup(name: &[u8]) -> Option<String> {
         .find(|candidate| candidate == &name)
 }
 
+/// Redis checks the declared command arity before adding a command to MULTI.
+/// A negative arity is a minimum; option syntax is checked during EXEC.
+pub(crate) fn queued_arity(command: &[Vec<u8>]) -> Option<bool> {
+    let name = lookup(command.first()?)?;
+    let arity = metadata(&name).arity;
+    Some(if arity > 0 {
+        command.len() == arity as usize
+    } else {
+        command.len() >= arity.unsigned_abs() as usize
+    })
+}
+
 /// Resolve Cluster keys from the fixed positions advertised by COMMAND INFO.
 /// Commands with dynamic key positions need their own argument parser.
 pub(crate) fn key_indices(command: &[Vec<u8>]) -> Option<Vec<usize>> {

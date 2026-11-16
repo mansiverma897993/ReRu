@@ -1667,98 +1667,27 @@ fn validate_queued(command: &[Vec<u8>]) -> Result<(), Vec<u8>> {
         return Err(error);
     }
     let name = &command[0];
-    let arity = command.len();
     let valid = if let Some(valid) = latency::Monitor::valid_arity(command) {
         valid
     } else if let Some(valid) = connection::valid_arity(command) {
         valid
-    } else if let Some(valid) = stream_groups::valid_arity(command) {
-        valid
-    } else if let Some(valid) = auth::valid_arity(command) {
-        valid
     } else if let Some(valid) = command_table::valid_arity(command) {
         valid
     } else if let Some(valid) = cluster::valid_arity(command) {
-        valid
-    } else if let Some(valid) = eviction::valid_arity(command) {
-        valid
-    } else if let Some(valid) = pubsub::valid_arity(command) {
-        valid
-    } else if let Some(valid) = cache::valid_arity(command) {
         valid
     } else if name.eq_ignore_ascii_case(b"SAVE")
         || name.eq_ignore_ascii_case(b"BGSAVE")
         || name.eq_ignore_ascii_case(b"BGREWRITEAOF")
     {
         return Err(protocol::error("Command not allowed inside a transaction"));
-    } else if let Some(valid) = rdb::valid_arity(command) {
+    } else if name.eq_ignore_ascii_case(b"CONFIG") {
+        eviction::valid_arity(command).unwrap_or(false)
+    } else if name.eq_ignore_ascii_case(b"XGROUP") || name.eq_ignore_ascii_case(b"XINFO") {
+        stream_groups::valid_arity(command).unwrap_or(false)
+    } else if name.eq_ignore_ascii_case(b"ACL") {
+        auth::valid_arity(command).unwrap_or(false)
+    } else if let Some(valid) = command_table::queued_arity(command) {
         valid
-    } else if let Some(valid) = geo::valid_arity(command) {
-        valid
-    } else if let Some(valid) = list_ops::valid_arity(command) {
-        valid
-    } else if let Some(valid) = hyperloglog::valid_arity(command) {
-        valid
-    } else if let Some(valid) = bitmaps::valid_arity(command) {
-        valid
-    } else if let Some(valid) = sorted_sets::valid_arity(command) {
-        valid
-    } else if let Some(valid) = collections::valid_arity(command) {
-        valid
-    } else if let Some(valid) = keyspace::valid_arity(command) {
-        valid
-    } else if name.eq_ignore_ascii_case(b"INFO")
-        || name.eq_ignore_ascii_case(b"PING")
-        || name.eq_ignore_ascii_case(b"FLUSHDB")
-        || name.eq_ignore_ascii_case(b"FLUSHALL")
-    {
-        // Redis queues these variadic commands and rejects excess arguments
-        // inside EXEC, so one bad call does not discard the transaction.
-        true
-    } else if name.eq_ignore_ascii_case(b"UNWATCH") || name.eq_ignore_ascii_case(b"TIME") {
-        arity == 1
-    } else if name.eq_ignore_ascii_case(b"ECHO")
-        || name.eq_ignore_ascii_case(b"GET")
-        || name.eq_ignore_ascii_case(b"INCR")
-        || name.eq_ignore_ascii_case(b"LLEN")
-        || name.eq_ignore_ascii_case(b"TYPE")
-        || name.eq_ignore_ascii_case(b"XLEN")
-    {
-        arity == 2
-    } else if name.eq_ignore_ascii_case(b"RPUSH")
-        || name.eq_ignore_ascii_case(b"LPUSH")
-        || name.eq_ignore_ascii_case(b"BLPOP")
-        || name.eq_ignore_ascii_case(b"BRPOP")
-    {
-        arity >= 3
-    } else if name.eq_ignore_ascii_case(b"LRANGE") {
-        arity == 4
-    } else if name.eq_ignore_ascii_case(b"LPOP") {
-        arity == 2 || arity == 3
-    } else if name.eq_ignore_ascii_case(b"BLMOVE") {
-        arity == 6
-    } else if name.eq_ignore_ascii_case(b"BRPOPLPUSH") {
-        arity == 4
-    } else if name.eq_ignore_ascii_case(b"LMPOP") {
-        arity >= 4
-    } else if name.eq_ignore_ascii_case(b"BLMPOP") {
-        arity >= 5
-    } else if name.eq_ignore_ascii_case(b"ZMPOP") {
-        arity >= 4
-    } else if name.eq_ignore_ascii_case(b"BZMPOP") {
-        arity >= 5
-    } else if name.eq_ignore_ascii_case(b"BZPOPMIN") || name.eq_ignore_ascii_case(b"BZPOPMAX") {
-        arity >= 3
-    } else if name.eq_ignore_ascii_case(b"XADD") {
-        arity >= 5
-    } else if name.eq_ignore_ascii_case(b"XDEL") {
-        arity >= 3
-    } else if name.eq_ignore_ascii_case(b"XTRIM") {
-        arity == 4 || arity == 5
-    } else if name.eq_ignore_ascii_case(b"XRANGE") || name.eq_ignore_ascii_case(b"XREVRANGE") {
-        arity == 4 || (arity == 6 && command[4].eq_ignore_ascii_case(b"COUNT"))
-    } else if name.eq_ignore_ascii_case(b"XREAD") {
-        return parse_xread(command).map(|_| ());
     } else {
         return Err(protocol::error("unknown command"));
     };

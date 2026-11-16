@@ -425,3 +425,139 @@ fn transaction_control_arity_errors_abort_and_variadic_commands_queue() {
     assert_eq!(replies[4], Reply::Error(b"ERR syntax error".to_vec()));
     assert_eq!(client.call(&[b"EXISTS", b"t3"]), integer(1));
 }
+
+#[test]
+fn variadic_commands_report_excess_arguments_inside_exec() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+
+    // Each call meets the command's declared minimum arity, but has an invalid
+    // argument shape that the command handler must reject during EXEC.
+    let cases: &[(&[&[u8]], &[u8])] = &[
+        (
+            &[b"LPOP", b"k", b"1", b"2"],
+            b"ERR wrong number of arguments for 'lpop' command",
+        ),
+        (
+            &[b"RPOP", b"k", b"1", b"2"],
+            b"ERR wrong number of arguments for 'rpop' command",
+        ),
+        (
+            &[b"GETEX", b"k", b"PERSIST", b"EX", b"1"],
+            b"ERR wrong number of arguments for 'getex' command",
+        ),
+        (
+            &[b"HSET", b"h", b"f", b"v", b"f2"],
+            b"ERR wrong number of arguments for 'hset' command",
+        ),
+        (
+            &[b"HMSET", b"h", b"f", b"v", b"f2"],
+            b"ERR wrong number of arguments for 'hmset' command",
+        ),
+        (
+            &[b"HRANDFIELD", b"h", b"1", b"WITHVALUES", b"x"],
+            b"ERR wrong number of arguments for 'hrandfield' command",
+        ),
+        (
+            &[b"SPOP", b"s", b"1", b"2"],
+            b"ERR wrong number of arguments for 'spop' command",
+        ),
+        (
+            &[b"SRANDMEMBER", b"s", b"1", b"2"],
+            b"ERR wrong number of arguments for 'srandmember' command",
+        ),
+        (
+            &[b"ZRANK", b"z", b"m", b"WITHSCORE", b"x"],
+            b"ERR wrong number of arguments for 'zrank' command",
+        ),
+        (
+            &[b"ZREVRANK", b"z", b"m", b"WITHSCORE", b"x"],
+            b"ERR wrong number of arguments for 'zrevrank' command",
+        ),
+        (
+            &[b"ZPOPMIN", b"z", b"1", b"2"],
+            b"ERR wrong number of arguments for 'zpopmin' command",
+        ),
+        (
+            &[b"ZPOPMAX", b"z", b"1", b"2"],
+            b"ERR wrong number of arguments for 'zpopmax' command",
+        ),
+        (
+            &[b"XPENDING", b"s", b"g", b"x"],
+            b"ERR wrong number of arguments or unsupported stream subcommand",
+        ),
+        (
+            &[b"XRANGE", b"s", b"-", b"+", b"COUNT"],
+            b"ERR wrong number of arguments for 'xrange' command",
+        ),
+        (
+            &[b"XREVRANGE", b"s", b"+", b"-", b"COUNT"],
+            b"ERR wrong number of arguments for 'xrevrange' command",
+        ),
+        (
+            &[b"SCAN", b"0", b"MATCH"],
+            b"ERR wrong number of arguments for 'scan' command",
+        ),
+        (&[b"HSCAN", b"h", b"0", b"MATCH"], b"ERR syntax error"),
+        (&[b"SSCAN", b"s", b"0", b"MATCH"], b"ERR syntax error"),
+        (&[b"ZSCAN", b"z", b"0", b"MATCH"], b"ERR syntax error"),
+        (
+            &[b"XTRIM", b"s", b"MAXLEN", b"1", b"2", b"3"],
+            b"ERR syntax error",
+        ),
+        (
+            &[b"MSET", b"a", b"1", b"b"],
+            b"ERR wrong number of arguments for 'mset' command",
+        ),
+        (
+            &[b"MSETNX", b"a", b"1", b"b"],
+            b"ERR wrong number of arguments for 'msetnx' command",
+        ),
+        (&[b"ZADD", b"z", b"1", b"m", b"2"], b"ERR syntax error"),
+    ];
+    for (index, (command, error)) in cases.iter().enumerate() {
+        let marker = format!("queued-{index}");
+        assert_eq!(client.call(&[b"MULTI"]), ok(), "{command:?}");
+        assert_eq!(
+            client.call(&[b"SET", marker.as_bytes(), b"written"]),
+            queued(),
+            "{command:?}"
+        );
+        assert_eq!(client.call(command), queued(), "{command:?}");
+        assert_eq!(
+            client.call(&[b"EXEC"]),
+            array(vec![ok(), Reply::Error(error.to_vec())]),
+            "{command:?}"
+        );
+        assert_eq!(client.call(&[b"GET", marker.as_bytes()]), bulk(b"written"));
+    }
+}
+
+#[test]
+fn fixed_arity_commands_still_abort_at_queue_time() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    for command in [
+        &[b"GET".as_slice(), b"k", b"extra"] as &[&[u8]],
+        &[b"LLEN", b"k", b"extra"],
+        &[b"ZCOUNT", b"z", b"-inf", b"+inf", b"extra"],
+        &[b"LPOP"],
+        &[b"HSET", b"h", b"field"],
+    ] {
+        assert_eq!(client.call(&[b"MULTI"]), ok());
+        assert_eq!(
+            client.call(command),
+            Reply::Error(
+                format!(
+                    "ERR wrong number of arguments for '{}' command",
+                    String::from_utf8_lossy(command[0]).to_ascii_lowercase()
+                )
+                .into_bytes()
+            )
+        );
+        assert_eq!(
+            client.call(&[b"EXEC"]),
+            Reply::Error(b"EXECABORT Transaction discarded because of previous errors.".to_vec())
+        );
+    }
+}
