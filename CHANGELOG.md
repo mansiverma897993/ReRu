@@ -38,6 +38,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   non-reading subscriber cannot hold the command gate for tens of seconds.
 - `XAUTOCLAIM` counts tombstone deletions against `COUNT`, so the claimed
   entries and the returned cursor match Redis.
+- Blocked `BLPOP`, `BLMOVE`, `BLMPOP`, and `XREAD` clients stay blocked when a
+  watched key changes type instead of waking with WRONGTYPE.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

@@ -546,6 +546,7 @@ fn try_blocking_pop(
     keys: &[Vec<u8>],
     store: &Store,
     from_right: bool,
+    recheck: bool,
 ) -> Option<Vec<u8>> {
     for key in keys {
         remove_expired(entries, key);
@@ -568,6 +569,8 @@ fn try_blocking_pop(
                 mark_modified(store, key);
                 return Some(protocol::array(&[key.clone(), value]));
             }
+            // A type change does not wake a blocked client in Redis.
+            Some(_) if recheck => {}
             Some(_) => {
                 return Some(
                     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
@@ -660,6 +663,7 @@ fn try_multi_pop(
     entries: &mut HashMap<Vec<u8>, Entry>,
     options: &MultiPopOptions<'_>,
     store: &Store,
+    recheck: bool,
 ) -> Option<Vec<u8>> {
     for key in options.keys {
         remove_expired(entries, key);
@@ -688,6 +692,7 @@ fn try_multi_pop(
                 reply.extend(protocol::array(&values));
                 return Some(reply);
             }
+            Some(_) if recheck => {}
             Some(_) => {
                 return Some(
                     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
@@ -908,6 +913,7 @@ fn blocking_move(
         move_command.extend_from_slice(&command[1..5]);
         move_command
     };
+    let mut recheck = false;
     loop {
         if connection_closed(probe) {
             return b"*-1\r\n".to_vec();
@@ -917,7 +923,8 @@ fn blocking_move(
         remove_expired(&mut entries, &command[1]);
         let available = match entries.get(&command[1]).map(|entry| &entry.value) {
             Some(Value::List(items)) => !items.is_empty(),
-            Some(_) => true,
+            // A source that changed type stays blocked after the first pass.
+            Some(_) => !recheck,
             None => false,
         };
         if available {
@@ -938,6 +945,7 @@ fn blocking_move(
             Some(entries) => entries,
             None => return b"*-1\r\n".to_vec(),
         };
+        recheck = true;
         drop(entries);
     }
 }
@@ -991,6 +999,7 @@ fn try_xread(
     keys: &[Vec<u8>],
     ids: &[streams::StreamId],
     count: usize,
+    recheck: bool,
 ) -> Result<Option<Vec<u8>>, Vec<u8>> {
     let mut groups = Vec::new();
     for (key, id) in keys.iter().zip(ids) {
@@ -1002,6 +1011,7 @@ fn try_xread(
                     groups.push((key, streams::stream_entries(&found)));
                 }
             }
+            Some(_) if recheck => {}
             Some(_) => {
                 return Err(
                     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
@@ -1358,6 +1368,7 @@ fn execute_command(
                 Err(error) => error,
                 Ok(deadline) => {
                     let keys = &command[1..command.len() - 1];
+                    let mut recheck = false;
                     loop {
                         if connection_closed(probe) {
                             break b"*-1\r\n".to_vec();
@@ -1369,6 +1380,7 @@ fn execute_command(
                             keys,
                             store,
                             command[0].eq_ignore_ascii_case(b"BRPOP"),
+                            recheck,
                         ) {
                             break response;
                         }
@@ -1380,6 +1392,7 @@ fn execute_command(
                             Some(entries) => entries,
                             None => break b"*-1\r\n".to_vec(),
                         };
+                        recheck = true;
                         drop(entries);
                     }
                 }
@@ -1395,25 +1408,30 @@ fn execute_command(
         let blocking = command[0].eq_ignore_ascii_case(b"BLMPOP");
         match parse_multi_pop(command, blocking) {
             Err(error) => error,
-            Ok(options) => loop {
-                if connection_closed(probe) {
-                    break b"*-1\r\n".to_vec();
+            Ok(options) => {
+                let mut recheck = false;
+                loop {
+                    if connection_closed(probe) {
+                        break b"*-1\r\n".to_vec();
+                    }
+                    let gate =
+                        (blocking && allow_blocking).then(|| store.command_gate.lock().unwrap());
+                    let mut entries = store.entries.lock().unwrap();
+                    if let Some(response) = try_multi_pop(&mut entries, &options, store, recheck) {
+                        break response;
+                    }
+                    if !blocking || !allow_blocking {
+                        break b"*-1\r\n".to_vec();
+                    }
+                    drop(gate);
+                    entries = match wait_for_change(store, entries, options.deadline, probe) {
+                        Some(entries) => entries,
+                        None => break b"*-1\r\n".to_vec(),
+                    };
+                    recheck = true;
+                    drop(entries);
                 }
-                let gate = (blocking && allow_blocking).then(|| store.command_gate.lock().unwrap());
-                let mut entries = store.entries.lock().unwrap();
-                if let Some(response) = try_multi_pop(&mut entries, &options, store) {
-                    break response;
-                }
-                if !blocking || !allow_blocking {
-                    break b"*-1\r\n".to_vec();
-                }
-                drop(gate);
-                entries = match wait_for_change(store, entries, options.deadline, probe) {
-                    Some(entries) => entries,
-                    None => break b"*-1\r\n".to_vec(),
-                };
-                drop(entries);
-            },
+            }
         }
     } else if command[0].eq_ignore_ascii_case(b"ZMPOP")
         || command[0].eq_ignore_ascii_case(b"BZMPOP")
@@ -1575,11 +1593,18 @@ fn execute_command(
                             }
                             _ => None,
                         };
+                        let mut recheck = false;
                         loop {
                             if connection_closed(probe) {
                                 break b"*-1\r\n".to_vec();
                             }
-                            match try_xread(&mut entries, options.keys, &ids, options.count) {
+                            match try_xread(
+                                &mut entries,
+                                options.keys,
+                                &ids,
+                                options.count,
+                                recheck,
+                            ) {
                                 Err(error) => break error,
                                 Ok(Some(response)) => break response,
                                 Ok(None) => {}
@@ -1606,6 +1631,7 @@ fn execute_command(
                                     };
                                 }
                             }
+                            recheck = true;
                             drop(entries);
                             gate = allow_blocking.then(|| store.command_gate.lock().unwrap());
                             entries = store.entries.lock().unwrap();
