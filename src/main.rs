@@ -1792,15 +1792,10 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             return serve_replica(stream, &store);
         }
         if command[0].eq_ignore_ascii_case(b"QUIT") {
-            if command.len() != 1 {
-                subscription.write(&protocol::error(
-                    "wrong number of arguments for 'quit' command",
-                ))?;
-                continue;
-            }
-            subscription.write(b"+OK\r\n")?;
-            return Ok(());
+         subscription.write(b"+OK\r\n")?;
+         return Ok(());
         }
+       
         if pubsub::is_subscription_command(&command) {
             if transaction.is_some() {
                 transaction_error = true;

@@ -196,3 +196,10 @@ fn replicas_authenticate_to_primary_and_enforce_their_own_password() {
     }
     std::fs::remove_file(path).unwrap();
 }
+#[test]
+fn quit_ignores_extra_arguments() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+
+    assert_eq!(c.call(&[b"QUIT", b"x"]), ok());
+}
