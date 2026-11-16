@@ -795,4 +795,49 @@ fn xautoclaim_counts_tombstone_deletions_against_count() {
         ]),
         array(vec![bulk(b"2-2"), array(vec![]), array(vec![bulk(b"1-1")]),])
     );
+
+    // A budget that ends on the last pending entry returns the zero cursor,
+    // and JUSTID with tombstones keeps the deleted list.
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATE", b"ac3", b"g", b"0", b"MKSTREAM"]),
+        ok()
+    );
+    for index in 1..=3 {
+        let id = format!("{index}-{index}");
+        assert_eq!(
+            c.call(&[b"XADD", b"ac3", id.as_bytes(), b"f", b"v"]),
+            bulk(id.as_bytes())
+        );
+    }
+    assert!(matches!(
+        c.call(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"g",
+            b"c1",
+            b"STREAMS",
+            b"ac3",
+            b">"
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XDEL", b"ac3", b"1-1"]), integer(1));
+    assert_eq!(
+        c.call(&[
+            b"XAUTOCLAIM",
+            b"ac3",
+            b"g",
+            b"c2",
+            b"0",
+            b"0-0",
+            b"COUNT",
+            b"3",
+            b"JUSTID"
+        ]),
+        array(vec![
+            bulk(b"0-0"),
+            array(vec![bulk(b"2-2"), bulk(b"3-3")]),
+            array(vec![bulk(b"1-1")]),
+        ])
+    );
 }
