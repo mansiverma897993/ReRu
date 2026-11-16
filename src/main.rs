@@ -1788,12 +1788,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             return serve_replica(stream, &store);
         }
         if command[0].eq_ignore_ascii_case(b"QUIT") {
-            if command.len() != 1 {
-                subscription.write(&protocol::error(
-                    "wrong number of arguments for 'quit' command",
-                ))?;
-                continue;
-            }
+            // QUIT has arity -1 in Redis: extra arguments are ignored.
             subscription.write(b"+OK\r\n")?;
             return Ok(());
         }

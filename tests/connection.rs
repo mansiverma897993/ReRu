@@ -408,3 +408,49 @@ fn common_connection_sequences_match_redis_reference() {
     assert_eq!(field(&ours_hello, b"id"), &ours.call(&[b"CLIENT", b"ID"]));
     assert_eq!(field(&redis_hello, b"id"), &redis.call(&[b"CLIENT", b"ID"]));
 }
+
+#[test]
+fn quit_ignores_extra_arguments_and_closes() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    fn command(args: &[&[u8]]) -> Vec<u8> {
+        let mut bytes = format!("*{}\r\n", args.len()).into_bytes();
+        for arg in args {
+            bytes.extend(format!("${}\r\n", arg.len()).as_bytes());
+            bytes.extend(*arg);
+            bytes.extend(b"\r\n");
+        }
+        bytes
+    }
+
+    fn send(server: &Server, frame: &[u8], expected: &[u8]) {
+        let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        stream.write_all(frame).unwrap();
+        let mut reply = vec![0; expected.len()];
+        stream.read_exact(&mut reply).unwrap();
+        assert_eq!(reply, expected);
+        let mut tail = [0u8; 1];
+        assert_eq!(stream.read(&mut tail).unwrap(), 0, "connection stayed open");
+    }
+
+    let server = Server::start();
+    send(&server, &command(&[b"QUIT", b"extra"]), b"+OK\r\n");
+    send(&server, &command(&[b"QUIT", b"x", b"y"]), b"+OK\r\n");
+    send(
+        &server,
+        &[command(&[b"MULTI"]), command(&[b"QUIT", b"x"])].concat(),
+        b"+OK\r\n+OK\r\n",
+    );
+    send(
+        &server,
+        &[command(&[b"SUBSCRIBE", b"ch"]), command(&[b"QUIT", b"x"])].concat(),
+        b"*3\r\n$9\r\nsubscribe\r\n$2\r\nch\r\n:1\r\n+OK\r\n",
+    );
+
+    let authenticated = Server::start_with(&["--requirepass", "pw"]);
+    send(&authenticated, &command(&[b"QUIT", b"x"]), b"+OK\r\n");
+}
