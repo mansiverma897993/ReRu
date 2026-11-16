@@ -987,8 +987,9 @@ fn parse_xread(command: &[Vec<u8>]) -> Result<XReadOptions<'_>, Vec<u8>> {
             .ok()
             .and_then(|text| text.parse::<usize>().ok())
             .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
-        if command[index].eq_ignore_ascii_case(b"COUNT") && number > 0 {
-            count = number;
+        if command[index].eq_ignore_ascii_case(b"COUNT") {
+            // Redis treats COUNT 0 as unlimited for the read commands.
+            count = if number == 0 { usize::MAX } else { number };
         } else if command[index].eq_ignore_ascii_case(b"BLOCK") {
             block = Some(Duration::from_millis(number as u64));
         } else {

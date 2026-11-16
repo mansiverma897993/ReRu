@@ -902,3 +902,54 @@ fn empty_claim_consumer_survives_an_aof_restart() {
     }
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn count_zero_means_unlimited_for_reads() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    for index in 1..=3 {
+        let id = format!("{index}-0");
+        assert!(matches!(
+            c.call(&[b"XADD", b"s", id.as_bytes(), b"f", b"v"]),
+            Reply::Bulk(Some(_))
+        ));
+    }
+    let Reply::Array(Some(streams)) = c.call(&[b"XREAD", b"COUNT", b"0", b"STREAMS", b"s", b"0-0"])
+    else {
+        panic!("XREAD must return an array")
+    };
+    let Reply::Array(Some(entries)) = &streams[0] else {
+        panic!("XREAD must return per-stream entries")
+    };
+    let Reply::Array(Some(entries)) = &entries[1] else {
+        panic!("XREAD entries must be an array")
+    };
+    assert_eq!(entries.len(), 3);
+
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+    let Reply::Array(Some(streams)) = c.call(&[
+        b"XREADGROUP",
+        b"GROUP",
+        b"g",
+        b"consumer",
+        b"COUNT",
+        b"0",
+        b"STREAMS",
+        b"s",
+        b">",
+    ]) else {
+        panic!("XREADGROUP must return an array")
+    };
+    let Reply::Array(Some(entries)) = &streams[0] else {
+        panic!("XREADGROUP must return per-stream entries")
+    };
+    let Reply::Array(Some(entries)) = &entries[1] else {
+        panic!("XREADGROUP entries must be an array")
+    };
+    assert_eq!(entries.len(), 3);
+
+    let Reply::Array(Some(pending)) = c.call(&[b"XPENDING", b"s", b"g"]) else {
+        panic!("XPENDING must return an array")
+    };
+    assert_eq!(pending[0], integer(3));
+}

@@ -292,7 +292,10 @@ fn parse_read(c: &[Vec<u8>]) -> Result<ReadOptions<'_>> {
             consumer = Some(c[i + 2].as_slice());
             i += 3;
         } else if c[i].eq_ignore_ascii_case(b"COUNT") && i + 1 < c.len() {
-            count = positive(&c[i + 1])?;
+            let parsed: usize = number(&c[i + 1])?
+                .try_into()
+                .map_err(|_| protocol::error("value is not an integer or out of range"))?;
+            count = if parsed == 0 { usize::MAX } else { parsed };
             i += 2;
         } else if c[i].eq_ignore_ascii_case(b"BLOCK") && i + 1 < c.len() {
             let duration = Duration::from_millis(number(&c[i + 1])?);
