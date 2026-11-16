@@ -73,7 +73,7 @@ fn parse_i64(bytes: &[u8]) -> Result<i64, Vec<u8>> {
 
 /// Parse an integer the way Redis's `string2ll` does: an optional `-`, no `+`,
 /// no leading zeros unless the value is exactly `0`, and an `i64` range.
-fn parse_redis_int(bytes: &[u8]) -> Option<i64> {
+pub(crate) fn parse_redis_int(bytes: &[u8]) -> Option<i64> {
     if bytes == b"0" {
         return Some(0);
     }
