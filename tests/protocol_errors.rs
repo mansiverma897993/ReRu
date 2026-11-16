@@ -6,57 +6,78 @@ mod client;
 mod common;
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::time::Duration;
 
-fn connection(port: u16) -> TcpStream {
-    let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+fn send(frame: &[u8]) -> Vec<u8> {
+    let server = common::Server::start();
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
-    stream
-}
-
-fn read_to_end(mut stream: TcpStream) -> Vec<u8> {
+    stream.write_all(frame).unwrap();
+    // Half-close so the server reaches EOF after the frame.
+    stream.shutdown(Shutdown::Write).unwrap();
     let mut bytes = Vec::new();
-    let _ = stream.read_to_end(&mut bytes);
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+            Err(error) => panic!("connection did not close: {error}"),
+        }
+    }
     bytes
 }
 
 #[test]
-fn malformed_frames_get_a_protocol_error_before_close() {
-    let server = common::Server::start();
-    for (frame, reason) in [
-        (&b"*2\r\n$3\r\nGET\r\n$-1\r\n"[..], "invalid bulk length"),
-        (&b"*1\r\n+PING\r\n"[..], "expected '$'"),
-        (&b"*999999999999\r\n"[..], "invalid multibulk length"),
+fn malformed_frames_get_a_protocol_error_then_close() {
+    for (frame, reply) in [
+        (
+            &b"*2\r\n$3\r\nGET\r\n$-1\r\n"[..],
+            "-ERR Protocol error: invalid bulk length\r\n",
+        ),
+        (
+            &b"*1\r\n+PING\r\n"[..],
+            "-ERR Protocol error: expected '$', got '+'\r\n",
+        ),
+        (
+            &b"PING\r\n"[..],
+            "-ERR Protocol error: expected '*', got 'P'\r\n",
+        ),
+        (
+            &b"*abc\r\n"[..],
+            "-ERR Protocol error: invalid multibulk length\r\n",
+        ),
+        (
+            &b"*999999999999\r\n"[..],
+            "-ERR Protocol error: invalid multibulk length\r\n",
+        ),
         (
             &[b"*", &[b'9'; 100][..], b"\r\n"].concat(),
-            "invalid multibulk length",
+            "-ERR Protocol error: invalid multibulk length\r\n",
         ),
     ] {
-        let mut stream = connection(server.port);
-        stream.write_all(frame).unwrap();
-        let reply = read_to_end(stream);
-        let text = String::from_utf8_lossy(&reply);
-        assert!(
-            text.starts_with(&format!("-ERR Protocol error: {reason}")),
-            "frame {frame:?} replied {text:?}"
-        );
+        assert_eq!(send(frame), reply.as_bytes(), "frame {frame:?}");
     }
 }
 
 #[test]
-fn empty_frames_are_ignored_and_pipelining_continues() {
-    let server = common::Server::start();
-    for frame in [
-        &b"*0\r\n*1\r\n$4\r\nPING\r\n"[..],
-        &b"*-1\r\n*1\r\n$4\r\nPING\r\n"[..],
-    ] {
-        let mut stream = connection(server.port);
-        stream.write_all(frame).unwrap();
-        let mut reply = [0u8; 7];
-        stream.read_exact(&mut reply).unwrap();
-        assert_eq!(&reply, b"+PONG\r\n");
-    }
+fn truncated_and_empty_frames_behave_like_redis() {
+    // A peer that closes mid-frame gets no reply.
+    assert_eq!(send(b"*1"), b"");
+    assert_eq!(send(b"*1\r\n$4"), b"");
+    assert_eq!(send(b""), b"");
+
+    // Empty frames are ignored, including between pipelined commands.
+    assert_eq!(send(b"*0\r\n*1\r\n$4\r\nPING\r\n"), b"+PONG\r\n");
+    assert_eq!(send(b"*-1\r\n*1\r\n$4\r\nPING\r\n"), b"+PONG\r\n");
+    assert_eq!(
+        send(b"*0\r\n*-1\r\n*0\r\n*1\r\n$4\r\nPING\r\n"),
+        b"+PONG\r\n"
+    );
+    assert_eq!(
+        send(b"*1\r\n$4\r\nPING\r\n*0\r\n*1\r\n$4\r\nPING\r\n"),
+        b"+PONG\r\n+PONG\r\n"
+    );
 }

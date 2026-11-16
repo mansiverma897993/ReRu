@@ -9,28 +9,45 @@ pub const MAX_BULK: usize = 256 * 1024 * 1024;
 /// ReRu's own cap, below Redis's INT_MAX argument count and 1 GiB query buffer.
 pub const MAX_ARGS: usize = 1024 * 1024;
 
-/// Map a parser error to the protocol-error reason Redis sends before closing.
-pub fn error_reason(error: &io::Error) -> &'static str {
-    match error.to_string().as_str() {
-        "invalid length" | "command too large" | "expected CRLF" => "invalid bulk length",
-        "invalid argument count" | "header too long" => "invalid multibulk length",
-        "expected bulk string" => "expected '$'",
-        "expected RESP array" => "expected '*'",
-        _ => "invalid request",
+/// Reason text for a parser error, sent as `-ERR Protocol error: <reason>`.
+pub fn error_reason(error: &io::Error) -> String {
+    let text = error.to_string();
+    let known = matches!(
+        text.as_str(),
+        "invalid bulk length" | "invalid multibulk length" | "too big inline request"
+    ) || text.starts_with("expected '$', got ")
+        || text.starts_with("expected '*', got ");
+    if known {
+        text
+    } else {
+        "invalid request".to_string()
     }
 }
 
-fn line<R: BufRead>(reader: &mut R) -> io::Result<Vec<u8>> {
+fn printable(byte: u8) -> char {
+    if (0x20..=0x7e).contains(&byte) {
+        byte as char
+    } else {
+        '?'
+    }
+}
+
+fn invalid(reason: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, reason)
+}
+
+fn line<R: BufRead>(reader: &mut R, reason: &'static str) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.take(65).read_until(b'\n', &mut bytes)?;
     if bytes.len() > 64 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "header too long",
-        ));
+        return Err(invalid(reason));
+    }
+    // An unfinished line means the peer closed mid-frame; stay silent.
+    if !bytes.ends_with(b"\n") {
+        return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
     }
     if !bytes.ends_with(b"\r\n") {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "expected CRLF"));
+        return Err(invalid(reason));
     }
     bytes.truncate(bytes.len() - 2);
     Ok(bytes)
@@ -40,7 +57,7 @@ fn number(bytes: &[u8]) -> io::Result<usize> {
     std::str::from_utf8(bytes)
         .ok()
         .and_then(|text| text.parse::<usize>().ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid length"))
+        .ok_or_else(|| invalid("invalid bulk length"))
 }
 
 pub fn read_command<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<Vec<u8>>>> {
@@ -56,56 +73,55 @@ fn read_command_with_limits<R: BufRead>(
     if first.is_empty() {
         return Ok(None);
     }
-    let header = line(reader)?;
-    if header.first() != Some(&b'*') {
+    let header = line(reader, "invalid multibulk length")?;
+    if let Some(byte) = header.first().filter(|byte| **byte != b'*') {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "expected RESP array",
+            format!("expected '*', got '{}'", printable(*byte)),
         ));
+    }
+    if header.is_empty() {
+        return Err(invalid("invalid multibulk length"));
     }
     let count = std::str::from_utf8(&header[1..])
         .ok()
         .and_then(|text| text.parse::<i64>().ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid length"))?;
+        .ok_or_else(|| invalid("invalid multibulk length"))?;
     if count <= 0 {
         // Redis ignores *0 and *-1 frames.
         return Ok(Some(Vec::new()));
     }
-    let count = usize::try_from(count)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid argument count"))?;
+    let count = usize::try_from(count).map_err(|_| invalid("invalid multibulk length"))?;
     if count > max_args {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid argument count",
-        ));
+        return Err(invalid("invalid multibulk length"));
     }
     // Reserve at most 1024 slots; a hostile header must not allocate 25 MiB.
     let mut args = Vec::with_capacity(count.min(1024));
     let mut total_bytes = 0usize;
     for _ in 0..count {
-        let header = line(reader)?;
-        if header.first() != Some(&b'$') {
+        let header = line(reader, "invalid bulk length")?;
+        if let Some(byte) = header.first().filter(|byte| **byte != b'$') {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "expected bulk string",
+                format!("expected '$', got '{}'", printable(*byte)),
             ));
+        }
+        if header.is_empty() {
+            return Err(invalid("invalid bulk length"));
         }
         let len = number(&header[1..])?;
         total_bytes = total_bytes
             .checked_add(len)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "command too large"))?;
+            .ok_or_else(|| invalid("invalid bulk length"))?;
         if len > max_bulk || total_bytes > max_bulk {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "command too large",
-            ));
+            return Err(invalid("invalid bulk length"));
         }
         let mut value = vec![0; len];
         reader.read_exact(&mut value)?;
         let mut suffix = [0; 2];
         reader.read_exact(&mut suffix)?;
         if suffix != *b"\r\n" {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "expected CRLF"));
+            return Err(invalid("invalid bulk length"));
         }
         args.push(value);
     }
@@ -179,12 +195,12 @@ mod tests {
         let input = b"*3\r\n".to_vec();
         let mut reader = Cursor::new(input);
         let error = read_command_with_limits(&mut reader, 2, 100).unwrap_err();
-        assert_eq!(error.to_string(), "invalid argument count");
+        assert_eq!(error.to_string(), "invalid multibulk length");
 
         let input = b"*1\r\n$101\r\n".to_vec();
         let mut reader = Cursor::new(input);
         let error = read_command_with_limits(&mut reader, 16, 100).unwrap_err();
-        assert_eq!(error.to_string(), "command too large");
+        assert_eq!(error.to_string(), "invalid bulk length");
 
         // Each argument fits, but the sum exceeds the configured total.
         let input = b"*2\r\n$60\r\n".to_vec();
@@ -193,7 +209,7 @@ mod tests {
         payload.extend_from_slice(b"\r\n$60\r\n");
         let mut reader = Cursor::new(payload);
         let error = read_command_with_limits(&mut reader, 16, 100).unwrap_err();
-        assert_eq!(error.to_string(), "command too large");
+        assert_eq!(error.to_string(), "invalid bulk length");
     }
 
     #[test]

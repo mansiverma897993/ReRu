@@ -1741,6 +1741,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             Ok(Some(command)) => command,
             Ok(None) => break,
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => {
                 let reason = protocol::error_reason(&error);
                 let _ = subscription.write(format!("-ERR Protocol error: {reason}\r\n").as_bytes());
