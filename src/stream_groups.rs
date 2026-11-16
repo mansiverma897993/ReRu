@@ -292,10 +292,17 @@ fn parse_read(c: &[Vec<u8>]) -> Result<ReadOptions<'_>> {
             consumer = Some(c[i + 2].as_slice());
             i += 3;
         } else if c[i].eq_ignore_ascii_case(b"COUNT") && i + 1 < c.len() {
-            count = positive(&c[i + 1])?;
+            let parsed = crate::list_ops::parse_redis_int(&c[i + 1])
+                .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
+            count = if parsed <= 0 {
+                usize::MAX
+            } else {
+                usize::try_from(parsed).unwrap_or(usize::MAX)
+            };
             i += 2;
         } else if c[i].eq_ignore_ascii_case(b"BLOCK") && i + 1 < c.len() {
-            let duration = Duration::from_millis(number(&c[i + 1])?);
+            let millis = crate::streams::timeout_millis(&c[i + 1]).map_err(protocol::error)?;
+            let duration = Duration::from_millis(millis);
             if Instant::now().checked_add(duration).is_none() {
                 return Err(protocol::error("timeout is out of range"));
             }
