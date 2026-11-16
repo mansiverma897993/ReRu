@@ -54,6 +54,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
+- Sorted-set score replies use Redis's number formatting: exact integers print
+  without an exponent and small or very large magnitudes use exponent form
+  (`1e+300`, `1e-7`, `1e+20`) instead of a fully expanded decimal.
 - `SPOP`, `SRANDMEMBER`, and `HRANDFIELD` return the whole collection for a
   positive count above its size instead of a count error, and validate the count
   before the key lookup. `SRANDMEMBER`/`HRANDFIELD` reject `i64::MIN` with

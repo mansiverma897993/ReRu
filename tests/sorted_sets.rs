@@ -847,3 +847,59 @@ fn zset_scores_reject_out_of_range_floats_but_accept_infinity_literals() {
     assert_eq!(c.call(&[b"ZADD", b"z", b"-infinity", b"b"]), integer(1));
     assert_eq!(c.call(&[b"ZSCORE", b"z", b"b"]), bulk(b"-inf"));
 }
+
+#[test]
+fn score_replies_use_redis_number_formatting() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    let cases: &[(&[u8], &[u8])] = &[
+        (b"1e300", b"1e+300"),
+        (b"1e-300", b"1e-300"),
+        (b"1e-7", b"1e-7"),
+        (b"-1e-7", b"-1e-7"),
+        (b"1e20", b"1e+20"),
+        (b"1e19", b"1e+19"),
+        (b"1e18", b"1000000000000000000"),
+        (b"1.5e16", b"15000000000000000"),
+        (b"0.0000123", b"1.23e-5"),
+        (b"0.000001", b"0.000001"),
+        (b"1e-8", b"1e-8"),
+        (b"1.1000000000000001", b"1.1"),
+        (b"0.30000000000000004", b"0.30000000000000004"),
+        (b"1234567890123456789", b"1234567890123456768"),
+        (b"9223372036854775807", b"9223372036854776000"),
+        (b"4611686018427387904", b"4611686018427387904"),
+        (b"5e-324", b"5e-324"),
+        (b"1.7976931348623157e308", b"1.7976931348623157e+308"),
+    ];
+    for (score, expected) in cases {
+        let _ = c.call(&[b"DEL", b"z"]);
+        assert_eq!(
+            c.call(&[b"ZADD", b"z", score, b"m"]),
+            integer(1),
+            "{score:?}"
+        );
+        assert_eq!(
+            c.call(&[b"ZSCORE", b"z", b"m"]),
+            bulk(expected),
+            "{score:?}"
+        );
+        assert_eq!(
+            c.call(&[b"ZRANGE", b"z", b"0", b"-1", b"WITHSCORES"]),
+            array(vec![bulk(b"m"), bulk(expected)]),
+            "{score:?}"
+        );
+    }
+
+    let _ = c.call(&[b"DEL", b"z"]);
+    assert_eq!(c.call(&[b"ZINCRBY", b"z", b"1e300", b"m"]), bulk(b"1e+300"));
+    assert_eq!(
+        c.call(&[b"ZADD", b"z", b"INCR", b"-1e300", b"m"]),
+        bulk(b"0")
+    );
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"m"]), bulk(b"0"));
+    assert_eq!(c.call(&[b"ZADD", b"z", b"inf", b"a"]), integer(1));
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"a"]), bulk(b"inf"));
+    assert_eq!(c.call(&[b"ZADD", b"z", b"-inf", b"b"]), integer(1));
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"b"]), bulk(b"-inf"));
+}
