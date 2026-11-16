@@ -341,6 +341,10 @@ fn replica_reports_role_and_accepts_connection_metadata() {
     let replica = Server::start_with(&["--replicaof", "127.0.0.1", &primary.port.to_string()]);
     let mut c = Client::new(&replica);
     assert_eq!(field(&c.call(&[b"HELLO"]), b"role"), &bulk(b"replica"));
+    assert_eq!(
+        field(&c.call(&[b"HELLO", b"2"]), b"role"),
+        &bulk(b"replica")
+    );
     assert_eq!(c.call(&[b"CLIENT", b"SETNAME", b"reader"]), ok());
     assert_eq!(c.call(&[b"SELECT", b"0"]), ok());
     assert_eq!(c.call(&[b"RESET"]), reset());

@@ -451,8 +451,10 @@ error and the connection closes. ReRu also rejects unexpected bytes after a
 bulk value, where Redis ignores them.
 
 `HELLO` and `HELLO 2` return a RESP2 properties array containing ReRu's actual
-name/version, protocol 2, stable connection ID, standalone mode, primary/replica
-role and an empty modules list. AUTH default password and SETNAME options are
+name/version, protocol 2, stable connection ID, standalone mode, a `role` token
+of `master` on a primary or `replica` on a read-only replica, and an empty
+modules list. Redis keeps `slave` only in `INFO replication`, which ReRu does
+not implement yet. AUTH default password and SETNAME options are
 supported. All options are validated before authentication/name changes; failed
 credentials preserve an existing authenticated session. `HELLO 3` returns NOPROTO
 without changing authentication or the protocol. RESP3 remains unimplemented.
