@@ -7,13 +7,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const REPLAY_BUDGET: Duration = Duration::from_secs(30);
-const PUBLISH_BUDGET: Duration = Duration::from_secs(1);
+const REPLY_BUDGET: Duration = Duration::from_secs(30);
+// Acknowledgements still run under command_gate, so the whole batch shares one
+// short deadline. Publish deliveries use the same bound.
+const PUBSUB_BUDGET: Duration = Duration::from_millis(100);
 
 // A socket write timeout reports WouldBlock after a partial write. Retry the
-// remaining bytes until the budget expires so replies are never truncated.
-fn write_frame(writer: &mut TcpStream, bytes: &[u8], budget: Duration) -> io::Result<()> {
-    let deadline = Instant::now() + budget;
+// remaining bytes until the deadline so replies are not truncated by a short
+// socket timeout.
+fn write_frame(writer: &mut TcpStream, bytes: &[u8], deadline: Instant) -> io::Result<()> {
     let mut offset = 0;
     while offset < bytes.len() {
         match writer.write(&bytes[offset..]) {
@@ -116,6 +118,7 @@ impl ClientSubscription<'_> {
         } else {
             b"unsubscribe".as_slice()
         };
+        let deadline = Instant::now() + PUBSUB_BUDGET;
         let mut listeners = self.hub.listeners.lock().unwrap();
         let Some(listener) = listeners.get_mut(&self.id) else {
             // A failed publish removed this subscriber. Close the connection
@@ -157,7 +160,7 @@ impl ClientSubscription<'_> {
             let count = listener.channels.len() + listener.patterns.len();
             let frame = acknowledgement(kind, item.as_deref(), count);
             let mut writer = listener.writer.lock().unwrap();
-            write_frame(&mut writer, &frame, REPLAY_BUDGET)?;
+            write_frame(&mut writer, &frame, deadline)?;
         }
         Ok(())
     }
@@ -173,7 +176,7 @@ impl ClientSubscription<'_> {
             .writer
             .clone();
         let mut writer = writer.lock().unwrap();
-        write_frame(&mut writer, reply, REPLAY_BUDGET)
+        write_frame(&mut writer, reply, Instant::now() + REPLY_BUDGET)
     }
 }
 
@@ -192,6 +195,7 @@ impl Hub {
     }
 
     pub fn publish(&self, channel: &[u8], message: &[u8]) -> usize {
+        let deadline = Instant::now() + PUBSUB_BUDGET;
         let mut listeners = self.listeners.lock().unwrap();
         let direct = message_reply(b"message", &[channel, message]);
         let mut count = 0;
@@ -200,7 +204,7 @@ impl Hub {
             let mut writer = listener.writer.lock().unwrap();
             let mut delivered = true;
             if listener.channels.contains(channel) {
-                if write_frame(&mut writer, &direct, PUBLISH_BUDGET).is_err() {
+                if write_frame(&mut writer, &direct, deadline).is_err() {
                     delivered = false;
                 } else {
                     count += 1;
@@ -210,7 +214,7 @@ impl Hub {
                 for pattern in &listener.patterns {
                     if glob_matches(pattern, channel) {
                         let reply = message_reply(b"pmessage", &[pattern, channel, message]);
-                        if write_frame(&mut writer, &reply, PUBLISH_BUDGET).is_err() {
+                        if write_frame(&mut writer, &reply, deadline).is_err() {
                             delivered = false;
                             break;
                         }

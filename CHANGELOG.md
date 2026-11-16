@@ -33,6 +33,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `GEOPOS` and `WITHCOORD` print coordinates in Redis's shortest round-trip and
   small-value exponent form, and fractional `STOREDIST` destination scores are
   readable by GEO commands again.
+- Subscription acknowledgements and publish deliveries share one 100 ms
+  deadline, so a non-reading subscriber can no longer hold the command gate for
+  tens of seconds.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

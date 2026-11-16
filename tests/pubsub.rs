@@ -197,3 +197,27 @@ fn a_stalled_subscriber_does_not_abort_the_server() {
     let mut survivor = Client::new(&server);
     assert_eq!(survivor.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
 }
+
+#[test]
+fn many_acks_from_a_non_reader_do_not_block_other_clients() {
+    use std::io::Write;
+    use std::net::TcpStream;
+
+    let server = Server::start();
+    let mut stalled = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    let mut args: Vec<Vec<u8>> = vec![b"SUBSCRIBE".to_vec()];
+    for index in 0..1023 {
+        args.push(format!("channel-{index}-{}", "x".repeat(60_000)).into_bytes());
+    }
+    let borrowed: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
+    stalled.write_all(&command(&borrowed)).unwrap();
+
+    let mut other = Client::new(&server);
+    let started = Instant::now();
+    assert_eq!(other.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "PING blocked for {:?}",
+        started.elapsed()
+    );
+}
