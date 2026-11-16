@@ -14,7 +14,7 @@ pub fn error_reason(error: &io::Error) -> String {
     let text = error.to_string();
     let known = matches!(
         text.as_str(),
-        "invalid bulk length" | "invalid multibulk length" | "too big inline request"
+        "invalid bulk length" | "invalid multibulk length"
     ) || text.starts_with("expected '$', got ")
         || text.starts_with("expected '*', got ");
     if known {

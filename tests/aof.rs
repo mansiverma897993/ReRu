@@ -198,4 +198,6 @@ fn empty_aof_frames_are_skipped_during_replay() {
     let server = Server::start_with(&["--appendonly", path.to_str().unwrap()]);
     let mut client = Client::new(&server);
     assert_eq!(client.call(&[b"GET", b"a"]), bulk(b"1"));
+    drop(server);
+    let _ = std::fs::remove_file(path);
 }

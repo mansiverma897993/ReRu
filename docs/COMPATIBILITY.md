@@ -445,8 +445,10 @@ within the 512 MiB snapshot, RDB, and replication limits. Frames above either
 limit reply `-ERR Protocol error: <reason>` and close the connection. Empty
 frames (`*0`, `*-1`) are ignored. Malformed bulk and multibulk headers report
 Redis's matching reason, including the offending byte for `expected '$'` and
-`expected '*'`. Inline commands are not supported; a frame whose first byte is
-not `*` gets the `expected '*'` error and the connection closes.
+`expected '*'`; a non-printable offending byte is shown as `?`. Inline commands
+are not supported; a frame whose first byte is not `*` gets the `expected '*'`
+error and the connection closes. ReRu also rejects unexpected bytes after a
+bulk value, where Redis ignores them.
 
 `HELLO` and `HELLO 2` return a RESP2 properties array containing ReRu's actual
 name/version, protocol 2, stable connection ID, standalone mode, primary/replica
