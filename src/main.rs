@@ -550,6 +550,15 @@ fn try_blocking_pop(
 ) -> Option<Vec<u8>> {
     for key in keys {
         remove_expired(entries, key);
+    }
+    // A type error is only reported once the search could return data.
+    let servable = keys.iter().any(|key| {
+        matches!(
+            entries.get(key).map(|entry| &entry.value),
+            Some(Value::List(items)) if !items.is_empty()
+        )
+    });
+    for key in keys {
         match entries.get_mut(key) {
             Some(Entry {
                 value: Value::List(items),
@@ -569,8 +578,9 @@ fn try_blocking_pop(
                 mark_modified(store, key);
                 return Some(protocol::array(&[key.clone(), value]));
             }
-            // A type change does not wake a blocked client in Redis.
-            Some(_) if recheck => {}
+            // A type change alone does not wake a blocked client, but a wrong
+            // type earlier in the list still wins once another key is ready.
+            Some(_) if recheck && !servable => {}
             Some(_) => {
                 return Some(
                     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
@@ -667,6 +677,14 @@ fn try_multi_pop(
 ) -> Option<Vec<u8>> {
     for key in options.keys {
         remove_expired(entries, key);
+    }
+    let servable = options.keys.iter().any(|key| {
+        matches!(
+            entries.get(key).map(|entry| &entry.value),
+            Some(Value::List(items)) if !items.is_empty()
+        )
+    });
+    for key in options.keys {
         match entries.get_mut(key) {
             Some(Entry {
                 value: Value::List(items),
@@ -692,7 +710,7 @@ fn try_multi_pop(
                 reply.extend(protocol::array(&values));
                 return Some(reply);
             }
-            Some(_) if recheck => {}
+            Some(_) if recheck && !servable => {}
             Some(_) => {
                 return Some(
                     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
@@ -1002,6 +1020,7 @@ fn try_xread(
     recheck: bool,
 ) -> Result<Option<Vec<u8>>, Vec<u8>> {
     let mut groups = Vec::new();
+    let mut wrong_type = false;
     for (key, id) in keys.iter().zip(ids) {
         remove_expired(entries, key);
         match entries.get(key).map(|entry| &entry.value) {
@@ -1011,7 +1030,7 @@ fn try_xread(
                     groups.push((key, streams::stream_entries(&found)));
                 }
             }
-            Some(_) if recheck => {}
+            Some(_) if recheck => wrong_type = true,
             Some(_) => {
                 return Err(
                     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
@@ -1023,6 +1042,11 @@ fn try_xread(
     }
     if groups.is_empty() {
         return Ok(None);
+    }
+    if wrong_type {
+        return Err(
+            b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec(),
+        );
     }
     let mut response = format!("*{}\r\n", groups.len()).into_bytes();
     for (key, encoded_entries) in groups {

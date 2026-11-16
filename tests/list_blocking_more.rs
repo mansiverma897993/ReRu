@@ -160,3 +160,78 @@ fn blocked_xread_ignores_a_type_change_after_the_first_pass() {
         ])])
     );
 }
+
+#[test]
+fn multi_key_blocking_reports_wrong_type_once_data_is_ready() {
+    let server = Server::start();
+    let mut writer = Client::new(&server);
+    let mut blocked = Client::new(&server);
+    assert_eq!(writer.call(&[b"DEL", b"a", b"b"]), integer(0));
+    let waiter = std::thread::spawn(move || blocked.call(&[b"BLPOP", b"a", b"b", b"2"]));
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(writer.call(&[b"SET", b"a", b"string"]), ok());
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(writer.call(&[b"RPUSH", b"b", b"kept"]), integer(1));
+    assert_eq!(
+        waiter.join().unwrap(),
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    );
+    assert_eq!(
+        writer.call(&[b"LRANGE", b"b", b"0", b"-1"]),
+        array(vec![bulk(b"kept")])
+    );
+
+    // The wrong type only wins when it comes first in the key list.
+    assert_eq!(writer.call(&[b"DEL", b"a", b"b"]), integer(2));
+    let mut blocked = Client::new(&server);
+    let waiter = std::thread::spawn(move || blocked.call(&[b"BLPOP", b"b", b"a", b"2"]));
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(writer.call(&[b"SET", b"a", b"string"]), ok());
+    assert_eq!(writer.call(&[b"RPUSH", b"b", b"value"]), integer(1));
+    assert_eq!(
+        waiter.join().unwrap(),
+        array(vec![bulk(b"b"), bulk(b"value")])
+    );
+
+    // BLMPOP follows the same order rule and leaves the data in place.
+    assert_eq!(writer.call(&[b"DEL", b"a", b"b"]), integer(1));
+    let mut blocked = Client::new(&server);
+    let waiter =
+        std::thread::spawn(move || blocked.call(&[b"BLMPOP", b"2", b"2", b"a", b"b", b"LEFT"]));
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(writer.call(&[b"SET", b"a", b"string"]), ok());
+    assert_eq!(writer.call(&[b"RPUSH", b"b", b"kept"]), integer(1));
+    assert_eq!(
+        waiter.join().unwrap(),
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    );
+    assert_eq!(
+        writer.call(&[b"LRANGE", b"b", b"0", b"-1"]),
+        array(vec![bulk(b"kept")])
+    );
+}
+
+#[test]
+fn blocked_xread_reports_wrong_type_once_another_stream_has_entries() {
+    let server = Server::start();
+    let mut writer = Client::new(&server);
+    let mut blocked = Client::new(&server);
+    assert_eq!(writer.call(&[b"DEL", b"s1", b"s2"]), integer(0));
+    let waiter = std::thread::spawn(move || {
+        blocked.call(&[
+            b"XREAD", b"BLOCK", b"2000", b"STREAMS", b"s1", b"s2", b"0-0", b"0-0",
+        ])
+    });
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(writer.call(&[b"SET", b"s1", b"string"]), ok());
+    std::thread::sleep(Duration::from_millis(80));
+    assert!(matches!(
+        writer.call(&[b"XADD", b"s2", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(
+        waiter.join().unwrap(),
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    );
+    assert_eq!(writer.call(&[b"XLEN", b"s2"]), integer(1));
+}
