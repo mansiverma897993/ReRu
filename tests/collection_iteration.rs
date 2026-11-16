@@ -139,3 +139,37 @@ fn random_hash_fields_obey_count_and_withvalues() {
         Reply::Error(_)
     ));
 }
+
+#[test]
+fn hrandfield_clamps_large_positive_counts_to_the_hash_size() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"HSET", b"h", b"a", b"1", b"b", b"2"]), integer(2));
+    let Reply::Array(Some(fields)) = c.call(&[b"HRANDFIELD", b"h", b"1000001"]) else {
+        panic!("expected array")
+    };
+    assert_eq!(fields.len(), 2);
+    assert_ne!(fields[0], fields[1]);
+    let Reply::Array(Some(pairs)) = c.call(&[b"HRANDFIELD", b"h", b"1000001", b"WITHVALUES"])
+    else {
+        panic!("expected array")
+    };
+    assert_eq!(pairs.len(), 4);
+
+    let minimum = Reply::Error(
+        b"ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807"
+            .to_vec(),
+    );
+    assert_eq!(
+        c.call(&[b"HRANDFIELD", b"h", b"-9223372036854775808"]),
+        minimum
+    );
+    assert_eq!(
+        c.call(&[b"HRANDFIELD", b"missing", b"-9223372036854775808"]),
+        minimum
+    );
+    assert_eq!(
+        c.call(&[b"HRANDFIELD", b"h", b"-1000001"]),
+        Reply::Error(b"ERR count exceeds ReRu limit".to_vec())
+    );
+}

@@ -103,10 +103,12 @@ SAVE/BGSAVE and DUMP **reject hashes with live field TTLs** rather than silently
 dropping them; Redis RDB hash-field expiry encoding and RESTORE interoperability
 remain pending. Commands and error replies are covered by local integration tests
 and a Redis 8.10.2 differential test.
-`SINTERCARD` supports multiple keys and `LIMIT`. `SPOP` and `SRANDMEMBER` use a randomized member order; count replies are capped
-at one million elements to bound allocation. Set store variants replace the
-destination and clear its previous TTL.
-`HRANDFIELD` uses the same one-million count cap. `HINCRBYFLOAT` uses Rust `f64`
+`SINTERCARD` supports multiple keys and `LIMIT`. `SPOP` and `SRANDMEMBER` use a
+randomized member order; a count above the set size returns the whole set, while
+repeating negative counts are capped at one million elements to bound
+allocation. Set store variants replace the destination and clear its previous
+TTL.
+`HRANDFIELD` follows the same clamping and cap rules. `HINCRBYFLOAT` uses Rust `f64`
 arithmetic, so last-digit results can differ from Redis long-double arithmetic.
 `INCRBYFLOAT` has the same precision limitation. Both reject nonfinite input
 and overflow without changing the stored value.

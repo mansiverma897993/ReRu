@@ -309,8 +309,10 @@ fn execute_hash(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             } else {
                 1
             };
-            if requested.unsigned_abs() > 1_000_000 {
-                return protocol::error("count exceeds ReRu limit");
+            if requested == i64::MIN {
+                return protocol::error(
+                    "value is out of range, value must between -9223372036854775807 and 9223372036854775807",
+                );
             }
             let Some(hash) = hash else {
                 return if command.len() == 2 {
@@ -323,10 +325,15 @@ fn execute_hash(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             let mut fields: Vec<_> = hash.keys().collect();
             fields.sort_unstable_by_key(|field| random.hash_one(field));
             let selected: Vec<_> = if requested < 0 && !fields.is_empty() {
-                (0..requested.unsigned_abs() as usize)
+                let count = requested.unsigned_abs() as usize;
+                if count > 1_000_000 {
+                    return protocol::error("count exceeds ReRu limit");
+                }
+                (0..count)
                     .map(|index| fields[(random.hash_one(index) as usize) % fields.len()])
                     .collect()
             } else {
+                // A count above the collection size returns the whole hash.
                 fields.into_iter().take(requested as usize).collect()
             };
             if command.len() == 2 {
@@ -705,8 +712,10 @@ fn execute_set(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             } else {
                 1
             };
-            if requested.unsigned_abs() > 1_000_000 {
-                return protocol::error("count exceeds ReRu limit");
+            if requested == i64::MIN {
+                return protocol::error(
+                    "value is out of range, value must between -9223372036854775807 and 9223372036854775807",
+                );
             }
             let Some(set) = set else {
                 return if command.len() == 3 {
@@ -715,10 +724,14 @@ fn execute_set(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
                     b"$-1\r\n".to_vec()
                 };
             };
-            let selected = random_members(set, requested.unsigned_abs() as usize);
+            let magnitude = requested.unsigned_abs() as usize;
+            if requested < 0 && magnitude > 1_000_000 {
+                return protocol::error("count exceeds ReRu limit");
+            }
+            let selected = random_members(set, magnitude);
             let selected = if requested < 0 && !selected.is_empty() {
                 let random = RandomState::new();
-                (0..requested.unsigned_abs() as usize)
+                (0..magnitude)
                     .map(|index| {
                         selected[(random.hash_one(index) as usize) % selected.len()].clone()
                     })

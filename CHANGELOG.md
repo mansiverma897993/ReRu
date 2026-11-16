@@ -54,6 +54,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
+- `SPOP`, `SRANDMEMBER`, and `HRANDFIELD` return the whole collection for a
+  positive count above its size instead of a count error, and reject
+  `i64::MIN` with Redis's range error.
 - `XRANGE`/`XREVRANGE` return a null array for `COUNT 0` or a negative count on
   an existing stream, and an empty array for a missing key. Bounds are validated
   before the count, non-canonical counts are rejected, and counts above `i64`
