@@ -57,8 +57,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `SPOP`, `SRANDMEMBER`, and `HRANDFIELD` return the whole collection for a
   positive count above its size instead of a count error, and validate the count
   before the key lookup. `SRANDMEMBER`/`HRANDFIELD` reject `i64::MIN` with
-  Redis's range error; `HRANDFIELD WITHVALUES` rejects counts above
-  `i64::MAX/2`; `SPOP` rejects negative or non-canonical counts with
+  Redis's range error; `HRANDFIELD WITHVALUES` rejects counts outside
+  ±`i64::MAX/2`; `SPOP` rejects negative or non-canonical counts with
   `value is out of range, must be positive`.
 - `XRANGE`/`XREVRANGE` return a null array for `COUNT 0` or a negative count on
   an existing stream, and an empty array for a missing key. Bounds are validated

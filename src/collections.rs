@@ -279,7 +279,7 @@ fn execute_hash(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     } else {
         0.0
     };
-    let count_argument = if matches!(kind, Hrandfield | Spop | Srandmember) {
+    let count_argument = if matches!(kind, Hrandfield) {
         match random_count(kind, command) {
             Ok(value) => Some(value),
             Err(error) => return error,

@@ -109,8 +109,8 @@ repeating negative counts are capped at one million elements to bound
 allocation. Set store variants replace the destination and clear its previous
 TTL.
 `HRANDFIELD` follows the same clamping and cap rules, and `HRANDFIELD ...
-WITHVALUES` rejects counts above `i64::MAX/2` because each field costs two reply
-elements. `HINCRBYFLOAT` uses Rust `f64`
+WITHVALUES` rejects counts outside ±`i64::MAX/2` because each field costs two
+reply elements. `HINCRBYFLOAT` uses Rust `f64`
 arithmetic, so last-digit results can differ from Redis long-double arithmetic.
 `INCRBYFLOAT` has the same precision limitation. Both reject nonfinite input
 and overflow without changing the stored value.
