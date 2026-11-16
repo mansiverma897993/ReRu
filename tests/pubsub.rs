@@ -470,15 +470,22 @@ fn a_stalled_exec_reply_drops_the_client_without_blocking_others() {
         started.elapsed()
     );
 
-    stalled
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut sink = [0u8; 65536];
-    loop {
-        match stalled.read(&mut sink) {
-            Ok(0) => break,
-            Ok(_) => continue,
-            Err(error) => panic!("stalled EXEC client was not dropped: {error}"),
+    // Windows can buffer the whole batch, so the drop is only asserted where
+    // socket write timeouts reliably stop a blocked send.
+    #[cfg(not(windows))]
+    {
+        stalled
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut sink = [0u8; 65536];
+        loop {
+            match stalled.read(&mut sink) {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(error) => panic!("stalled EXEC client was not dropped: {error}"),
+            }
         }
     }
+    #[cfg(windows)]
+    let _ = &stalled;
 }
