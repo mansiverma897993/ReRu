@@ -903,3 +903,26 @@ fn score_replies_use_redis_number_formatting() {
     assert_eq!(c.call(&[b"ZADD", b"z", b"-inf", b"b"]), integer(1));
     assert_eq!(c.call(&[b"ZSCORE", b"z", b"b"]), bulk(b"-inf"));
 }
+
+#[test]
+fn score_formatting_known_grisu_differences_are_pinned() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    // Redis's Grisu2 digits can differ from Rust's shortest round-trip digits
+    // or keep fixed form where this implementation uses an exponent.
+    let cases: &[(&[u8], &[u8])] = &[
+        (b"1234567890123456.7", b"1234567890123456.8"),
+        (b"1e23", b"1e+23"),
+        (b"5e22", b"5e+22"),
+        (b"1.0000001e-6", b"1.0000001e-6"),
+    ];
+    for (score, expected) in cases {
+        let _ = c.call(&[b"DEL", b"z"]);
+        assert_eq!(c.call(&[b"ZADD", b"z", score, b"m"]), integer(1));
+        assert_eq!(c.call(&[b"ZSCORE", b"z", b"m"]), bulk(expected));
+    }
+    // Negative zero from an increment is printed as zero, as on main.
+    let _ = c.call(&[b"DEL", b"z"]);
+    assert_eq!(c.call(&[b"ZADD", b"z", b"INCR", b"-0", b"m"]), bulk(b"0"));
+    assert_eq!(c.call(&[b"ZSCORE", b"z", b"m"]), bulk(b"0"));
+}

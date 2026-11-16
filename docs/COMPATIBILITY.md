@@ -252,10 +252,14 @@ empty bound reads as zero; `ZADD` and `ZINCRBY` still reject an empty or
 unparsable score with `ERR value is not a valid float`. Hex-float literals such
 as `0x1`, which Redis accepts through `strtod`, are rejected everywhere.
 Lex ranges use the score-ordered index and should be used with equal scores,
-the ordering condition documented by Redis. Score replies use Redis's
+the ordering condition documented by Redis. Score replies follow Redis's
 `fpconv_dtoa` rules: a value that fits exactly in half the `i64` range prints as
-an integer, other values use the shortest round-trip digits with Redis's fixed
-versus exponent thresholds. Bitmap growth is capped at 64 MiB per value, below Redis's
+an integer, other values use shortest round-trip digits with Redis's fixed
+versus exponent thresholds. Digit selection is Rust's correctly rounded
+shortest form, not Grisu2, so about 0.1% of high-precision values differ in the
+last digit, and values near `1e21`–`1e24` can keep fixed form where Redis prints
+an exponent (for example `1e23` is `1e+23` here and
+`99999999999999990000000` in Redis). Bitmap growth is capped at 64 MiB per value, below Redis's
 maximum; this is an explicit ReRu resource limit.
 `BITFIELD` and `BITFIELD_RO` support integer widths up to `i64` and `u63`.
 Writes that would grow beyond ReRu's 64 MiB string cap fail. Read-only
