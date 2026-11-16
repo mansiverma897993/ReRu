@@ -232,14 +232,15 @@ impl ClientSubscription<'_> {
                 let Some(listener) = listeners.get_mut(&self.id) else {
                     return Err(disconnected());
                 };
-                std::mem::take(&mut listener.deferred)
-            };
-            if deferred.is_empty() {
-                // Keep holding until every queued frame reached the socket, so
-                // a later publish cannot overtake them.
-                if let Some(listener) = self.hub.listeners.lock().unwrap().get_mut(&self.id) {
+                let deferred = std::mem::take(&mut listener.deferred);
+                if deferred.is_empty() {
+                    // Clear the hold in the same critical section as the take,
+                    // so a publish cannot append between them and be stranded.
                     listener.held = false;
                 }
+                deferred
+            };
+            if deferred.is_empty() {
                 return Ok(());
             }
             self.write_bounded(&deferred, ACK_IDLE, deadline)?;
