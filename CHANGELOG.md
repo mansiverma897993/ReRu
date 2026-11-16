@@ -50,6 +50,7 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   empty `*0`/`*-1` frames are ignored like Redis.
 - `HELLO` reports `replica` on a read-only replica, matching Redis's HELLO role
   field. `INFO` still has no replication section.
+- `PUBSUB NUMPAT` counts unique patterns instead of each client's subscription.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

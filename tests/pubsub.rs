@@ -242,3 +242,65 @@ fn many_acks_from_a_non_reader_do_not_block_other_clients() {
         }
     }
 }
+
+#[test]
+fn pubsub_numpat_counts_unique_patterns() {
+    let server = Server::start();
+    let mut first = Client::new(&server);
+    let mut second = Client::new(&server);
+    assert_eq!(
+        first.call(&[b"PSUBSCRIBE", b"shared:*"]),
+        ack(b"psubscribe", Some(b"shared:*"), 1)
+    );
+    assert_eq!(
+        second.call(&[b"PSUBSCRIBE", b"shared:*"]),
+        ack(b"psubscribe", Some(b"shared:*"), 1)
+    );
+    assert_eq!(
+        Client::new(&server).call(&[b"PUBSUB", b"NUMPAT"]),
+        integer(1)
+    );
+    assert_eq!(
+        first.call(&[b"PSUBSCRIBE", b"other:*"]),
+        ack(b"psubscribe", Some(b"other:*"), 2)
+    );
+    assert_eq!(
+        Client::new(&server).call(&[b"PUBSUB", b"NUMPAT"]),
+        integer(2)
+    );
+    assert_eq!(
+        first.call(&[b"PUNSUBSCRIBE", b"shared:*"]),
+        ack(b"punsubscribe", Some(b"shared:*"), 1)
+    );
+    assert_eq!(
+        Client::new(&server).call(&[b"PUBSUB", b"NUMPAT"]),
+        integer(2)
+    );
+    assert_eq!(
+        second.call(&[b"PUNSUBSCRIBE", b"shared:*"]),
+        ack(b"punsubscribe", Some(b"shared:*"), 0)
+    );
+    assert_eq!(
+        Client::new(&server).call(&[b"PUBSUB", b"NUMPAT"]),
+        integer(1)
+    );
+}
+
+#[test]
+fn pubsub_numpat_handles_binary_and_duplicate_patterns() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"PSUBSCRIBE", b"dup:*", b"dup:*"]),
+        ack(b"psubscribe", Some(b"dup:*"), 1)
+    );
+    assert_eq!(c.read(), ack(b"psubscribe", Some(b"dup:*"), 1));
+    assert_eq!(
+        c.call(&[b"PSUBSCRIBE", b"bin\0:*\xff"]),
+        ack(b"psubscribe", Some(b"bin\0:*\xff"), 2)
+    );
+    assert_eq!(
+        Client::new(&server).call(&[b"PUBSUB", b"NUMPAT"]),
+        integer(2)
+    );
+}
