@@ -48,6 +48,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   below Redis's defaults so one command fits ReRu's persistence frames.
 - Malformed frames reply `-ERR Protocol error: <reason>` before closing, and
   empty `*0`/`*-1` frames are ignored like Redis.
+- `HELLO` reports `replica` on a read-only replica; `INFO replication` keeps
+  `role:slave` like Redis.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
