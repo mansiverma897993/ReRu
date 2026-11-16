@@ -10,6 +10,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Fixed
 
+- `MULTI` now uses `COMMAND` arity metadata for ordinary commands: variadic
+  commands queue at their minimum arity and report invalid argument shapes in
+  `EXEC`, while fixed-arity errors still abort at queue time.
 - A Pub/Sub subscriber removed after a failed publish no longer aborts the
   server when it sends another subscription command.
 - Large replies are retried until the client drains them instead of being

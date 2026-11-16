@@ -76,9 +76,11 @@ WATCH tracks writes even if the resulting value is unchanged, missing-key
 creation/deletion, and natural expiry. EXEC and DISCARD clear the connection's
 watches; UNWATCH clears them outside MULTI. Inside MULTI, UNWATCH is queued.
 Queue-time validation follows each command's declared arity. PING, INFO,
-FLUSHDB, FLUSHALL, and COPY queue and surface argument errors inside the EXEC
-reply; some variadic commands such as LPOP, HSET, SPOP, and ZRANK still abort at
-queue time.
+FLUSHDB, FLUSHALL, COPY, LPOP, HSET, SPOP, and ZRANK queue when they meet
+their declared minimum arity; invalid option shapes or excess arguments then
+surface as individual errors in the EXEC reply. Fixed-arity commands still
+abort the transaction at queue time. Subcommand-specific validation remains
+for connection, configuration, latency, cluster, XGROUP, XINFO, and ACL.
 Disconnects release registrations. Replica updates identify changed keys;
 unrelated writes preserve watches, while a full resync invalidates all watches.
 
