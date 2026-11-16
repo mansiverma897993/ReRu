@@ -201,3 +201,68 @@ fn xrange_count_zero_returns_null_for_existing_streams() {
         matches!(c.call(&[b"XRANGE", b"xs", b"-", b"+", b"COUNT", b"1"]), Reply::Array(Some(rows)) if rows.len() == 1)
     );
 }
+
+#[test]
+fn xrange_count_error_precedence_and_canonical_counts() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"xs", b"1-0", b"f", b"a"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert!(matches!(
+        c.call(&[b"XADD", b"xs", b"2-0", b"f", b"b"]),
+        Reply::Bulk(Some(_))
+    ));
+
+    let invalid_id =
+        || Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec());
+    assert_eq!(
+        c.call(&[b"XRANGE", b"xs", b"bad", b"+", b"COUNT", b"0"]),
+        invalid_id()
+    );
+    assert_eq!(
+        c.call(&[b"XRANGE", b"xs", b"-", b"bad", b"COUNT", b"0"]),
+        invalid_id()
+    );
+    assert_eq!(
+        c.call(&[b"XREVRANGE", b"xs", b"+", b"bad", b"COUNT", b"0"]),
+        invalid_id()
+    );
+    assert_eq!(
+        c.call(&[b"XRANGE", b"missing", b"bad", b"+", b"COUNT", b"0"]),
+        invalid_id()
+    );
+
+    assert_eq!(c.call(&[b"SET", b"wrong", b"v"]), client::ok());
+    assert!(matches!(
+        c.call(&[b"XRANGE", b"wrong", b"-", b"+", b"COUNT", b"0"]),
+        Reply::Error(message) if message.starts_with(b"WRONGTYPE")
+    ));
+
+    let invalid_count = || Reply::Error(b"ERR value is not an integer or out of range".to_vec());
+    for count in [b"+1".as_slice(), b"01", b"-0", b"9223372036854775808"] {
+        assert_eq!(
+            c.call(&[b"XRANGE", b"xs", b"-", b"+", b"COUNT", count]),
+            invalid_count()
+        );
+    }
+    assert_eq!(
+        c.call(&[
+            b"XRANGE",
+            b"xs",
+            b"-",
+            b"+",
+            b"COUNT",
+            b"-9223372036854775808"
+        ]),
+        Reply::Array(None)
+    );
+    assert!(
+        matches!(c.call(&[b"XRANGE", b"xs", b"-", b"+", b"COUNT", b"9223372036854775807"]), Reply::Array(Some(rows)) if rows.len() == 2)
+    );
+    assert_eq!(
+        c.call(&[b"XREVRANGE", b"missing", b"+", b"-", b"COUNT", b"-1"]),
+        array(vec![])
+    );
+}
