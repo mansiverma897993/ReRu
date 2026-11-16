@@ -58,9 +58,11 @@ immediately. Waiting clients do not yet have Redis's FIFO ordering guarantee.
 `ZMPOP`, `BZMPOP`, `BZPOPMIN`, and `BZPOPMAX` similarly choose the first
 nonempty sorted-set key, pop in score order, and delete an emptied key.
 Blocking forms wait for another write and return immediately inside MULTI/EXEC.
-A type change on a watched key does not wake a blocked client; only a value of
-the expected type does, while an existing wrong type still errors on the first
-call.
+A type change on a watched key does not wake a blocked list or XREAD client;
+only a value of the expected type does. Once data is available, the scan still
+reports WRONGTYPE when an earlier key in the list has another type, and XREAD
+reports it when any stream has another type. An existing wrong type errors on
+the first call.
 
 Geo search scans the sorted set, then filters and sorts candidates. This is
 slower than Redis's geohash-area query for large datasets. Coordinates are
