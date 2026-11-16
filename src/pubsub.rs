@@ -73,6 +73,10 @@ struct Listener {
     patterns: HashSet<Vec<u8>>,
 }
 
+fn disconnected() -> io::Error {
+    io::Error::new(io::ErrorKind::BrokenPipe, "subscriber disconnected")
+}
+
 pub struct ClientSubscription<'a> {
     id: u64,
     hub: &'a Hub,
@@ -111,33 +115,52 @@ impl ClientSubscription<'_> {
     // subscription acknowledgements ahead of later PUBLISH deliveries.
     pub fn change(&self, command: &[Vec<u8>]) -> io::Result<()> {
         let deadline = Instant::now() + ACK_TOTAL;
-        let frames = self.change_frames(command, deadline)?;
-        for frame in frames {
-            let writer = self.writer()?;
+        let mut listeners = self.hub.listeners.lock().unwrap();
+        let Some(listener) = listeners.get_mut(&self.id) else {
+            return Err(disconnected());
+        };
+        Self::apply_change(listener, command, deadline, |writer, frame, deadline| {
             let mut writer = writer.lock().unwrap();
-            write_frame(&mut writer, &frame, ACK_IDLE, deadline)?;
-        }
-        Ok(())
+            write_frame(&mut writer, frame, ACK_IDLE, deadline)
+        })
     }
 
     /// Apply a subscription change and return the acknowledgement frames
     /// without writing them, so EXEC can nest them in its own reply.
     pub fn change_frame(&self, command: &[Vec<u8>]) -> io::Result<Vec<u8>> {
         let deadline = Instant::now() + ACK_TOTAL;
-        Ok(self.change_frames(command, deadline)?.concat())
+        let mut listeners = self.hub.listeners.lock().unwrap();
+        let Some(listener) = listeners.get_mut(&self.id) else {
+            return Err(disconnected());
+        };
+        let mut frames = Vec::new();
+        Self::apply_change(listener, command, deadline, |_, frame, _| {
+            frames.extend_from_slice(frame);
+            Ok(())
+        })?;
+        Ok(frames)
     }
 
-    fn change_frames(&self, command: &[Vec<u8>], deadline: Instant) -> io::Result<Vec<Vec<u8>>> {
+    fn apply_change(
+        listener: &mut Listener,
+        command: &[Vec<u8>],
+        deadline: Instant,
+        mut emit: impl FnMut(&Writer, &[u8], Instant) -> io::Result<()>,
+    ) -> io::Result<()> {
         let name = command[0].as_slice();
         let adding =
             name.eq_ignore_ascii_case(b"SUBSCRIBE") || name.eq_ignore_ascii_case(b"PSUBSCRIBE");
         let pattern =
             name.eq_ignore_ascii_case(b"PSUBSCRIBE") || name.eq_ignore_ascii_case(b"PUNSUBSCRIBE");
         if adding && command.len() == 1 {
-            return Ok(vec![protocol::error(&format!(
-                "wrong number of arguments for '{}' command",
-                String::from_utf8_lossy(name).to_ascii_lowercase()
-            ))]);
+            return emit(
+                &listener.writer,
+                &protocol::error(&format!(
+                    "wrong number of arguments for '{}' command",
+                    String::from_utf8_lossy(name).to_ascii_lowercase()
+                )),
+                deadline,
+            );
         }
         let kind = if adding {
             if pattern {
@@ -149,15 +172,6 @@ impl ClientSubscription<'_> {
             b"punsubscribe".as_slice()
         } else {
             b"unsubscribe".as_slice()
-        };
-        let mut listeners = self.hub.listeners.lock().unwrap();
-        let Some(listener) = listeners.get_mut(&self.id) else {
-            // A failed publish removed this subscriber. Close the connection
-            // instead of unwrapping an entry that no longer exists.
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "subscriber disconnected",
-            ));
         };
         let items: Vec<Option<Vec<u8>>> = if !adding && command.len() == 1 {
             let subscriptions = if pattern {
@@ -175,7 +189,6 @@ impl ClientSubscription<'_> {
         } else {
             command[1..].iter().cloned().map(Some).collect()
         };
-        let mut frames = Vec::new();
         for item in items {
             if Instant::now() >= deadline {
                 return Err(io::Error::new(
@@ -196,9 +209,10 @@ impl ClientSubscription<'_> {
                 }
             }
             let count = listener.channels.len() + listener.patterns.len();
-            frames.push(acknowledgement(kind, item.as_deref(), count));
+            let frame = acknowledgement(kind, item.as_deref(), count);
+            emit(&listener.writer, &frame, deadline)?;
         }
-        Ok(frames)
+        Ok(())
     }
 
     fn writer(&self) -> io::Result<Writer> {
@@ -208,7 +222,7 @@ impl ClientSubscription<'_> {
             .unwrap()
             .get(&self.id)
             .map(|listener| listener.writer.clone())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "subscriber disconnected"))
+            .ok_or_else(disconnected)
     }
 
     pub fn write(&self, reply: &[u8]) -> io::Result<()> {
