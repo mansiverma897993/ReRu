@@ -66,6 +66,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `SET` and `GETEX` accept repeated flags and repeated expiry options with the
   same unit (last wins); mixing units or combining KEEPTTL/PERSIST with an
   expiry is a syntax error.
+- `SET`, `SETEX`, `PSETEX`, and `GETEX` report `value is not an integer or out of
+  range` for non-numeric expiry arguments, keeping `invalid expire time` for
+  non-positive or overflowing values.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

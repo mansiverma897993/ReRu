@@ -307,9 +307,12 @@ fn deadline(option: &[u8], bytes: &[u8], command: &str) -> Result<Instant, Vec<u
     let invalid = || protocol::error(&format!("invalid expire time in '{command}' command"));
     let amount = std::str::from_utf8(bytes)
         .ok()
-        .and_then(|text| text.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .ok_or_else(invalid)?;
+        .and_then(|text| text.parse::<i64>().ok())
+        .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
+    if amount <= 0 {
+        return Err(invalid());
+    }
+    let amount = amount as u64;
     let milliseconds = if option.eq_ignore_ascii_case(b"EX") || option.eq_ignore_ascii_case(b"EXAT")
     {
         amount.checked_mul(1000).ok_or_else(invalid)?

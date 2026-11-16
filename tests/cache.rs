@@ -745,3 +745,39 @@ fn set_and_getex_accept_repeated_options_like_redis() {
         assert_eq!(c.call(command), Reply::Error(b"ERR syntax error".to_vec()));
     }
 }
+
+#[test]
+fn expiry_parse_errors_match_redis_text() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"SET", b"k", b"v"]), ok());
+    let integer = Reply::Error(b"ERR value is not an integer or out of range".to_vec());
+    for command in [
+        &[b"SET".as_slice(), b"k", b"v", b"EX", b"abc"] as &[&[u8]],
+        &[b"SET", b"k", b"v", b"EX", b"1.5"],
+        &[b"SET", b"k", b"v", b"EX", b"99999999999999999999"],
+        &[b"SETEX", b"k", b"1.5", b"v"],
+        &[b"PSETEX", b"k", b"1.5", b"v"],
+        &[b"GETEX", b"k", b"EX", b"abc"],
+        &[b"GETEX", b"k", b"PX", b"1.5"],
+    ] {
+        assert_eq!(c.call(command), integer, "{command:?}");
+    }
+    for (command, name) in [
+        (
+            &[b"SET".as_slice(), b"k", b"v", b"EX", b"0"] as &[&[u8]],
+            "set",
+        ),
+        (&[b"SET", b"k", b"v", b"EX", b"-1"], "set"),
+        (&[b"SETEX", b"k", b"0", b"v"], "setex"),
+        (&[b"PSETEX", b"k", b"-1", b"v"], "psetex"),
+        (&[b"GETEX", b"k", b"EX", b"0"], "getex"),
+        (&[b"GETEX", b"k", b"EX", b"-1"], "getex"),
+    ] {
+        assert_eq!(
+            c.call(command),
+            Reply::Error(format!("ERR invalid expire time in '{name}' command").into_bytes()),
+            "{command:?}"
+        );
+    }
+}
