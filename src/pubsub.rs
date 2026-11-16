@@ -11,7 +11,7 @@ const REPLY_IDLE: Duration = Duration::from_secs(30);
 const ACK_IDLE: Duration = Duration::from_millis(100);
 // Acknowledgements still run under command_gate: allow a healthy batch to make
 // progress but cap the whole batch and any single stall.
-const ACK_TOTAL: Duration = Duration::from_millis(750);
+pub(crate) const ACK_TOTAL: Duration = Duration::from_millis(750);
 // Publish deliveries run under the gate too, so one publish is capped tightly.
 const PUBLISH_IDLE: Duration = Duration::from_millis(20);
 const PUBLISH_TOTAL: Duration = Duration::from_millis(100);
@@ -71,6 +71,8 @@ struct Listener {
     writer: Writer,
     channels: HashSet<Vec<u8>>,
     patterns: HashSet<Vec<u8>>,
+    held: bool,
+    deferred: Vec<u8>,
 }
 
 fn disconnected() -> io::Error {
@@ -127,8 +129,7 @@ impl ClientSubscription<'_> {
 
     /// Apply a subscription change and return the acknowledgement frames
     /// without writing them, so EXEC can nest them in its own reply.
-    pub fn change_frame(&self, command: &[Vec<u8>]) -> io::Result<Vec<u8>> {
-        let deadline = Instant::now() + ACK_TOTAL;
+    pub fn change_frame(&self, command: &[Vec<u8>], deadline: Instant) -> io::Result<Vec<u8>> {
         let mut listeners = self.hub.listeners.lock().unwrap();
         let Some(listener) = listeners.get_mut(&self.id) else {
             return Err(disconnected());
@@ -215,6 +216,41 @@ impl ClientSubscription<'_> {
         Ok(())
     }
 
+    /// Buffer publish deliveries until `release`, so a message published during
+    /// the client's own EXEC cannot overtake the transaction reply.
+    pub fn hold(&self) {
+        if let Some(listener) = self.hub.listeners.lock().unwrap().get_mut(&self.id) {
+            listener.held = true;
+        }
+    }
+
+    pub fn release(&self) -> io::Result<()> {
+        let deferred = {
+            let mut listeners = self.hub.listeners.lock().unwrap();
+            let Some(listener) = listeners.get_mut(&self.id) else {
+                return Err(disconnected());
+            };
+            listener.held = false;
+            std::mem::take(&mut listener.deferred)
+        };
+        if deferred.is_empty() {
+            return Ok(());
+        }
+        self.write_bounded(&deferred, ACK_IDLE, Instant::now() + ACK_TOTAL)
+    }
+
+    /// Write an EXEC reply under the gate with a bounded budget, so a stalled
+    /// client drops instead of freezing every other client.
+    pub fn write_transaction(&self, reply: &[u8]) -> io::Result<()> {
+        self.write_bounded(reply, ACK_IDLE, Instant::now() + ACK_TOTAL)
+    }
+
+    fn write_bounded(&self, reply: &[u8], idle: Duration, deadline: Instant) -> io::Result<()> {
+        let writer = self.writer()?;
+        let mut writer = writer.lock().unwrap();
+        write_frame(&mut writer, reply, idle, deadline)
+    }
+
     fn writer(&self) -> io::Result<Writer> {
         self.hub
             .listeners
@@ -242,6 +278,8 @@ impl Hub {
                 writer,
                 channels: HashSet::new(),
                 patterns: HashSet::new(),
+                held: false,
+                deferred: Vec::new(),
             },
         );
         ClientSubscription { id, hub: self }
@@ -253,9 +291,23 @@ impl Hub {
         let direct = message_reply(b"message", &[channel, message]);
         let mut count = 0;
         let mut failed = Vec::new();
-        for (id, listener) in listeners.iter() {
+        for (id, listener) in listeners.iter_mut() {
             if Instant::now() >= deadline {
                 break;
+            }
+            if listener.held {
+                if listener.channels.contains(channel) {
+                    listener.deferred.extend_from_slice(&direct);
+                    count += 1;
+                }
+                for pattern in &listener.patterns {
+                    if glob_matches(pattern, channel) {
+                        let reply = message_reply(b"pmessage", &[pattern, channel, message]);
+                        listener.deferred.extend_from_slice(&reply);
+                        count += 1;
+                    }
+                }
+                continue;
             }
             let mut writer = listener.writer.lock().unwrap();
             let mut delivered = true;

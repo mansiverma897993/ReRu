@@ -373,3 +373,112 @@ fn subscribe_inside_multi_validates_arity_and_discard_clears_it() {
     );
     assert_eq!(c.read(), ack(b"unsubscribe", Some(b"b"), 0));
 }
+
+#[test]
+fn subscription_commands_inside_exec_follow_redis_order() {
+    let server = Server::start();
+
+    // A publish to the same client during EXEC arrives after the EXEC reply.
+    let mut self_publish = Client::new(&server);
+    assert_eq!(self_publish.call(&[b"MULTI"]), ok());
+    assert_eq!(self_publish.call(&[b"SUBSCRIBE", b"self"]), queued());
+    assert_eq!(self_publish.call(&[b"PUBLISH", b"self", b"hi"]), queued());
+    assert_eq!(
+        self_publish.call(&[b"EXEC"]),
+        array(vec![ack(b"subscribe", Some(b"self"), 1), integer(1)])
+    );
+    assert_eq!(
+        self_publish.read(),
+        array(vec![bulk(b"message"), bulk(b"self"), bulk(b"hi")])
+    );
+
+    // PING after SUBSCRIBE in the same EXEC uses the subscribed reply shape.
+    let mut ping = Client::new(&server);
+    assert_eq!(ping.call(&[b"MULTI"]), ok());
+    assert_eq!(ping.call(&[b"SUBSCRIBE", b"p1"]), queued());
+    assert_eq!(ping.call(&[b"PING"]), queued());
+    assert_eq!(
+        ping.call(&[b"EXEC"]),
+        array(vec![
+            ack(b"subscribe", Some(b"p1"), 1),
+            array(vec![bulk(b"pong"), bulk(b"")]),
+        ])
+    );
+
+    // Several channels in one queued command produce one ack each.
+    let mut multi = Client::new(&server);
+    assert_eq!(multi.call(&[b"MULTI"]), ok());
+    assert_eq!(multi.call(&[b"SUBSCRIBE", b"a", b"b"]), queued());
+    // Redis declares one EXEC element per queued command but emits one ack
+    // frame per channel, so the second frame follows the array.
+    assert_eq!(
+        multi.call(&[b"EXEC"]),
+        array(vec![ack(b"subscribe", Some(b"a"), 1)])
+    );
+    assert_eq!(multi.read(), ack(b"subscribe", Some(b"b"), 2));
+    assert_eq!(
+        multi.call(&[b"UNSUBSCRIBE", b"a", b"b"]),
+        ack(b"unsubscribe", Some(b"a"), 1)
+    );
+    assert_eq!(multi.read(), ack(b"unsubscribe", Some(b"b"), 0));
+    assert_eq!(multi.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
+
+    // A subscribed client's EXEC is rejected with EXECABORT.
+    assert_eq!(
+        multi.call(&[b"SUBSCRIBE", b"g"]),
+        ack(b"subscribe", Some(b"g"), 1)
+    );
+    assert_eq!(
+        multi.call(&[b"EXEC"]),
+        Reply::Error(
+            b"EXECABORT Transaction discarded because of: Can't execute 'exec': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
+                .to_vec()
+        )
+    );
+    assert_eq!(multi.call(&[b"RESET"]), Reply::Simple(b"RESET".to_vec()));
+}
+
+#[test]
+fn a_stalled_exec_reply_drops_the_client_without_blocking_others() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let server = Server::start();
+    let mut stalled = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    let mut subscribe: Vec<Vec<u8>> = vec![b"SUBSCRIBE".to_vec()];
+    for index in 0..1023 {
+        subscribe.push(format!("channel-{index}-{}", "x".repeat(60_000)).into_bytes());
+    }
+    let borrowed: Vec<&[u8]> = subscribe.iter().map(Vec::as_slice).collect();
+    stalled.write_all(&command(&[b"MULTI"])).unwrap();
+    stalled.write_all(&command(&borrowed)).unwrap();
+    stalled.write_all(&command(&[b"EXEC"])).unwrap();
+
+    stalled
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut first = [0u8; 1];
+    assert_eq!(stalled.read(&mut first).unwrap(), 1);
+    std::thread::sleep(Duration::from_millis(1200));
+
+    let mut other = Client::new(&server);
+    let started = Instant::now();
+    assert_eq!(other.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "PING blocked for {:?}",
+        started.elapsed()
+    );
+
+    stalled
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut sink = [0u8; 65536];
+    loop {
+        match stalled.read(&mut sink) {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(error) => panic!("stalled EXEC client was not dropped: {error}"),
+        }
+    }
+}

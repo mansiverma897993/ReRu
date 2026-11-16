@@ -56,8 +56,11 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
 - `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, and `PUNSUBSCRIBE` inside `MULTI`
   are queued and run by `EXEC`; the connection enters subscribed mode with the
-  acknowledgements nested in the `EXEC` reply. The subscribed-mode rejection
-  message now uses Redis's text.
+  acknowledgements nested in the `EXEC` reply. A `PING` after a subscription in
+  the same `EXEC` uses the subscribed reply shape, messages published to the
+  connection inside `EXEC` are delivered after the transaction reply, and
+  `EXEC` inside subscribed mode replies `EXECABORT`. The subscribed-mode
+  rejection message now uses Redis's text.
 - `SPOP`, `SRANDMEMBER`, and `HRANDFIELD` return the whole collection for a
   positive count above its size instead of a count error, and validate the count
   before the key lookup. `SRANDMEMBER`/`HRANDFIELD` reject `i64::MIN` with

@@ -1837,9 +1837,17 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                 subscription.write(&reply)?;
             } else {
                 let name = String::from_utf8_lossy(&command[0]).to_ascii_lowercase();
-                subscription.write(&protocol::error(&format!(
+                let reason = format!(
                     "Can't execute '{name}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
-                )))?;
+                );
+                if name == "exec" {
+                    subscription.write(
+                        format!("-EXECABORT Transaction discarded because of: {reason}\r\n")
+                            .as_bytes(),
+                    )?;
+                } else {
+                    subscription.write(&protocol::error(&reason))?;
+                }
             }
             continue;
         }
@@ -1945,11 +1953,25 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                         let subscribes = queued
                             .iter()
                             .any(|command| pubsub::is_subscription_command(command));
+                        let holds = subscribes || subscription.active();
+                        let deadline = Instant::now() + pubsub::ACK_TOTAL;
+                        if holds {
+                            subscription.hold();
+                        }
                         for queued_command in queued {
                             let result = if queued_command[0].eq_ignore_ascii_case(b"AUTH") {
                                 store.auth.authenticate(&queued_command, &mut authenticated)
                             } else if pubsub::is_subscription_command(&queued_command) {
-                                subscription.change_frame(&queued_command)?
+                                subscription.change_frame(&queued_command, deadline)?
+                            } else if queued_command[0].eq_ignore_ascii_case(b"PING")
+                                && subscription.active()
+                            {
+                                let payload =
+                                    queued_command.get(1).map_or(b"".as_slice(), Vec::as_slice);
+                                let mut reply = b"*2\r\n".to_vec();
+                                reply.extend(protocol::bulk(b"pong"));
+                                reply.extend(protocol::bulk(payload));
+                                reply
                             } else if let Some(response) =
                                 session.execute(&queued_command, &store, &mut authenticated)
                             {
@@ -1965,10 +1987,14 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                             }
                         }
                         if subscribes {
-                            // Writes to the socket while the gate is held so no
-                            // delivery can overtake the EXEC reply.
-                            subscription.write(&response)?;
+                            // Write the reply while the gate is held so a
+                            // delivery cannot overtake it; the budget drops a
+                            // stalled client instead of freezing the server.
+                            subscription.write_transaction(&response)?;
                             replied_early = true;
+                        }
+                        if holds {
+                            subscription.release()?;
                         }
                         response
                     }
