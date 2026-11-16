@@ -342,3 +342,26 @@ fn redis_reference_matches_hashes_estimates_union_sparse_and_dense_exchange() {
         redis.call(&[b"DEL", key]);
     }
 }
+
+#[test]
+fn non_string_keys_use_the_generic_wrong_type_error() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"LPUSH", b"list", b"x"]), integer(1));
+    let generic =
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec());
+    for command in [
+        &[b"PFADD".as_slice(), b"list", b"a"] as &[&[u8]],
+        &[b"PFCOUNT", b"list"],
+        &[b"PFMERGE", b"dest", b"list"],
+    ] {
+        assert_eq!(c.call(command), generic);
+    }
+
+    // A string with a bad header keeps the HyperLogLog-specific error.
+    assert_eq!(c.call(&[b"SET", b"bad-hll", b"not-a-sketch"]), ok());
+    assert_eq!(
+        c.call(&[b"PFCOUNT", b"bad-hll"]),
+        Reply::Error(b"WRONGTYPE Key is not a valid HyperLogLog string value.".to_vec())
+    );
+}

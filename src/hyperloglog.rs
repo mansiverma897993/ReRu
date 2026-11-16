@@ -8,6 +8,7 @@ const REGISTERS: usize = 1 << 14;
 const HEADER: usize = 16;
 const DENSE_BYTES: usize = HEADER + REGISTERS * 6 / 8;
 const WRONGTYPE: &[u8] = b"-WRONGTYPE Key is not a valid HyperLogLog string value.\r\n";
+const NON_STRING: &[u8] = b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
 const CORRUPT: &[u8] = b"-INVALIDOBJ Corrupted HLL object detected\r\n";
 type Result<T> = std::result::Result<T, Vec<u8>>;
 
@@ -189,7 +190,7 @@ fn run(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         let bytes = match entries.get_mut(key).map(|entry| &mut entry.value) {
             None => return Ok(b":0\r\n".to_vec()),
             Some(Value::String(bytes)) => bytes,
-            Some(_) => return Err(WRONGTYPE.to_vec()),
+            Some(_) => return Err(NON_STRING.to_vec()),
         };
         validate_header(bytes)?;
         let count = if bytes[15] & 0x80 == 0 {
@@ -208,7 +209,7 @@ fn run(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         let mut registers = match existing.map(|entry| &entry.value) {
             None => vec![0; REGISTERS],
             Some(Value::String(bytes)) => decode(bytes)?,
-            Some(_) => return Err(WRONGTYPE.to_vec()),
+            Some(_) => return Err(NON_STRING.to_vec()),
         };
         let mut changed = existing.is_none();
         let expires_at = existing.and_then(|entry| entry.expires_at);
@@ -241,7 +242,7 @@ fn run(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         remove_expired(&mut entries, key);
         match entries.get(key).map(|entry| &entry.value) {
             Some(Value::String(bytes)) => merge(&mut registers, &decode(bytes)?),
-            Some(_) => return Err(WRONGTYPE.to_vec()),
+            Some(_) => return Err(NON_STRING.to_vec()),
             None => {}
         }
     }
