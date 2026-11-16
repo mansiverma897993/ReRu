@@ -1736,7 +1736,20 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
     let mut transaction_error = false;
     let mut authenticated = !store.auth.required();
     let mut watches = ClientWatches::new(Arc::clone(&store));
-    while let Some(command) = protocol::read_command(&mut reader)? {
+    loop {
+        let command = match protocol::read_command(&mut reader) {
+            Ok(Some(command)) => command,
+            Ok(None) => break,
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(error) => {
+                let reason = protocol::error_reason(&error);
+                let _ = subscription.write(format!("-ERR Protocol error: {reason}\r\n").as_bytes());
+                break;
+            }
+        };
+        if command.is_empty() {
+            continue;
+        }
         if !authenticated
             && !command[0].eq_ignore_ascii_case(b"AUTH")
             && !command[0].eq_ignore_ascii_case(b"QUIT")

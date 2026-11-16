@@ -9,6 +9,17 @@ pub const MAX_BULK: usize = 256 * 1024 * 1024;
 /// ReRu's own cap, below Redis's INT_MAX argument count and 1 GiB query buffer.
 pub const MAX_ARGS: usize = 1024 * 1024;
 
+/// Map a parser error to the protocol-error reason Redis sends before closing.
+pub fn error_reason(error: &io::Error) -> &'static str {
+    match error.to_string().as_str() {
+        "invalid length" | "command too large" | "expected CRLF" => "invalid bulk length",
+        "invalid argument count" | "header too long" => "invalid multibulk length",
+        "expected bulk string" => "expected '$'",
+        "expected RESP array" => "expected '*'",
+        _ => "invalid request",
+    }
+}
+
 fn line<R: BufRead>(reader: &mut R) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.take(65).read_until(b'\n', &mut bytes)?;
@@ -52,8 +63,17 @@ fn read_command_with_limits<R: BufRead>(
             "expected RESP array",
         ));
     }
-    let count = number(&header[1..])?;
-    if count == 0 || count > max_args {
+    let count = std::str::from_utf8(&header[1..])
+        .ok()
+        .and_then(|text| text.parse::<i64>().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid length"))?;
+    if count <= 0 {
+        // Redis ignores *0 and *-1 frames.
+        return Ok(Some(Vec::new()));
+    }
+    let count = usize::try_from(count)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid argument count"))?;
+    if count > max_args {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "invalid argument count",

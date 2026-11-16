@@ -46,6 +46,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   key can serve data.
 - The parser accepts up to 1,048,576 arguments and 256 MiB of argument bytes,
   below Redis's defaults so one command fits ReRu's persistence frames.
+- Malformed frames reply `-ERR Protocol error: <reason>` before closing, and
+  empty `*0`/`*-1` frames are ignored like Redis.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
