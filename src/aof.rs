@@ -465,6 +465,9 @@ pub fn replay(path: &Path, store: &Store) -> io::Result<()> {
             }
             Err(error) => return Err(error),
         };
+        if command.is_empty() {
+            continue;
+        }
         if command.len() == 1 && command[0].eq_ignore_ascii_case(b"MULTI") {
             if transaction.replace(Vec::new()).is_some() {
                 return Err(invalid("nested AOF transaction"));

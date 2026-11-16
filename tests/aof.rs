@@ -186,3 +186,18 @@ fn aof_write_failure_returns_misconf_and_keeps_the_connection() {
 
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 }
+
+#[test]
+fn empty_aof_frames_are_skipped_during_replay() {
+    let path = path();
+    std::fs::write(
+        &path,
+        b"*1\r\n$5\r\nMULTI\r\n*0\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n*1\r\n$4\r\nEXEC\r\n",
+    )
+    .unwrap();
+    let server = Server::start_with(&["--appendonly", path.to_str().unwrap()]);
+    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"GET", b"a"]), bulk(b"1"));
+    drop(server);
+    let _ = std::fs::remove_file(path);
+}
