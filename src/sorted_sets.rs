@@ -218,9 +218,81 @@ pub(crate) fn score_text(score: f64) -> Vec<u8> {
         b"-inf".to_vec()
     } else if score == 0.0 {
         b"0".to_vec()
+    } else if let Some(integer) = exact_integer(score) {
+        integer.to_string().into_bytes()
     } else {
-        score.to_string().into_bytes()
+        shortest_double(score).into_bytes()
     }
+}
+
+/// Redis prints doubles that fit exactly in a `long long` as integers, mirroring
+/// `double2ll` in `util.c`; the safe range is half of `i64` range.
+fn exact_integer(value: f64) -> Option<i64> {
+    let limit = (i64::MAX / 2) as f64;
+    if value < -limit || value > limit {
+        return None;
+    }
+    let integer = value as i64;
+    (integer as f64 == value).then_some(integer)
+}
+
+/// Format a finite, non-zero double the way Redis's `fpconv_dtoa` does: the
+/// shortest round-trip digits, printed as a plain decimal or with an exponent
+/// depending on the magnitude.
+fn shortest_double(value: f64) -> String {
+    let scientific = format!("{value:e}");
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .expect("LowerExp always includes an exponent");
+    let negative = mantissa.starts_with('-');
+    let mantissa = mantissa.trim_start_matches('-');
+    let digits: String = mantissa.chars().filter(|digit| *digit != '.').collect();
+    let ndigits = digits.len() as i32;
+    let exponent: i32 = exponent.parse().expect("LowerExp exponent is an integer");
+    // value == digits * 10^scale
+    let scale = exponent - (ndigits - 1);
+    let magnitude = (scale + ndigits - 1).abs();
+
+    let mut text = String::new();
+    if scale >= 0 && magnitude < ndigits + 7 {
+        text.push_str(&digits);
+        text.extend(std::iter::repeat_n('0', scale as usize));
+    } else if scale < 0 && (scale > -7 || magnitude < 4) {
+        let offset = ndigits + scale;
+        if offset <= 0 {
+            text.push_str("0.");
+            text.extend(std::iter::repeat_n('0', (-offset) as usize));
+            text.push_str(&digits);
+        } else {
+            text.push_str(&digits[..offset as usize]);
+            text.push('.');
+            text.push_str(&digits[offset as usize..]);
+        }
+    } else {
+        text.push(digits.as_bytes()[0] as char);
+        if ndigits > 1 {
+            text.push('.');
+            text.push_str(&digits[1..]);
+        }
+        text.push('e');
+        text.push(if scale + ndigits - 1 < 0 { '-' } else { '+' });
+        let mut magnitude = magnitude;
+        let hundreds = magnitude > 99;
+        if hundreds {
+            text.push(char::from(b'0' + (magnitude / 100) as u8));
+            magnitude %= 100;
+        }
+        if magnitude > 9 {
+            text.push(char::from(b'0' + (magnitude / 10) as u8));
+        } else if hundreds {
+            text.push('0');
+        }
+        text.push(char::from(b'0' + (magnitude % 10) as u8));
+    }
+    if negative {
+        text.insert(0, '-');
+    }
+    text
 }
 
 fn infinity_literal(bytes: &[u8]) -> bool {
