@@ -286,12 +286,12 @@ impl Hub {
     }
 
     fn numpat(&self) -> usize {
-        self.listeners
-            .lock()
-            .unwrap()
-            .values()
-            .map(|listener| listener.patterns.len())
-            .sum()
+        let listeners = self.listeners.lock().unwrap();
+        let mut patterns = HashSet::new();
+        for listener in listeners.values() {
+            patterns.extend(listener.patterns.iter().cloned());
+        }
+        patterns.len()
     }
 }
 
