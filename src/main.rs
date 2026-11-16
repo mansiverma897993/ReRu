@@ -1494,9 +1494,9 @@ fn execute_command(
             let count = if command.len() == 6 {
                 std::str::from_utf8(&command[5])
                     .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
+                    .and_then(|s| s.parse::<i64>().ok())
             } else {
-                Some(usize::MAX)
+                Some(i64::MAX)
             };
             match count {
                 None => protocol::error("value is not an integer or out of range"),
@@ -1504,14 +1504,21 @@ fn execute_command(
                     let mut entries = store.entries.lock().unwrap();
                     remove_expired(&mut entries, &command[1]);
                     match entries.get(&command[1]).map(|entry| &entry.value) {
-                            Some(Value::Stream(stream)) => match if command[0].eq_ignore_ascii_case(b"XREVRANGE") {
-                                stream.range_reverse(&command[2], &command[3], Some(count))
-                            } else {
-                                stream.range(&command[2], &command[3], Some(count))
-                            } {
-                                Ok(found) => streams::stream_entries(&found),
-                                Err(message) => protocol::error(message),
-                            },
+                            Some(Value::Stream(stream)) => {
+                                if count <= 0 {
+                                    b"*-1\r\n".to_vec()
+                                } else {
+                                    let count = usize::try_from(count).unwrap_or(usize::MAX);
+                                    match if command[0].eq_ignore_ascii_case(b"XREVRANGE") {
+                                        stream.range_reverse(&command[2], &command[3], Some(count))
+                                    } else {
+                                        stream.range(&command[2], &command[3], Some(count))
+                                    } {
+                                        Ok(found) => streams::stream_entries(&found),
+                                        Err(message) => protocol::error(message),
+                                    }
+                                }
+                            }
                             Some(_) => b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec(),
                             None => protocol::array(&[]),
                         }

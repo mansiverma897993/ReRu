@@ -164,3 +164,40 @@ fn stream_last_id_survives_snapshot_and_aof_restarts() {
         }
     }
 }
+
+#[test]
+fn xrange_count_zero_returns_null_for_existing_streams() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(
+        c.call(&[b"XRANGE", b"missing", b"-", b"+", b"COUNT", b"0"]),
+        array(vec![])
+    );
+    assert_eq!(
+        c.call(&[b"XRANGE", b"missing", b"-", b"+", b"COUNT", b"-1"]),
+        array(vec![])
+    );
+    assert!(matches!(
+        c.call(&[b"XADD", b"xs", b"1-0", b"f", b"a"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert!(matches!(
+        c.call(&[b"XADD", b"xs", b"2-0", b"f", b"b"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(
+        c.call(&[b"XRANGE", b"xs", b"-", b"+", b"COUNT", b"0"]),
+        Reply::Array(None)
+    );
+    assert_eq!(
+        c.call(&[b"XRANGE", b"xs", b"-", b"+", b"COUNT", b"-1"]),
+        Reply::Array(None)
+    );
+    assert_eq!(
+        c.call(&[b"XREVRANGE", b"xs", b"+", b"-", b"COUNT", b"0"]),
+        Reply::Array(None)
+    );
+    assert!(
+        matches!(c.call(&[b"XRANGE", b"xs", b"-", b"+", b"COUNT", b"1"]), Reply::Array(Some(rows)) if rows.len() == 1)
+    );
+}

@@ -54,6 +54,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
+- `XRANGE`/`XREVRANGE` return a null array for `COUNT 0` or a negative count on
+  an existing stream, and an empty array for a missing key.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
