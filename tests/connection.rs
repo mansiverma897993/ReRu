@@ -408,3 +408,23 @@ fn common_connection_sequences_match_redis_reference() {
     assert_eq!(field(&ours_hello, b"id"), &ours.call(&[b"CLIENT", b"ID"]));
     assert_eq!(field(&redis_hello, b"id"), &redis.call(&[b"CLIENT", b"ID"]));
 }
+
+#[test]
+fn quit_ignores_extra_arguments_and_closes() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let server = Server::start();
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .write_all(b"*2\r\n$4\r\nQUIT\r\n$5\r\nextra\r\n")
+        .unwrap();
+    let mut reply = [0u8; 5];
+    stream.read_exact(&mut reply).unwrap();
+    assert_eq!(&reply, b"+OK\r\n");
+    let mut tail = [0u8; 1];
+    assert_eq!(stream.read(&mut tail).unwrap(), 0);
+}

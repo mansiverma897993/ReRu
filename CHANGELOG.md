@@ -53,6 +53,7 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `PUBSUB NUMPAT` counts unique patterns instead of each client's subscription.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
+- `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
