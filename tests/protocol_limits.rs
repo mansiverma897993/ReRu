@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #[path = "common/client.rs"]
+#[allow(dead_code)]
 mod client;
 mod common;
 
