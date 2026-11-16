@@ -21,11 +21,19 @@ impl Client {
     }
 
     pub fn on_port(port: u16) -> Self {
+        Self::on_port_with_timeout(port, std::time::Duration::from_secs(2))
+    }
+
+    #[allow(dead_code)]
+    pub fn on_port_with_timeout(port: u16, timeout: std::time::Duration) -> Self {
         let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-            .unwrap();
+        stream.set_read_timeout(Some(timeout)).unwrap();
         Self(BufReader::new(stream))
+    }
+
+    #[allow(dead_code)]
+    pub fn with_timeout(server: &common::Server, timeout: std::time::Duration) -> Self {
+        Self::on_port_with_timeout(server.port, timeout)
     }
 
     pub fn call(&mut self, args: &[&[u8]]) -> Reply {
