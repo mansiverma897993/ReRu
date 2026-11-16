@@ -421,6 +421,9 @@ fn write_snapshot_frame(stream: &mut TcpStream, snapshot: &[u8]) -> io::Result<(
 }
 
 fn serve_replica(mut stream: TcpStream, store: &Store) -> io::Result<()> {
+    // Replica frames are written with a single write_all, so give the link a
+    // generous timeout instead of the short client reply timeout.
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     let (sender, receiver) = mpsc::sync_channel(8);
     let initial = {
         let _gate = store.command_gate.lock().unwrap();
