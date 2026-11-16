@@ -2,9 +2,11 @@
 use std::io::{self, BufRead, Read};
 
 /// Largest bulk string the parser accepts for a single argument and in total.
-pub const MAX_BULK: usize = 64 * 1024 * 1024;
-/// Largest number of arguments the parser accepts in one command.
-pub const MAX_ARGS: usize = 1024;
+/// This follows Redis's default `proto-max-bulk-len` of 512 MiB.
+pub const MAX_BULK: usize = 512 * 1024 * 1024;
+/// Largest number of arguments the parser accepts in one command, matching
+/// Redis's `PROTO_MAX_MULTIBULK_LEN`.
+pub const MAX_ARGS: usize = 1024 * 1024;
 
 fn line<R: BufRead>(reader: &mut R) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -129,14 +131,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_command_whose_arguments_exceed_the_total_limit() {
-        // Each argument is under MAX_BULK; together they are over it. The parser
-        // must reject on the second header, before reading its payload.
-        const HALF: usize = MAX_BULK / 2 + 1;
-        let mut input = format!("*2\r\n${HALF}\r\n").into_bytes();
-        input.extend(std::iter::repeat_n(b'x', HALF));
-        input.extend_from_slice(b"\r\n");
-        input.extend(format!("${HALF}\r\n").into_bytes());
+    fn rejects_argument_counts_above_the_redis_limit() {
+        let input = format!("*{}\r\n", MAX_ARGS + 1).into_bytes();
+        let mut reader = Cursor::new(input);
+        let error = read_command(&mut reader).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), "invalid argument count");
+    }
+
+    #[test]
+    fn rejects_bulk_lengths_above_the_redis_limit() {
+        // The header alone is rejected, before any payload is allocated.
+        let input = format!("*1\r\n${}\r\n", MAX_BULK + 1).into_bytes();
         let mut reader = Cursor::new(input);
         let error = read_command(&mut reader).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
