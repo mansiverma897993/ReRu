@@ -421,6 +421,9 @@ fn write_snapshot_frame(stream: &mut TcpStream, snapshot: &[u8]) -> io::Result<(
 }
 
 fn serve_replica(mut stream: TcpStream, store: &Store) -> io::Result<()> {
+    // Replica frames are written with a single write_all, so give the link a
+    // generous timeout instead of the short client reply timeout.
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     let (sender, receiver) = mpsc::sync_channel(8);
     let initial = {
         let _gate = store.command_gate.lock().unwrap();
@@ -1746,7 +1749,7 @@ fn validate_queued(command: &[Vec<u8>]) -> Result<(), Vec<u8>> {
 fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
     let mut session = connection::Session::new(&stream)?;
     let mut reader = BufReader::new(stream.try_clone()?);
-    stream.set_write_timeout(Some(Duration::from_millis(500)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(20)))?;
     let subscription = store
         .pubsub
         .connect(Arc::new(Mutex::new(stream.try_clone()?)));

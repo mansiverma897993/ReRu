@@ -7,15 +7,31 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const REPLAY_BUDGET: Duration = Duration::from_secs(30);
-const PUBLISH_BUDGET: Duration = Duration::from_secs(1);
+const REPLY_IDLE: Duration = Duration::from_secs(30);
+// Acknowledgements still run under command_gate: allow a healthy batch to make
+// progress but cap the whole batch and any single stall.
+const ACK_IDLE: Duration = Duration::from_millis(100);
+const ACK_TOTAL: Duration = Duration::from_millis(750);
+// Publish deliveries run under the gate too, so one publish is capped tightly.
+const PUBLISH_IDLE: Duration = Duration::from_millis(20);
+const PUBLISH_TOTAL: Duration = Duration::from_millis(100);
 
 // A socket write timeout reports WouldBlock after a partial write. Retry the
-// remaining bytes until the budget expires so replies are never truncated.
-fn write_frame(writer: &mut TcpStream, bytes: &[u8], budget: Duration) -> io::Result<()> {
-    let deadline = Instant::now() + budget;
+// remaining bytes while writes make progress, but give up after `idle` without
+// progress or when the absolute deadline passes.
+fn write_frame(
+    writer: &mut TcpStream,
+    bytes: &[u8],
+    idle: Duration,
+    deadline: Instant,
+) -> io::Result<()> {
     let mut offset = 0;
+    let mut idle_deadline = Instant::now() + idle;
     while offset < bytes.len() {
+        let now = Instant::now();
+        if now >= deadline || now >= idle_deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "write stalled"));
+        }
         match writer.write(&bytes[offset..]) {
             Ok(0) => {
                 return Err(io::Error::new(
@@ -23,7 +39,10 @@ fn write_frame(writer: &mut TcpStream, bytes: &[u8], budget: Duration) -> io::Re
                     "write returned zero bytes",
                 ))
             }
-            Ok(written) => offset += written,
+            Ok(written) => {
+                offset += written;
+                idle_deadline = Instant::now() + idle;
+            }
             Err(error)
                 if matches!(
                     error.kind(),
@@ -32,9 +51,6 @@ fn write_frame(writer: &mut TcpStream, bytes: &[u8], budget: Duration) -> io::Re
                         | io::ErrorKind::Interrupted
                 ) =>
             {
-                if Instant::now() >= deadline {
-                    return Err(error);
-                }
                 std::thread::sleep(Duration::from_millis(2));
             }
             Err(error) => return Err(error),
@@ -116,6 +132,7 @@ impl ClientSubscription<'_> {
         } else {
             b"unsubscribe".as_slice()
         };
+        let deadline = Instant::now() + ACK_TOTAL;
         let mut listeners = self.hub.listeners.lock().unwrap();
         let Some(listener) = listeners.get_mut(&self.id) else {
             // A failed publish removed this subscriber. Close the connection
@@ -142,6 +159,12 @@ impl ClientSubscription<'_> {
             command[1..].iter().cloned().map(Some).collect()
         };
         for item in items {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "subscriber too slow",
+                ));
+            }
             if let Some(item) = &item {
                 let subscriptions = if pattern {
                     &mut listener.patterns
@@ -157,7 +180,7 @@ impl ClientSubscription<'_> {
             let count = listener.channels.len() + listener.patterns.len();
             let frame = acknowledgement(kind, item.as_deref(), count);
             let mut writer = listener.writer.lock().unwrap();
-            write_frame(&mut writer, &frame, REPLAY_BUDGET)?;
+            write_frame(&mut writer, &frame, ACK_IDLE, deadline)?;
         }
         Ok(())
     }
@@ -173,7 +196,8 @@ impl ClientSubscription<'_> {
             .writer
             .clone();
         let mut writer = writer.lock().unwrap();
-        write_frame(&mut writer, reply, REPLAY_BUDGET)
+        let deadline = Instant::now() + REPLY_IDLE;
+        write_frame(&mut writer, reply, REPLY_IDLE, deadline)
     }
 }
 
@@ -192,15 +216,19 @@ impl Hub {
     }
 
     pub fn publish(&self, channel: &[u8], message: &[u8]) -> usize {
+        let deadline = Instant::now() + PUBLISH_TOTAL;
         let mut listeners = self.listeners.lock().unwrap();
         let direct = message_reply(b"message", &[channel, message]);
         let mut count = 0;
         let mut failed = Vec::new();
         for (id, listener) in listeners.iter() {
+            if Instant::now() >= deadline {
+                break;
+            }
             let mut writer = listener.writer.lock().unwrap();
             let mut delivered = true;
             if listener.channels.contains(channel) {
-                if write_frame(&mut writer, &direct, PUBLISH_BUDGET).is_err() {
+                if write_frame(&mut writer, &direct, PUBLISH_IDLE, deadline).is_err() {
                     delivered = false;
                 } else {
                     count += 1;
@@ -210,7 +238,7 @@ impl Hub {
                 for pattern in &listener.patterns {
                     if glob_matches(pattern, channel) {
                         let reply = message_reply(b"pmessage", &[pattern, channel, message]);
-                        if write_frame(&mut writer, &reply, PUBLISH_BUDGET).is_err() {
+                        if write_frame(&mut writer, &reply, PUBLISH_IDLE, deadline).is_err() {
                             delivered = false;
                             break;
                         }
@@ -219,11 +247,13 @@ impl Hub {
                 }
             }
             if !delivered {
-                failed.push(*id);
+                failed.push((*id, Arc::clone(&listener.writer)));
             }
         }
-        for id in failed {
+        for (id, writer) in failed {
             listeners.remove(&id);
+            // Close the dropped subscriber instead of leaving it half-written.
+            let _ = writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
         }
         count
     }
