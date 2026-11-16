@@ -715,3 +715,88 @@ fn consumer_group_sequences_match_reference_redis() {
         assert_eq!(ours.call(&command), redis.call(&command), "{command:?}");
     }
 }
+
+#[test]
+fn xautoclaim_counts_tombstone_deletions_against_count() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    for index in 1..=5 {
+        let id = format!("{index}-{index}");
+        let value = format!("v{index}");
+        assert_eq!(
+            c.call(&[b"XADD", b"ac", id.as_bytes(), b"f", value.as_bytes()]),
+            bulk(id.as_bytes())
+        );
+    }
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"ac", b"g", b"0"]), ok());
+    assert!(matches!(
+        c.call(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"g",
+            b"c1",
+            b"COUNT",
+            b"5",
+            b"STREAMS",
+            b"ac",
+            b">"
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XDEL", b"ac", b"2-2"]), integer(1));
+    assert_eq!(
+        c.call(&[
+            b"XAUTOCLAIM",
+            b"ac",
+            b"g",
+            b"c2",
+            b"0",
+            b"0-0",
+            b"COUNT",
+            b"2"
+        ]),
+        array(vec![
+            bulk(b"3-3"),
+            array(vec![entry(b"1-1", b"v1")]),
+            array(vec![bulk(b"2-2")]),
+        ])
+    );
+
+    for index in 1..=3 {
+        let id = format!("{index}-{index}");
+        let value = format!("v{index}");
+        assert_eq!(
+            c.call(&[b"XADD", b"ac2", id.as_bytes(), b"f", value.as_bytes()]),
+            bulk(id.as_bytes())
+        );
+    }
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"ac2", b"g", b"0"]), ok());
+    assert!(matches!(
+        c.call(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"g",
+            b"c1",
+            b"COUNT",
+            b"3",
+            b"STREAMS",
+            b"ac2",
+            b">"
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XDEL", b"ac2", b"1-1"]), integer(1));
+    assert_eq!(
+        c.call(&[
+            b"XAUTOCLAIM",
+            b"ac2",
+            b"g",
+            b"c2",
+            b"0",
+            b"0-0",
+            b"COUNT",
+            b"1"
+        ]),
+        array(vec![bulk(b"2-2"), array(vec![]), array(vec![bulk(b"1-1")]),])
+    );
+}

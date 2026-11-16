@@ -36,6 +36,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - Subscription acknowledgements share a 750 ms batch budget and publish
   deliveries a 100 ms budget (100 ms and 20 ms without progress), so a
   non-reading subscriber cannot hold the command gate for tens of seconds.
+- `XAUTOCLAIM` counts tombstone deletions against `COUNT`, so the claimed
+  entries and the returned cursor match Redis.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 
