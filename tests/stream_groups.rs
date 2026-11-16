@@ -841,3 +841,64 @@ fn xautoclaim_counts_tombstone_deletions_against_count() {
         ])
     );
 }
+
+#[test]
+fn xclaim_and_xautoclaim_register_consumers_without_claims() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"ghost", b"0", b"9-9"]),
+        array(vec![])
+    );
+    let Reply::Array(Some(rows)) = c.call(&[b"XINFO", b"CONSUMERS", b"s", b"g"]) else {
+        panic!("XINFO CONSUMERS must return an array")
+    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(field(&rows[0], b"name"), &bulk(b"ghost"));
+    assert_eq!(field(&rows[0], b"pending"), &integer(0));
+
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"newbie", b"0", b"0-0"]),
+        array(vec![bulk(b"0-0"), array(vec![]), array(vec![])])
+    );
+    let Reply::Array(Some(groups)) = c.call(&[b"XINFO", b"GROUPS", b"s"]) else {
+        panic!("XINFO GROUPS must return an array")
+    };
+    assert_eq!(field(&groups[0], b"consumers"), &integer(2));
+}
+
+#[test]
+fn empty_claim_consumer_survives_an_aof_restart() {
+    let path = common::temp_path("stream-consumer", ".aof");
+    let filename = path.to_str().unwrap().to_owned();
+    {
+        let server = Server::start_with(&["--appendonly", &filename]);
+        let mut c = Client::new(&server);
+        assert!(matches!(
+            c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+            Reply::Bulk(Some(_))
+        ));
+        assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+        assert_eq!(
+            c.call(&[b"XCLAIM", b"s", b"g", b"ghost", b"0", b"9-9"]),
+            array(vec![])
+        );
+    }
+    {
+        let server = Server::start_with(&["--appendonly", &filename]);
+        let mut c = Client::new(&server);
+        let Reply::Array(Some(rows)) = c.call(&[b"XINFO", b"CONSUMERS", b"s", b"g"]) else {
+            panic!("XINFO CONSUMERS must return an array")
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(field(&rows[0], b"name"), &bulk(b"ghost"));
+        assert_eq!(field(&rows[0], b"pending"), &integer(0));
+    }
+    let _ = std::fs::remove_file(path);
+}

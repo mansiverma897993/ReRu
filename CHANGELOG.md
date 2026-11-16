@@ -58,6 +58,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   an existing stream, and an empty array for a missing key. Bounds are validated
   before the count, non-canonical counts are rejected, and counts above `i64`
   range now error instead of returning every entry.
+- `XCLAIM` and `XAUTOCLAIM` register their consumer even when no entry is
+  claimed, matching Redis's `XINFO CONSUMERS`.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

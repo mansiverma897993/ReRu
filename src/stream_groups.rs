@@ -948,10 +948,8 @@ fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         .groups
         .get_mut(&c[2])
         .ok_or_else(|| nogroup(&c[1], &c[2], false))?;
-    let mut changed = false;
-    if group.consumers.contains_key(&c[3]) {
-        touch_consumer(group, &c[3], now, false);
-    }
+    let mut changed = !group.consumers.contains_key(&c[3]);
+    touch_consumer(group, &c[3], now, false);
     if let Some(last) = lastid {
         if last > group.last_delivered {
             group.last_delivered = last;
@@ -1026,10 +1024,8 @@ fn autoclaim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         .get_mut(&c[2])
         .ok_or_else(|| nogroup(&c[1], &c[2], false))?;
     let now = now_ms();
-    let mut changed = false;
-    if group.consumers.contains_key(&c[3]) {
-        touch_consumer(group, &c[3], now, false);
-    }
+    let mut changed = !group.consumers.contains_key(&c[3]);
+    touch_consumer(group, &c[3], now, false);
     let budget = count.saturating_mul(10);
     let ids: Vec<_> = group
         .pending
