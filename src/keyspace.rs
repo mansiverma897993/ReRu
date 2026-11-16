@@ -230,10 +230,7 @@ fn object(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
 }
 
 fn scan(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
-    let cursor = match std::str::from_utf8(&command[1])
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-    {
+    let cursor = match protocol::parse_cursor(&command[1]) {
         Some(value) => value,
         None => return protocol::error("invalid cursor"),
     };
@@ -244,11 +241,12 @@ fn scan(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         if pair[0].eq_ignore_ascii_case(b"MATCH") {
             pattern = Some(pair[1].as_slice());
         } else if pair[0].eq_ignore_ascii_case(b"COUNT") {
-            count = match protocol::parse_int(&pair[1])
-                .and_then(|value| usize::try_from(value).ok())
-                .filter(|value| *value > 0)
-            {
-                Some(value) => value,
+            count = match protocol::parse_int(&pair[1]) {
+                Some(value) if value > 0 => match usize::try_from(value) {
+                    Ok(value) => value,
+                    Err(_) => return protocol::error("value is not an integer or out of range"),
+                },
+                Some(_) => return protocol::error("syntax error"),
                 None => return protocol::error("value is not an integer or out of range"),
             };
         } else if pair[0].eq_ignore_ascii_case(b"TYPE") {

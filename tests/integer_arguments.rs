@@ -201,12 +201,37 @@ fn non_canonical_protocol_lengths_are_rejected() {
     use std::net::TcpStream;
     use std::time::Duration;
 
-    for frame in [
-        &b"*+2\r\n$3\r\nGET\r\n$1\r\nk\r\n"[..],
-        &b"*02\r\n$3\r\nGET\r\n$1\r\nk\r\n"[..],
-        &b"*1\r\n$+5\r\nhello\r\n"[..],
-        &b"*1\r\n$05\r\nhello\r\n"[..],
-    ] {
+    let cases: &[(&[u8], &[u8])] = &[
+        (
+            b"*+2\r\n$3\r\nGET\r\n$1\r\nk\r\n",
+            b"-ERR Protocol error: invalid multibulk length\r\n",
+        ),
+        (
+            b"*02\r\n$3\r\nGET\r\n$1\r\nk\r\n",
+            b"-ERR Protocol error: invalid multibulk length\r\n",
+        ),
+        (
+            b"*-0\r\n",
+            b"-ERR Protocol error: invalid multibulk length\r\n",
+        ),
+        (
+            b"*1\r\n$+5\r\nhello\r\n",
+            b"-ERR Protocol error: invalid bulk length\r\n",
+        ),
+        (
+            b"*1\r\n$05\r\nhello\r\n",
+            b"-ERR Protocol error: invalid bulk length\r\n",
+        ),
+        (
+            b"*1\r\n$-1\r\n",
+            b"-ERR Protocol error: invalid bulk length\r\n",
+        ),
+        (
+            b"*1\r\n$abc\r\n",
+            b"-ERR Protocol error: invalid bulk length\r\n",
+        ),
+    ];
+    for (frame, expected) in cases {
         let server = Server::start();
         let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
         stream
@@ -222,9 +247,177 @@ fn non_canonical_protocol_lengths_are_rejected() {
                 Err(error) => panic!("connection did not close: {error}"),
             }
         }
-        assert!(
-            reply.starts_with(b"-ERR Protocol error: invalid "),
-            "{frame:?} -> {reply:?}"
-        );
+        assert_eq!(&reply, expected, "{frame:?}");
     }
+}
+
+#[test]
+fn empty_multibulk_frames_are_ignored() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    for frame in [&b"*0\r\n"[..], &b"*-1\r\n"[..], &b"*-2\r\n"[..]] {
+        let server = Server::start();
+        let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = frame.to_vec();
+        request.extend_from_slice(b"*1\r\n$4\r\nPING\r\n");
+        stream.write_all(&request).unwrap();
+        let mut reply = [0u8; 7];
+        stream.read_exact(&mut reply).unwrap();
+        assert_eq!(&reply, b"+PONG\r\n", "{frame:?}");
+    }
+}
+
+#[test]
+fn command_specific_messages_and_edge_counts() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+
+    // Key lookup precedes index parsing.
+    assert_eq!(c.call(&[b"LINDEX", b"nokey", b"010"]), Reply::Bulk(None));
+    assert_eq!(
+        c.call(&[b"LSET", b"nokey", b"010", b"x"]),
+        error("no such key")
+    );
+    assert_eq!(c.call(&[b"RPUSH", b"l", b"a", b"b"]), integer(2));
+    assert_eq!(
+        c.call(&[b"LREM", b"l", b"-9223372036854775808", b"a"]),
+        error("value is out of range, value must between -9223372036854775807 and 9223372036854775807")
+    );
+
+    // Hash expiry field counts use per-command text and never panic on overflow.
+    assert_eq!(c.call(&[b"HSET", b"h", b"f", b"v"]), integer(1));
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"0", b"f"]),
+        error("Parameter `numFields` should be greater than 0")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"010", b"f"]),
+        error("Parameter `numFields` should be greater than 0")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"0", b"f", b"v"]),
+        error("invalid number of fields")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HSETEX",
+            b"h",
+            b"EX",
+            b"10",
+            b"FIELDS",
+            b"9223372036854775807",
+            b"f",
+            b"v",
+        ]),
+        error("invalid number of fields")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HEXPIRE",
+            b"h",
+            b"10",
+            b"FIELDS",
+            b"9223372036854775807",
+            b"f"
+        ]),
+        error("Parameter `numFields` should be greater than 0")
+    );
+    assert_eq!(c.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
+
+    // Sorted-set counts and numkeys.
+    assert_eq!(c.call(&[b"ZADD", b"z", b"1", b"a"]), integer(1));
+    assert_eq!(
+        c.call(&[b"ZUNIONSTORE", b"out", b"-1", b"z"]),
+        error("at least 1 input key is needed for 'zunionstore' command")
+    );
+    assert_eq!(
+        c.call(&[b"ZPOPMIN", b"z", b"abc"]),
+        error("value is out of range, must be positive")
+    );
+    assert_eq!(
+        c.call(&[b"ZPOPMAX", b"z", b"-1"]),
+        error("value is out of range, must be positive")
+    );
+
+    // Bitmap bit and offset texts differ per command.
+    assert_eq!(
+        c.call(&[b"SETBIT", b"b", b"0", b"010"]),
+        error("bit is not an integer or out of range")
+    );
+    assert_eq!(
+        c.call(&[b"SETBIT", b"b", b"0", b"2"]),
+        error("bit is not an integer or out of range")
+    );
+    assert_eq!(
+        c.call(&[b"SETBIT", b"b", b"010", b"1"]),
+        error("bit offset is not an integer or out of range")
+    );
+    assert_eq!(
+        c.call(&[b"GETBIT", b"b", b"010"]),
+        error("bit offset is not an integer or out of range")
+    );
+
+    // Geo COUNT separates parse failures from non-positive values.
+    assert_eq!(c.call(&[b"GEOADD", b"geo", b"1", b"1", b"a"]), integer(1));
+    assert_eq!(
+        c.call(&[
+            b"GEOSEARCH",
+            b"geo",
+            b"FROMMEMBER",
+            b"a",
+            b"BYRADIUS",
+            b"1",
+            b"km",
+            b"COUNT",
+            b"-1",
+        ]),
+        error("COUNT must be > 0")
+    );
+
+    // Scan COUNT is parsed strictly and zero or negative is a syntax error.
+    assert_eq!(c.call(&[b"SET", b"k", b"1"]), ok());
+    assert_eq!(
+        c.call(&[b"SCAN", b"0", b"COUNT", b"0"]),
+        error("syntax error")
+    );
+    assert_eq!(
+        c.call(&[b"SCAN", b"0", b"COUNT", b"-1"]),
+        error("syntax error")
+    );
+    assert_eq!(
+        c.call(&[b"SSCAN", b"s", b"0", b"COUNT", b"0"]),
+        error("syntax error")
+    );
+    assert_eq!(
+        c.call(&[b"HSCAN", b"h", b"0", b"COUNT", b"0"]),
+        error("syntax error")
+    );
+    assert_eq!(
+        c.call(&[b"ZSCAN", b"z", b"0", b"COUNT", b"0"]),
+        error("syntax error")
+    );
+    assert!(matches!(
+        c.call(&[b"SCAN", b"-0"]),
+        Reply::Array(Some(rows)) if rows.len() == 2
+    ));
+    assert_eq!(c.call(&[b"SCAN", b"-5"]), error("invalid cursor"));
+
+    // Stream trim limits use the MAXLEN text.
+    assert!(matches!(
+        c.call(&[b"XADD", b"xs", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(
+        c.call(&[b"XADD", b"xs", b"MAXLEN", b"-1", b"2-0", b"f", b"v"]),
+        error("The MAXLEN argument must be >= 0.")
+    );
+    assert_eq!(
+        c.call(&[b"XTRIM", b"xs", b"MAXLEN", b"-1"]),
+        error("The MAXLEN argument must be >= 0.")
+    );
 }

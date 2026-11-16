@@ -456,9 +456,9 @@ fn parse_search(command: &[Vec<u8>], stored: bool) -> Result<SearchOptions, Vec<
             let raw = command
                 .get(at + 1)
                 .ok_or_else(|| protocol::error("syntax error"))?;
-            let count = match protocol::parse_int(raw).and_then(|value| usize::try_from(value).ok())
-            {
-                Some(value) if value > 0 => value,
+            let count = match protocol::parse_int(raw) {
+                Some(value) if value > 0 => usize::try_from(value)
+                    .map_err(|_| protocol::error("value is not an integer or out of range"))?,
                 Some(_) => return Err(protocol::error("COUNT must be > 0")),
                 None => return Err(protocol::error("value is not an integer or out of range")),
             };

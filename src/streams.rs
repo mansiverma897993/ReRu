@@ -126,12 +126,17 @@ pub fn add_command(command: &[Vec<u8>], store: &crate::Store) -> Vec<u8> {
                     .get(i)
                     .ok_or_else(|| protocol::error("syntax error"))?;
                 trim = Some(if maxlen {
-                    let length = protocol::parse_int(value)
-                        .filter(|n| *n >= 0)
-                        .and_then(|n| usize::try_from(n).ok())
-                        .ok_or_else(|| {
+                    let length = match protocol::parse_int(value) {
+                        Some(n) if n >= 0 => usize::try_from(n).map_err(|_| {
                             protocol::error("value is not an integer or out of range")
-                        })?;
+                        })?,
+                        Some(_) => {
+                            return Err(protocol::error("The MAXLEN argument must be >= 0."))
+                        }
+                        None => {
+                            return Err(protocol::error("value is not an integer or out of range"))
+                        }
+                    };
                     (Some(length), None)
                 } else {
                     (

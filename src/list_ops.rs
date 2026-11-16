@@ -357,13 +357,16 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
     };
     Some(match kind {
         Command::Index => {
+            // Redis resolves the key before parsing the index.
+            let Some(items) = items else {
+                return Some(b"$-1\r\n".to_vec());
+            };
             let at = match parse_i64(&command[2]) {
                 Ok(at) => at,
                 Err(error) => return Some(error),
             };
-            items
-                .and_then(|items| index(at, items.len()).map(|at| &items[at]))
-                .map_or_else(|| b"$-1\r\n".to_vec(), |value| protocol::bulk(value))
+            index(at, items.len())
+                .map_or_else(|| b"$-1\r\n".to_vec(), |at| protocol::bulk(&items[at]))
         }
         Command::Pos => unreachable!(),
         Command::Lpushx | Command::Rpushx => {
@@ -387,16 +390,16 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
             integer(len)
         }
         Command::Set => {
-            let at = match parse_i64(&command[2]) {
-                Ok(at) => at,
-                Err(error) => return Some(error),
-            };
             let Some(Entry {
                 value: Value::List(items),
                 ..
             }) = entries.get_mut(key)
             else {
                 return Some(protocol::error("no such key"));
+            };
+            let at = match parse_i64(&command[2]) {
+                Ok(at) => at,
+                Err(error) => return Some(error),
             };
             let Some(at) = index(at, items.len()) else {
                 return Some(protocol::error("index out of range"));
@@ -466,7 +469,12 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         }
         Command::Rem => {
             let count = match parse_i64(&command[2]) {
-                Ok(value) => value,
+                Ok(value) if value != i64::MIN => value,
+                Ok(_) => {
+                    return Some(protocol::error(
+                        "value is out of range, value must between -9223372036854775807 and 9223372036854775807",
+                    ))
+                }
                 Err(error) => return Some(error),
             };
             let Some(Entry {

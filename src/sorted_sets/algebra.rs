@@ -44,10 +44,9 @@ fn parse<'a>(kind: Command, command: &'a [Vec<u8>]) -> Result<Options<'a>, Vec<u
         _ => unreachable!(),
     };
     let count_at = if destination.is_some() { 2 } else { 1 };
-    let count = match protocol::parse_int(&command[count_at])
-        .and_then(|value| usize::try_from(value).ok())
-    {
-        Some(count) if count > 0 => count,
+    let count = match protocol::parse_int(&command[count_at]) {
+        Some(count) if count > 0 => usize::try_from(count)
+            .map_err(|_| protocol::error("value is not an integer or out of range"))?,
         Some(_) => {
             let name = match kind {
                 Command::Union => "zunion",

@@ -151,6 +151,15 @@ pub fn parse_int(bytes: &[u8]) -> Option<i64> {
     i64::try_from(if negative { -magnitude } else { magnitude }).ok()
 }
 
+/// Scan cursors use Redis's lenient `strtoull` form, which accepts `+0`, `00`,
+/// and `-0` (parsed as zero) but rejects other negatives.
+pub fn parse_cursor(bytes: &[u8]) -> Option<usize> {
+    if bytes == b"-0" {
+        return Some(0);
+    }
+    std::str::from_utf8(bytes).ok()?.parse().ok()
+}
+
 pub fn error(message: &str) -> Vec<u8> {
     let message = message.replace(['\r', '\n'], " ");
     format!("-ERR {message}\r\n").into_bytes()

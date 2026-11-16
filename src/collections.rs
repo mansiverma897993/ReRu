@@ -201,10 +201,8 @@ struct ScanOptions<'a> {
 }
 
 fn scan_options(command: &[Vec<u8>], hash: bool) -> Result<ScanOptions<'_>, Vec<u8>> {
-    let cursor = std::str::from_utf8(&command[2])
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .ok_or_else(|| protocol::error("invalid cursor"))?;
+    let cursor =
+        protocol::parse_cursor(&command[2]).ok_or_else(|| protocol::error("invalid cursor"))?;
     let mut options = ScanOptions {
         cursor,
         count: 10,
@@ -220,10 +218,12 @@ fn scan_options(command: &[Vec<u8>], hash: bool) -> Result<ScanOptions<'_>, Vec<
             options.pattern = Some(&command[at + 1]);
             at += 2;
         } else if at + 1 < command.len() && command[at].eq_ignore_ascii_case(b"COUNT") {
-            options.count = protocol::parse_int(&command[at + 1])
-                .and_then(|value| usize::try_from(value).ok())
-                .filter(|value| *value > 0)
-                .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
+            options.count = match protocol::parse_int(&command[at + 1]) {
+                Some(value) if value > 0 => usize::try_from(value)
+                    .map_err(|_| protocol::error("value is not an integer or out of range"))?,
+                Some(_) => return Err(protocol::error("syntax error")),
+                None => return Err(protocol::error("value is not an integer or out of range")),
+            };
             at += 2;
         } else {
             return Err(protocol::error("syntax error"));

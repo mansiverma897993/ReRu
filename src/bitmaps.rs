@@ -293,7 +293,8 @@ fn signed(bytes: &[u8]) -> Result<i64, Vec<u8>> {
 }
 
 fn offset(bytes: &[u8], writing: bool) -> Result<usize, Vec<u8>> {
-    let value = signed(bytes)?;
+    let value = protocol::parse_int(bytes)
+        .ok_or_else(|| protocol::error("bit offset is not an integer or out of range"))?;
     let maximum = if writing {
         MAX_BITMAP_BYTES as u64 * 8 - 1
     } else {
@@ -308,6 +309,15 @@ fn offset(bytes: &[u8], writing: bool) -> Result<usize, Vec<u8>> {
 }
 
 fn bit(bytes: &[u8]) -> Result<u8, Vec<u8>> {
+    match protocol::parse_int(bytes) {
+        Some(0) => Ok(0),
+        Some(1) => Ok(1),
+        _ => Err(protocol::error("bit is not an integer or out of range")),
+    }
+}
+
+// BITPOS reports a parsed bit other than 0 or 1 differently from SETBIT.
+fn bit_argument(bytes: &[u8]) -> Result<u8, Vec<u8>> {
     match protocol::parse_int(bytes) {
         Some(0) => Ok(0),
         Some(1) => Ok(1),
@@ -550,7 +560,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
             )
         }
         Command::Pos => {
-            let target = match bit(&command[2]) {
+            let target = match bit_argument(&command[2]) {
                 Ok(value) => value,
                 Err(error) => return Some(error),
             };

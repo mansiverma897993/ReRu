@@ -1570,8 +1570,14 @@ fn execute_command(
         } else {
             let threshold = &command[command.len() - 1];
             let maxlen = if command[2].eq_ignore_ascii_case(b"MAXLEN") {
-                match protocol::parse_int(threshold).and_then(|value| usize::try_from(value).ok()) {
-                    Some(value) => Some(value),
+                match protocol::parse_int(threshold) {
+                    Some(value) if value >= 0 => match usize::try_from(value) {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return protocol::error("value is not an integer or out of range")
+                        }
+                    },
+                    Some(_) => return protocol::error("The MAXLEN argument must be >= 0."),
                     None => return protocol::error("value is not an integer or out of range"),
                 }
             } else {

@@ -228,9 +228,13 @@ Integer command arguments use Redis's `string2ll` form: an optional `-`, no
 leading `+`, no leading zeros unless the value is exactly `0`, and an `i64`
 range. Values such as `010`, `+1` or `-0` are rejected by `INCRBY`, indexes and
 counts for lists, sorted sets, hashes, bitmaps, streams, `SELECT`, `HELLO`,
-`LMPOP`/`ZMPOP`, scan `COUNT`, and geo `COUNT`. Two Redis parsers are lenient and
-stay lenient here: scan cursors accept `+0`, `00` and `-0`, and stream IDs
-accept a leading `+` or leading zeros in their millisecond part.
+`LMPOP`/`ZMPOP`, scan `COUNT`, geo `COUNT`, and stream-group options such as
+`XCLAIM` `IDLE`/`TIME`/`RETRYCOUNT`, `XAUTOCLAIM`, `XINFO STREAM COUNT`,
+`XGROUP CREATE ENTRIESREAD`, and `XSETID`; those stream-group options use the
+generic `value is not an integer or out of range` text where Redis names the
+option. Two Redis parsers are lenient and stay lenient here: scan cursors accept
+`+0`, `00` and `-0`, and stream IDs accept a leading `+` or leading zeros in
+their millisecond part.
 
 `COPY` supports same-database copy and `REPLACE`; `DB` selection is pending.
 Copying a key onto itself returns `ERR source and destination objects are the
