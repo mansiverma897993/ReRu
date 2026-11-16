@@ -54,6 +54,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
+- `SET` and `GETEX` parse only the last value of a repeated expiry option and
+  reject an `NX`/`XX` conflict as soon as the second flag is seen, so a bad
+  earlier value or flag pair no longer wins the error.
 - Integer command arguments now use Redis's canonical `string2ll` form across
   `INCRBY`/`DECRBY`/`INCR`, list and sorted-set indexes and counts, hash and
   key expiry, bitmap offsets and widths, stream trim limits, `SELECT`, `HELLO`,

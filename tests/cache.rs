@@ -796,3 +796,42 @@ fn expiry_parse_errors_match_redis_text() {
         );
     }
 }
+
+#[test]
+fn repeated_expiry_parses_only_the_last_value_and_flags_fail_first() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    let integer_error = Reply::Error(b"ERR value is not an integer or out of range".to_vec());
+    let syntax = Reply::Error(b"ERR syntax error".to_vec());
+
+    assert_eq!(
+        c.call(&[b"SET", b"k", b"v", b"EX", b"foo", b"EX", b"10"]),
+        ok()
+    );
+    assert_eq!(c.call(&[b"TTL", b"k"]), integer(10));
+    assert_eq!(
+        c.call(&[b"SET", b"k", b"v", b"PX", b"foo", b"PX", b"5000"]),
+        ok()
+    );
+    assert!(matches!(c.call(&[b"PTTL", b"k"]), Reply::Integer(ttl) if ttl > 4000));
+    assert_eq!(
+        c.call(&[b"SET", b"k", b"v", b"EX", b"10", b"EX", b"foo"]),
+        integer_error
+    );
+    assert_eq!(
+        c.call(&[b"SET", b"k", b"v", b"NX", b"XX", b"EX", b"foo"]),
+        syntax
+    );
+    assert_eq!(c.call(&[b"SET", b"k", b"v", b"XX", b"NX"]), syntax);
+    assert_eq!(c.call(&[b"DEL", b"k"]), integer(1));
+    assert_eq!(c.call(&[b"SET", b"k", b"v", b"NX", b"NX"]), ok());
+    assert_eq!(c.call(&[b"SET", b"k", b"v", b"XX", b"XX"]), ok());
+
+    assert_eq!(c.call(&[b"SET", b"g", b"v", b"EX", b"100"]), ok());
+    assert_eq!(
+        c.call(&[b"GETEX", b"g", b"EX", b"foo", b"EX", b"10"]),
+        Reply::Bulk(Some(b"v".to_vec()))
+    );
+    assert_eq!(c.call(&[b"TTL", b"g"]), integer(10));
+    assert_eq!(c.call(&[b"GETEX", b"g", b"EX", b"foo", b"PERSIST"]), syntax);
+}
