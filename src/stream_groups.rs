@@ -1040,8 +1040,10 @@ fn autoclaim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     let mut claimed = Vec::new();
     let mut deleted = Vec::new();
     let mut scanned = 0;
+    // Claims and tombstone deletions share the COUNT budget.
+    let mut remaining = count;
     for id in &ids {
-        if scanned >= budget || claimed.len() >= count {
+        if scanned >= budget || remaining == 0 {
             break;
         }
         scanned += 1;
@@ -1049,6 +1051,7 @@ fn autoclaim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
             group.pending.remove(id);
             deleted.push(protocol::bulk(id.to_string().as_bytes()));
             changed = true;
+            remaining -= 1;
             continue;
         };
         let pending = group.pending.get_mut(id).unwrap();
@@ -1064,6 +1067,7 @@ fn autoclaim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
             entry_reply(*id, Some(item))
         });
         changed = true;
+        remaining -= 1;
     }
     let next = ids.get(scanned).copied().unwrap_or_default();
     if !claimed.is_empty() {
