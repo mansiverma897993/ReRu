@@ -193,7 +193,7 @@ fn set_rejects_bad_options_and_get_wrong_type_without_overwriting() {
             b"PX",
             b"10",
         ][..],
-        &[b"SET".as_slice(), b"missing", b"v", b"GET", b"GET"][..],
+        &[b"SET".as_slice(), b"missing", b"v", b"GET", b"FOO"][..],
     ] {
         assert!(matches!(c.call(args), Reply::Error(_)));
     }
@@ -696,4 +696,52 @@ fn ranges_clamp_very_negative_end_indexes() {
         c.call(&[b"GETRANGE", b"empty-range", b"0", b"-1"]),
         bulk(b"")
     );
+}
+
+#[test]
+fn set_and_getex_accept_repeated_options_like_redis() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"SET", b"dup", b"v", b"NX", b"NX"]), ok());
+    assert_eq!(c.call(&[b"SET", b"dup", b"v", b"XX", b"XX"]), ok());
+    assert_eq!(
+        c.call(&[b"SET", b"dup", b"next", b"GET", b"GET"]),
+        bulk(b"v")
+    );
+    assert_eq!(
+        c.call(&[b"SET", b"dup", b"v", b"KEEPTTL", b"KEEPTTL"]),
+        ok()
+    );
+    assert_eq!(
+        c.call(&[b"SET", b"dup", b"v", b"EX", b"10", b"EX", b"20"]),
+        ok()
+    );
+    assert_eq!(c.call(&[b"TTL", b"dup"]), integer(20));
+    for command in [
+        &[b"SET".as_slice(), b"dup", b"v", b"EX", b"10", b"KEEPTTL"] as &[&[u8]],
+        &[b"SET", b"dup", b"v", b"KEEPTTL", b"EX", b"10"],
+        &[b"SET", b"dup", b"v", b"EX", b"10", b"PX", b"5000"],
+        &[b"SET", b"dup", b"v", b"EX", b"10", b"EXAT", b"9999999999"],
+        &[b"SET", b"dup", b"v", b"FOO"],
+    ] {
+        assert_eq!(c.call(command), Reply::Error(b"ERR syntax error".to_vec()));
+    }
+    assert_eq!(
+        c.call(&[b"GETEX", b"dup", b"EX", b"10", b"EX", b"20"]),
+        bulk(b"v")
+    );
+    assert_eq!(c.call(&[b"TTL", b"dup"]), integer(20));
+    assert_eq!(
+        c.call(&[b"GETEX", b"dup", b"PERSIST", b"PERSIST"]),
+        bulk(b"v")
+    );
+    assert_eq!(c.call(&[b"TTL", b"dup"]), integer(-1));
+    for command in [
+        &[b"GETEX".as_slice(), b"dup", b"EX", b"10", b"PERSIST"] as &[&[u8]],
+        &[b"GETEX", b"dup", b"PERSIST", b"EX", b"10"],
+        &[b"GETEX", b"dup", b"EX", b"10", b"PX", b"5000"],
+        &[b"GETEX", b"dup", b"FOO"],
+    ] {
+        assert_eq!(c.call(command), Reply::Error(b"ERR syntax error".to_vec()));
+    }
 }

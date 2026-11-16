@@ -113,7 +113,10 @@ and overflow without changing the stored value.
 `HSCAN`, `SSCAN`, and `ZSCAN` currently use sorted offset cursors, rebuilding
 their index for each call. They apply `MATCH` after page selection and accept
 `COUNT` as a page size; concurrent edits may repeat or skip elements. `HSCAN`
-supports `NOVALUES`. `SETRANGE` currently caps growth at 64 MiB.
+supports `NOVALUES`. `SETRANGE` currently caps growth at 64 MiB. `SET` allows repeated
+`NX`/`XX`/`GET`/`KEEPTTL` flags and last-wins repeated expiry options with the
+same unit; `GETEX` does the same for `PERSIST`. Mixing expiry units, or
+combining an expiry with `KEEPTTL`/`PERSIST`, is a syntax error.
 
 `LCS` returns the longest common subsequence of two string values. `LEN`
 reports only the length and uses two rows of the dynamic-programming table;
