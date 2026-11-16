@@ -337,11 +337,10 @@ struct SetOptions {
     expiration: Expiration,
 }
 
-fn expiry_unit(option: &[u8]) -> Option<Vec<u8>> {
+fn expiry_unit(option: &[u8]) -> Option<&'static [u8]> {
     [b"EX".as_slice(), b"PX", b"EXAT", b"PXAT"]
-        .iter()
+        .into_iter()
         .find(|candidate| option.eq_ignore_ascii_case(candidate))
-        .map(|candidate| candidate.to_vec())
 }
 
 fn set_options(command: &[Vec<u8>]) -> Result<SetOptions, Vec<u8>> {
@@ -349,7 +348,7 @@ fn set_options(command: &[Vec<u8>]) -> Result<SetOptions, Vec<u8>> {
     let mut xx = false;
     let mut get = false;
     let mut keep_ttl = false;
-    let mut expiry: Option<(Vec<u8>, Expiration)> = None;
+    let mut expiry: Option<(&'static [u8], Expiration)> = None;
     let mut index = 3;
     while index < command.len() {
         let option = &command[index];
@@ -448,7 +447,7 @@ fn set(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
 
 fn getex_options(command: &[Vec<u8>]) -> Result<Expiration, Vec<u8>> {
     let mut persist = false;
-    let mut expiry: Option<(Vec<u8>, Expiration)> = None;
+    let mut expiry: Option<(&'static [u8], Expiration)> = None;
     let mut index = 2;
     while index < command.len() {
         let option = &command[index];

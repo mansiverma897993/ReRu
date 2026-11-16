@@ -719,7 +719,9 @@ fn set_and_getex_accept_repeated_options_like_redis() {
     assert_eq!(c.call(&[b"TTL", b"dup"]), integer(20));
     for command in [
         &[b"SET".as_slice(), b"dup", b"v", b"EX", b"10", b"KEEPTTL"] as &[&[u8]],
+        &[b"SET", b"dup", b"v", b"KEEPTTL", b"EX", b"10"],
         &[b"SET", b"dup", b"v", b"EX", b"10", b"PX", b"5000"],
+        &[b"SET", b"dup", b"v", b"EX", b"10", b"EXAT", b"9999999999"],
         &[b"SET", b"dup", b"v", b"FOO"],
     ] {
         assert_eq!(c.call(command), Reply::Error(b"ERR syntax error".to_vec()));
@@ -737,6 +739,7 @@ fn set_and_getex_accept_repeated_options_like_redis() {
     for command in [
         &[b"GETEX".as_slice(), b"dup", b"EX", b"10", b"PERSIST"] as &[&[u8]],
         &[b"GETEX", b"dup", b"PERSIST", b"EX", b"10"],
+        &[b"GETEX", b"dup", b"EX", b"10", b"PX", b"5000"],
         &[b"GETEX", b"dup", b"FOO"],
     ] {
         assert_eq!(c.call(command), Reply::Error(b"ERR syntax error".to_vec()));
