@@ -155,6 +155,36 @@ fn signed_integer(bytes: &[u8]) -> Option<i64> {
         .filter(|value| value.to_string().as_bytes() == bytes)
 }
 
+/// Parse and validate the count argument of SPOP, SRANDMEMBER, and HRANDFIELD
+/// before the key lookup, matching Redis's error precedence.
+fn random_count(kind: Command, command: &[Vec<u8>]) -> Result<i64, Vec<u8>> {
+    let requested = if command.len() < 3 {
+        1
+    } else if matches!(kind, Command::Spop) {
+        match signed_integer(&command[2]) {
+            Some(value) if value >= 0 => value,
+            _ => return Err(protocol::error("value is out of range, must be positive")),
+        }
+    } else {
+        signed_integer(&command[2])
+            .ok_or_else(|| protocol::error("value is not an integer or out of range"))?
+    };
+    if matches!(kind, Command::Srandmember | Command::Hrandfield) && requested == i64::MIN {
+        return Err(protocol::error(
+            "value is out of range, value must between -9223372036854775807 and 9223372036854775807",
+        ));
+    }
+    if matches!(kind, Command::Hrandfield) {
+        if command.len() == 4 && !command[3].eq_ignore_ascii_case(b"WITHVALUES") {
+            return Err(protocol::error("syntax error"));
+        }
+        if command.len() == 4 && !(-i64::MAX / 2..=i64::MAX / 2).contains(&requested) {
+            return Err(protocol::error("value is out of range"));
+        }
+    }
+    Ok(requested)
+}
+
 fn finite_float(bytes: &[u8]) -> Option<f64> {
     std::str::from_utf8(bytes)
         .ok()?
@@ -249,6 +279,14 @@ fn execute_hash(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     } else {
         0.0
     };
+    let count_argument = if matches!(kind, Hrandfield | Spop | Srandmember) {
+        match random_count(kind, command) {
+            Ok(value) => Some(value),
+            Err(error) => return error,
+        }
+    } else {
+        None
+    };
     let key = &command[1];
     let mut entries = store.entries.lock().unwrap();
     remove_expired(&mut entries, key);
@@ -298,22 +336,7 @@ fn execute_hash(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             scan_reply(if end == fields.len() { 0 } else { end }, &values)
         }
         Hrandfield => {
-            if command.len() == 4 && !command[3].eq_ignore_ascii_case(b"WITHVALUES") {
-                return protocol::error("syntax error");
-            }
-            let requested = if command.len() >= 3 {
-                match signed_integer(&command[2]) {
-                    Some(value) => value,
-                    None => return protocol::error("value is not an integer or out of range"),
-                }
-            } else {
-                1
-            };
-            if requested == i64::MIN {
-                return protocol::error(
-                    "value is out of range, value must between -9223372036854775807 and 9223372036854775807",
-                );
-            }
+            let requested = count_argument.unwrap_or(1);
             let Some(hash) = hash else {
                 return if command.len() == 2 {
                     b"$-1\r\n".to_vec()
@@ -626,6 +649,14 @@ fn execute_set(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         mark_modified(store, destination);
         return integer(1);
     }
+    let count_argument = if matches!(kind, Spop | Srandmember) {
+        match random_count(kind, command) {
+            Ok(value) => Some(value),
+            Err(error) => return error,
+        }
+    } else {
+        None
+    };
     let key = &command[1];
     remove_expired(&mut entries, key);
     let set = match entries.get(key).map(|entry| &entry.value) {
@@ -704,19 +735,7 @@ fn execute_set(kind: Command, command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             integer(removed)
         }
         Spop | Srandmember => {
-            let requested = if command.len() == 3 {
-                match signed_integer(&command[2]) {
-                    Some(value) if matches!(kind, Srandmember) || value >= 0 => value,
-                    _ => return protocol::error("value is not an integer or out of range"),
-                }
-            } else {
-                1
-            };
-            if requested == i64::MIN {
-                return protocol::error(
-                    "value is out of range, value must between -9223372036854775807 and 9223372036854775807",
-                );
-            }
+            let requested = count_argument.unwrap_or(1);
             let Some(set) = set else {
                 return if command.len() == 3 {
                     protocol::array(&[])
