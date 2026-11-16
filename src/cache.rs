@@ -305,17 +305,18 @@ enum Expiration {
 
 fn deadline(option: &[u8], bytes: &[u8], command: &str) -> Result<Instant, Vec<u8>> {
     let invalid = || protocol::error(&format!("invalid expire time in '{command}' command"));
-    let amount = std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|text| text.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .ok_or_else(invalid)?;
+    let amount = crate::list_ops::parse_redis_int(bytes)
+        .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
+    if amount <= 0 {
+        return Err(invalid());
+    }
     let milliseconds = if option.eq_ignore_ascii_case(b"EX") || option.eq_ignore_ascii_case(b"EXAT")
     {
         amount.checked_mul(1000).ok_or_else(invalid)?
     } else {
         amount
     };
+    let milliseconds = u64::try_from(milliseconds).map_err(|_| invalid())?;
     if option.eq_ignore_ascii_case(b"EX") || option.eq_ignore_ascii_case(b"PX") {
         return Instant::now()
             .checked_add(Duration::from_millis(milliseconds))
