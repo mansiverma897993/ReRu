@@ -317,8 +317,8 @@ entries. Deleted or trimmed payloads remain pending and replay as null payloads.
 IDLE, exclusive bounds and a consumer filter. `XCLAIM` supports IDLE, TIME,
 RETRYCOUNT, FORCE, JUSTID and LASTID, and registers its consumer even when it
 claims nothing. `XAUTOCLAIM` implements bounded scanning (10 x
-COUNT), a COUNT shared by claims and deleted pending entries, JUSTID, and the
-Redis 7 deleted-ID reply. These provide at-least-once
+COUNT), a COUNT shared by claims and deleted pending entries, JUSTID, the Redis
+7 deleted-ID reply, and registers its consumer even when it claims nothing. These provide at-least-once
 processing primitives, not exactly-once application execution.
 
 `XINFO GROUPS/CONSUMERS/STREAM` exposes group cursors, pending counts, consumers,
