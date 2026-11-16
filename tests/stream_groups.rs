@@ -1060,3 +1060,25 @@ fn negative_counts_are_unlimited_and_block_errors_match_redis() {
         overflow
     );
 }
+
+#[test]
+fn stream_commands_look_up_keys_and_groups_before_parsing_ids() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"DEL", b"missing"]), integer(0));
+    assert_eq!(c.call(&[b"XACK", b"missing", b"g", b"abc"]), integer(0));
+    assert_eq!(c.call(&[b"XDEL", b"missing", b"abc"]), integer(0));
+
+    assert_eq!(c.call(&[b"SET", b"wrong", b"string"]), ok());
+    let wrong = || {
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    };
+    assert_eq!(c.call(&[b"XACK", b"wrong", b"g", b"abc"]), wrong());
+    assert_eq!(c.call(&[b"XDEL", b"wrong", b"abc"]), wrong());
+
+    // XRANGE parses bounds before the lookup, so a bad ID still errors.
+    assert_eq!(
+        c.call(&[b"XRANGE", b"missing", b"abc", b"+"]),
+        Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec())
+    );
+}
