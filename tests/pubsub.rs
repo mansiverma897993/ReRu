@@ -200,7 +200,7 @@ fn a_stalled_subscriber_does_not_abort_the_server() {
 
 #[test]
 fn many_acks_from_a_non_reader_do_not_block_other_clients() {
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::net::TcpStream;
 
     let server = Server::start();
@@ -212,6 +212,14 @@ fn many_acks_from_a_non_reader_do_not_block_other_clients() {
     let borrowed: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
     stalled.write_all(&command(&borrowed)).unwrap();
 
+    // Wait until the server has started writing acknowledgements, so the PING
+    // races the batch instead of the command read.
+    stalled
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut first = [0u8; 1];
+    assert_eq!(stalled.read(&mut first).unwrap(), 1);
+
     let mut other = Client::new(&server);
     let started = Instant::now();
     assert_eq!(other.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
@@ -220,4 +228,17 @@ fn many_acks_from_a_non_reader_do_not_block_other_clients() {
         "PING blocked for {:?}",
         started.elapsed()
     );
+
+    // The stalled subscriber is disconnected once the batch budget expires.
+    stalled
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let mut sink = [0u8; 65536];
+    loop {
+        match stalled.read(&mut sink) {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(error) => panic!("stalled subscriber was not dropped: {error}"),
+        }
+    }
 }

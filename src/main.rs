@@ -1746,7 +1746,7 @@ fn validate_queued(command: &[Vec<u8>]) -> Result<(), Vec<u8>> {
 fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
     let mut session = connection::Session::new(&stream)?;
     let mut reader = BufReader::new(stream.try_clone()?);
-    stream.set_write_timeout(Some(Duration::from_millis(500)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(20)))?;
     let subscription = store
         .pubsub
         .connect(Arc::new(Mutex::new(stream.try_clone()?)));
