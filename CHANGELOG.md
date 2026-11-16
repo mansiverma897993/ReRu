@@ -44,6 +44,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - Blocked `BLPOP`, `BLMOVE`, `BLMPOP`, and `XREAD` clients no longer wake with
   WRONGTYPE on a type change alone; multi-key forms still report it once another
   key can serve data.
+- The parser accepts up to 1,048,576 arguments and 256 MiB of argument bytes,
+  below Redis's defaults so one command fits ReRu's persistence frames.
 
 ## [0.1.0-alpha.2] - 2026-11-15
 

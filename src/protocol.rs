@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use std::io::{self, BufRead, Read};
 
-/// Largest bulk string the parser accepts for a single argument and in total.
-pub const MAX_BULK: usize = 64 * 1024 * 1024;
-/// Largest number of arguments the parser accepts in one command.
-pub const MAX_ARGS: usize = 1024;
+/// Largest bulk string and total argument bytes the parser accepts in one
+/// command. This is below Redis's 512 MiB `proto-max-bulk-len` so a single
+/// command always fits ReRu's 512 MiB snapshot, RDB, and replication frames.
+pub const MAX_BULK: usize = 256 * 1024 * 1024;
+/// Largest number of arguments the parser accepts in one command. This is
+/// ReRu's own cap, below Redis's INT_MAX argument count and 1 GiB query buffer.
+pub const MAX_ARGS: usize = 1024 * 1024;
 
 fn line<R: BufRead>(reader: &mut R) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -30,6 +33,14 @@ fn number(bytes: &[u8]) -> io::Result<usize> {
 }
 
 pub fn read_command<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<Vec<u8>>>> {
+    read_command_with_limits(reader, MAX_ARGS, MAX_BULK)
+}
+
+fn read_command_with_limits<R: BufRead>(
+    reader: &mut R,
+    max_args: usize,
+    max_bulk: usize,
+) -> io::Result<Option<Vec<Vec<u8>>>> {
     let first = reader.fill_buf()?;
     if first.is_empty() {
         return Ok(None);
@@ -42,13 +53,14 @@ pub fn read_command<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<Vec<u8>
         ));
     }
     let count = number(&header[1..])?;
-    if count == 0 || count > MAX_ARGS {
+    if count == 0 || count > max_args {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "invalid argument count",
         ));
     }
-    let mut args = Vec::with_capacity(count);
+    // Reserve at most 1024 slots; a hostile header must not allocate 25 MiB.
+    let mut args = Vec::with_capacity(count.min(1024));
     let mut total_bytes = 0usize;
     for _ in 0..count {
         let header = line(reader)?;
@@ -62,7 +74,7 @@ pub fn read_command<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<Vec<u8>
         total_bytes = total_bytes
             .checked_add(len)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "command too large"))?;
-        if len > MAX_BULK || total_bytes > MAX_BULK {
+        if len > max_bulk || total_bytes > max_bulk {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "command too large",
@@ -129,17 +141,38 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_command_whose_arguments_exceed_the_total_limit() {
-        // Each argument is under MAX_BULK; together they are over it. The parser
-        // must reject on the second header, before reading its payload.
-        const HALF: usize = MAX_BULK / 2 + 1;
-        let mut input = format!("*2\r\n${HALF}\r\n").into_bytes();
-        input.extend(std::iter::repeat_n(b'x', HALF));
-        input.extend_from_slice(b"\r\n");
-        input.extend(format!("${HALF}\r\n").into_bytes());
+    fn parser_limits_are_redis_sized() {
+        assert_eq!(MAX_ARGS, 1_048_576);
+        assert_eq!(MAX_BULK, 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn accepts_more_than_1024_arguments() {
+        let input = format!("*1025\r\n{}", "$1\r\na\r\n".repeat(1025)).into_bytes();
         let mut reader = Cursor::new(input);
-        let error = read_command(&mut reader).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let command = read_command(&mut reader).unwrap().unwrap();
+        assert_eq!(command.len(), 1025);
+    }
+
+    #[test]
+    fn rejects_counts_and_bulk_lengths_against_the_configured_limits() {
+        let input = b"*3\r\n".to_vec();
+        let mut reader = Cursor::new(input);
+        let error = read_command_with_limits(&mut reader, 2, 100).unwrap_err();
+        assert_eq!(error.to_string(), "invalid argument count");
+
+        let input = b"*1\r\n$101\r\n".to_vec();
+        let mut reader = Cursor::new(input);
+        let error = read_command_with_limits(&mut reader, 16, 100).unwrap_err();
+        assert_eq!(error.to_string(), "command too large");
+
+        // Each argument fits, but the sum exceeds the configured total.
+        let input = b"*2\r\n$60\r\n".to_vec();
+        let mut payload = input;
+        payload.extend(std::iter::repeat_n(b'x', 60));
+        payload.extend_from_slice(b"\r\n$60\r\n");
+        let mut reader = Cursor::new(payload);
+        let error = read_command_with_limits(&mut reader, 16, 100).unwrap_err();
         assert_eq!(error.to_string(), "command too large");
     }
 

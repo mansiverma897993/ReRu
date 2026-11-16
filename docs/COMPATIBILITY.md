@@ -144,9 +144,10 @@ returns to `listpack` when the last deadline is cleared, deleted, or expires.
 `OBJECT REFCOUNT` always returns `1` because values are never shared between
 keys. `OBJECT FREQ`, `OBJECT IDLETIME`, and `OBJECT HELP` are not implemented.
 
-AOF replay rewrites one key per batch. Commands are split by argument count and
-a 32 MiB payload budget, so a key larger than the protocol bulk limit still
-replays. A failed AOF write leaves the in-memory value in place, returns
+AOF replay rewrites one key per batch. Collection keys are split by argument
+count and a 32 MiB payload budget. String values are written as one SET, so a
+string grown past the 256 MiB command cap by APPEND or SETRANGE cannot replay.
+A dataset larger than 512 MiB cannot be snapshotted and returns MISCONF. A failed AOF write leaves the in-memory value in place, returns
 `-MISCONF`, and keeps the connection open. Snapshot key counts are bounded by
 the payload size instead of a fixed 1,000,000-key cap.
 
@@ -436,6 +437,12 @@ fixed `always` fsync policy; changing these through CONFIG SET is unsupported.
 Behavior reference: [Redis BGREWRITEAOF](https://redis.io/docs/latest/commands/bgrewriteaof/).
 
 ## Client connection lifecycle
+
+The RESP2 parser accepts up to 1,048,576 arguments and 256 MiB of argument
+bytes per command. These are ReRu limits, below Redis's INT_MAX argument count,
+512 MiB `proto-max-bulk-len`, and 1 GiB query buffer, and keep one command
+within the 512 MiB snapshot, RDB, and replication limits. Frames above either
+limit close the connection without a reply on this revision.
 
 `HELLO` and `HELLO 2` return a RESP2 properties array containing ReRu's actual
 name/version, protocol 2, stable connection ID, standalone mode, primary/replica

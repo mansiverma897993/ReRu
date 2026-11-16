@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAGIC: &[u8; 8] = b"RERUSNP1";
-const MAX_SNAPSHOT: usize = 256 * 1024 * 1024;
+const MAX_SNAPSHOT: usize = 512 * 1024 * 1024;
 
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid ReRu snapshot")

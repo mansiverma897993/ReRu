@@ -35,7 +35,7 @@ impl Client {
             command.extend(*arg);
             command.extend(b"\r\n");
         }
-        self.0.get_mut().write_all(&command).unwrap();
+        write_all_retry(self.0.get_mut(), &command);
         self.read()
     }
 
@@ -74,6 +74,31 @@ impl Client {
                 Reply::Array(Some((0..len).map(|_| self.read()).collect()))
             }
             _ => panic!("invalid response {line:?}"),
+        }
+    }
+}
+
+// Parallel test servers can transiently exhaust loopback buffers; retry the
+// remaining bytes instead of failing the test.
+fn write_all_retry(stream: &mut TcpStream, bytes: &[u8]) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match stream.write(&bytes[offset..]) {
+            Ok(0) => panic!("socket write returned zero"),
+            Ok(written) => offset += written,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) || error.raw_os_error() == Some(55) =>
+            {
+                assert!(std::time::Instant::now() < deadline, "socket write stalled");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(error) => panic!("socket write failed: {error}"),
         }
     }
 }

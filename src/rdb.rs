@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const VERSION: u16 = 10;
-const MAX_BYTES: usize = 256 * 1024 * 1024;
+const MAX_BYTES: usize = 512 * 1024 * 1024;
 const MAX_ITEMS: usize = 1_000_000;
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
