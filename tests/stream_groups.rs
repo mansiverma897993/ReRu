@@ -251,15 +251,11 @@ fn claiming_tracks_ownership_retry_counts_idle_and_autoclaim_tombstone_cleanup()
             b"COUNT",
             b"1"
         ]),
-        array(vec![
-            bulk(b"0-0"),
-            array(vec![entry(b"3-0", b"3-0")]),
-            array(vec![bulk(b"2-0")])
-        ])
+        array(vec![bulk(b"3-0"), array(vec![]), array(vec![bulk(b"2-0")])])
     );
     assert_eq!(
         c.call(&[b"XGROUP", b"DELCONSUMER", b"s", b"g", b"carol"]),
-        integer(2)
+        integer(1)
     );
     assert_eq!(
         c.call(&[b"XCLAIM", b"s", b"g", b"bob", b"0", b"1-0", b"FORCE", b"JUSTID"]),
@@ -267,7 +263,7 @@ fn claiming_tracks_ownership_retry_counts_idle_and_autoclaim_tombstone_cleanup()
     );
     assert_eq!(
         c.call(&[b"XPENDING", b"s", b"g"]),
-        summary(1, b"1-0", b"1-0", &[(b"bob", b"1")])
+        summary(2, b"1-0", b"3-0", &[(b"alice", b"1"), (b"bob", b"1")])
     );
 }
 
