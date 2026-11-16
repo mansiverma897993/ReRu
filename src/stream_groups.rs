@@ -479,10 +479,6 @@ pub fn blocking_read(
 }
 
 fn acknowledge(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
-    let ids = c[3..]
-        .iter()
-        .map(|raw| id(raw))
-        .collect::<Result<Vec<_>>>()?;
     let mut entries = store.entries.lock().unwrap();
     remove_expired(&mut entries, &c[1]);
     if !entries.contains_key(&c[1]) {
@@ -492,6 +488,10 @@ fn acknowledge(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     let Some(group) = stream.groups.get_mut(&c[2]) else {
         return Ok(integer(0));
     };
+    let ids = c[3..]
+        .iter()
+        .map(|raw| id(raw))
+        .collect::<Result<Vec<_>>>()?;
     let removed = ids
         .into_iter()
         .filter(|id| group.pending.remove(id).is_some())

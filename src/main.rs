@@ -1547,15 +1547,6 @@ fn execute_command(
         if command.len() < 3 {
             protocol::error("wrong number of arguments for 'xdel' command")
         } else {
-            let mut ids = HashSet::new();
-            for raw in &command[2..] {
-                match streams::StreamId::parse_query(raw) {
-                    Ok(id) => {
-                        ids.insert(id);
-                    }
-                    Err(message) => return protocol::error(message),
-                }
-            }
             let mut entries = store.entries.lock().unwrap();
             remove_expired(&mut entries, &command[1]);
             match entries.get_mut(&command[1]) {
@@ -1563,6 +1554,15 @@ fn execute_command(
                     value: Value::Stream(stream),
                     ..
                 }) => {
+                    let mut ids = HashSet::new();
+                    for raw in &command[2..] {
+                        match streams::StreamId::parse_query(raw) {
+                            Ok(id) => {
+                                ids.insert(id);
+                            }
+                            Err(message) => return protocol::error(message),
+                        }
+                    }
                     let removed = stream.delete(&ids);
                     if removed != 0 {
                         mark_modified(store, &command[1]);
