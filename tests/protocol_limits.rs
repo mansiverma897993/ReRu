@@ -10,6 +10,14 @@ fn snapshot_path() -> std::path::PathBuf {
     common::temp_path("protocol-large", ".snap")
 }
 
+struct RemoveOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[test]
 fn commands_with_more_than_1024_arguments_are_accepted() {
     let server = common::Server::start();
@@ -37,7 +45,7 @@ fn commands_with_more_than_1024_arguments_are_accepted() {
 fn values_above_the_old_64_mib_limit_are_accepted() {
     let server = common::Server::start();
     let mut c = Client::new(&server);
-    let value = vec![b'x'; 70 * 1024 * 1024];
+    let value = vec![b'x'; 65 * 1024 * 1024];
     assert_eq!(c.call(&[b"SET", b"large", &value]), ok());
     assert_eq!(c.call(&[b"STRLEN", b"large"]), integer(value.len() as i64));
     assert_eq!(c.call(&[b"GET", b"large"]), Reply::Bulk(Some(value)));
@@ -46,8 +54,9 @@ fn values_above_the_old_64_mib_limit_are_accepted() {
 #[test]
 fn large_values_survive_a_snapshot_restart() {
     let path = snapshot_path();
+    let _cleanup = RemoveOnDrop(path.clone());
     let filename = path.to_str().unwrap().to_owned();
-    let value = vec![b'y'; 70 * 1024 * 1024];
+    let value = vec![b'y'; 65 * 1024 * 1024];
     {
         let server = common::Server::start_with(&["--snapshot", &filename]);
         let mut c = Client::new(&server);
@@ -62,5 +71,4 @@ fn large_values_survive_a_snapshot_restart() {
             integer(value.len() as i64)
         );
     }
-    let _ = std::fs::remove_file(path);
 }
