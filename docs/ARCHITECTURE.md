@@ -35,6 +35,7 @@ enum Value {
     Hash(collections::HashValue),
     Set(HashSet<Vec<u8>>),
     SortedSet(sorted_sets::SortedSet),
+    VectorSet(vector_sets::VectorSet),
 }
 ```
 
@@ -71,6 +72,7 @@ authentication settings, and the pub/sub hub.
 | `collections.rs` | Hash and set commands |
 | `sorted_sets.rs` | Sorted sets, ranges, and blocking pops |
 | `sorted_sets/algebra.rs` | `ZUNION`, `ZINTER`, `ZDIFF` and store variants |
+| `vector_sets.rs` | Q8/FP32 vector storage and exact `VSIM ... TRUTH` search |
 | `bitmaps.rs` | Bit operations and `BITFIELD` |
 | `streams.rs` | Stream storage, IDs, ranges, trimming, entry replies |
 | `stream_groups.rs` | Consumer groups, pending entries, claiming, `XINFO` |

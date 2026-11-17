@@ -25,6 +25,7 @@ mod replication;
 mod sorted_sets;
 mod stream_groups;
 mod streams;
+mod vector_sets;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, BufReader, Read, Write};
@@ -42,6 +43,7 @@ enum Value {
     Hash(collections::HashValue),
     Set(HashSet<Vec<u8>>),
     SortedSet(sorted_sets::SortedSet),
+    VectorSet(vector_sets::VectorSet),
 }
 
 #[derive(Clone)]
@@ -222,6 +224,7 @@ fn is_mutating(command: &[Vec<u8>]) -> bool {
         || hyperloglog::is_mutating(command)
         || bitmaps::is_mutating(command)
         || sorted_sets::is_mutating(command)
+        || vector_sets::is_mutating(command)
         || collections::is_mutating(command)
         || stream_groups::is_mutating(command)
         || [
@@ -271,6 +274,7 @@ fn record_write(store: &Store, command: &[Vec<u8>], response: &[u8]) {
         || hyperloglog::valid_arity(command).is_some()
         || bitmaps::valid_arity(command).is_some()
         || sorted_sets::valid_arity(command).is_some()
+        || vector_sets::valid_arity(command).is_some()
         || collections::valid_arity(command).is_some()
         || !is_mutating(command)
         || response.starts_with(b"-")
@@ -1136,6 +1140,8 @@ fn execute_command(
         response
     } else if let Some(response) = sorted_sets::execute(command, store) {
         response
+    } else if let Some(response) = vector_sets::execute(command, store) {
+        response
     } else if let Some(response) = collections::execute(command, store) {
         response
     } else if let Some(response) = keyspace::execute(command, store) {
@@ -1472,6 +1478,7 @@ fn execute_command(
                 Some(Value::Hash(_)) => b"+hash\r\n".to_vec(),
                 Some(Value::Set(_)) => b"+set\r\n".to_vec(),
                 Some(Value::SortedSet(_)) => b"+zset\r\n".to_vec(),
+                Some(Value::VectorSet(_)) => b"+vectorset\r\n".to_vec(),
                 None => b"+none\r\n".to_vec(),
             }
         }

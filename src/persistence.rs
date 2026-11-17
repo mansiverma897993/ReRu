@@ -164,6 +164,25 @@ pub fn encode(entries: &HashMap<Vec<u8>, Entry>) -> io::Result<Vec<u8>> {
                     put_u64(&mut output, score.to_bits());
                 }
             }
+            Value::VectorSet(set) => {
+                output.push(10);
+                put_u64(&mut output, set.dimensions as u64);
+                output.push(u8::from(
+                    set.quantization == crate::vector_sets::Quantization::F32,
+                ));
+                put_u64(&mut output, set.members.len() as u64);
+                let mut members: Vec<_> = set.members.iter().collect();
+                members.sort_by_key(|(member, _)| *member);
+                for (member, vector) in members {
+                    put_bytes(&mut output, member)?;
+                    let bytes = vector
+                        .input
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect::<Vec<_>>();
+                    put_bytes(&mut output, &bytes)?;
+                }
+            }
         }
     }
     if output.len() > MAX_SNAPSHOT {
@@ -312,6 +331,41 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                     }
                 }
                 Value::SortedSet(members)
+            }
+            10 => {
+                let dimensions = usize::try_from(read_u64(&mut cursor)?).map_err(|_| invalid())?;
+                if !(1..=crate::vector_sets::MAX_DIMENSIONS).contains(&dimensions) {
+                    return Err(invalid());
+                }
+                let mut mode = [0];
+                cursor.read_exact(&mut mode)?;
+                let quantization = match mode[0] {
+                    0 => crate::vector_sets::Quantization::Q8,
+                    1 => crate::vector_sets::Quantization::F32,
+                    _ => return Err(invalid()),
+                };
+                let raw = read_u64(&mut cursor)?;
+                let count = bounded_count(&cursor, raw, 16)?;
+                if count == 0 {
+                    return Err(invalid());
+                }
+                let mut set = crate::vector_sets::VectorSet::new(dimensions, quantization);
+                for _ in 0..count {
+                    let member = read_bytes(&mut cursor)?;
+                    let bytes = read_bytes(&mut cursor)?;
+                    if bytes.len() != dimensions * 4 || set.members.contains_key(&member) {
+                        return Err(invalid());
+                    }
+                    let values = bytes
+                        .chunks_exact(4)
+                        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+                        .collect::<Vec<_>>();
+                    if values.iter().any(|v| !v.is_finite()) {
+                        return Err(invalid());
+                    }
+                    set.insert(member, values);
+                }
+                Value::VectorSet(set)
             }
             _ => return Err(invalid()),
         };
@@ -465,5 +519,47 @@ mod tests {
             .unwrap();
         duplicate[position..position + 3].copy_from_slice(b"one");
         assert!(decode(&duplicate).is_err());
+    }
+
+    #[test]
+    fn vector_snapshot_rejects_bad_dimensions_modes_values_and_duplicates() {
+        let mut valid = MAGIC.to_vec();
+        put_u64(&mut valid, 1);
+        put_bytes(&mut valid, b"key").unwrap();
+        put_u64(&mut valid, u64::MAX);
+        valid.push(10);
+        let dimension_offset = valid.len();
+        put_u64(&mut valid, 2);
+        let mode_offset = valid.len();
+        valid.push(0);
+        let count_offset = valid.len();
+        put_u64(&mut valid, 1);
+        put_bytes(&mut valid, b"member").unwrap();
+        let values = [1f32.to_le_bytes(), 0f32.to_le_bytes()].concat();
+        put_bytes(&mut valid, &values).unwrap();
+        assert!(
+            matches!(&decode(&valid).unwrap()[b"key".as_slice()].value, Value::VectorSet(set) if set.dimensions == 2 && set.members.contains_key(b"member".as_slice()))
+        );
+
+        let mut bad_dimension = valid.clone();
+        bad_dimension[dimension_offset..dimension_offset + 8].copy_from_slice(&0u64.to_be_bytes());
+        let mut bad_mode = valid.clone();
+        bad_mode[mode_offset] = 2;
+        let mut nan = valid.clone();
+        let value_offset = nan.len() - 8;
+        nan[value_offset..value_offset + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        let mut duplicate = valid.clone();
+        duplicate[count_offset..count_offset + 8].copy_from_slice(&2u64.to_be_bytes());
+        put_bytes(&mut duplicate, b"member").unwrap();
+        put_bytes(&mut duplicate, &values).unwrap();
+        for invalid in [
+            bad_dimension,
+            bad_mode,
+            nan,
+            duplicate,
+            valid[..valid.len() - 1].to_vec(),
+        ] {
+            assert!(decode(&invalid).is_err());
+        }
     }
 }
