@@ -1,6 +1,6 @@
 # ReRu compatibility status
 
-Updated: 15 November 2026. This inventory describes the implementation and local
+Updated: 17 November 2026. This inventory describes the implementation and local
 tests; it does not certify complete compatibility with Redis.
 
 ## Implemented commands
@@ -14,6 +14,7 @@ tests; it does not certify complete compatibility with Redis.
 | Hashes | `HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HGETALL`, `HDEL`, `HEXISTS`, `HLEN`, `HKEYS`, `HVALS`, `HINCRBY`, `HINCRBYFLOAT`, `HSTRLEN`, `HRANDFIELD`, `HSCAN`, `HEXPIRE`, `HPEXPIRE`, `HEXPIREAT`, `HPEXPIREAT`, `HTTL`, `HPTTL`, `HEXPIRETIME`, `HPEXPIRETIME`, `HPERSIST`, `HGETEX`, `HSETEX` | Binary fields/values, multiple field updates, missing-field nil replies, increments, cursor iteration, per-field expiry and conditional TTL changes |
 | Sets | `SADD`, `SREM`, `SISMEMBER`, `SMISMEMBER`, `SMEMBERS`, `SCARD`, `SMOVE`, `SPOP`, `SRANDMEMBER`, `SUNION`, `SINTER`, `SINTERCARD`, `SDIFF`, `SUNIONSTORE`, `SINTERSTORE`, `SDIFFSTORE`, `SSCAN` | Binary members, deduplication, membership, cardinality, random selection, atomic moves, set algebra and cursor iteration; SINTERCARD LIMIT |
 | Sorted sets | `ZADD`, `ZINCRBY`, `ZCARD`, `ZSCORE`, `ZRANK`, `ZREVRANK`, `ZRANGE`, `ZREVRANGE`, `ZRANGESTORE`, `ZRANGEBYSCORE`, `ZREVRANGEBYSCORE`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZCOUNT`, `ZLEXCOUNT`, `ZREM`, `ZREMRANGEBYSCORE`, `ZREMRANGEBYRANK`, `ZREMRANGEBYLEX`, `ZMSCORE`, `ZSCAN`, `ZPOPMIN`, `ZPOPMAX`, `ZMPOP`, `BZMPOP`, `BZPOPMIN`, `BZPOPMAX`, `ZUNION`, `ZUNIONSTORE`, `ZINTER`, `ZINTERSTORE`, `ZDIFF`, `ZDIFFSTORE`, `ZINTERCARD` | Score-ordered members, rank, score and lex ranges, ZADD NX/XX/GT/LT/CH/INCR, cursor iteration, range removal, ordered and multi-key blocking pops, weighted algebra and destination storing |
+| Vector sets | `VADD`, `VCARD`, `VDIM`, `VEMB`, `VREM`, `VSIM` | Bounded VALUES/FP32 inserts, Q8 or NOQUANT storage, binary members, exact `VSIM ... TRUTH` with COUNT and WITHSCORES |
 | Bitmaps | `SETBIT`, `GETBIT`, `BITCOUNT`, `BITOP`, `BITPOS`, `BITFIELD`, `BITFIELD_RO` | Bitmaps stored as strings, byte/bit count ranges, AND/OR/XOR/NOT; bitfield GET/SET/INCRBY, signed/unsigned widths, `#` offsets and WRAP/SAT/FAIL overflow modes |
 | HyperLogLog | `PFADD`, `PFCOUNT`, `PFMERGE` | Approximate distinct counts, multi-key unions, binary members, Redis dense/sparse interchange, cached cardinality |
 | Geospatial | `GEOADD`, `GEOPOS`, `GEOHASH`, `GEODIST`, `GEOSEARCH`, `GEOSEARCHSTORE` | Geo points use sorted-set scores; NX/XX/CH, positions and distances, radius/box search, sort/count, decorated results, and destination storing |
@@ -43,7 +44,7 @@ entries, and `COMMAND COUNT` counts those entries. Redis documents
 [`COMMAND COUNT`](https://redis.io/docs/latest/commands/command-count/), and
 [`COMMAND INFO`](https://redis.io/docs/latest/commands/command-info/).
 
-Total: **228 Redis command metadata entries**, or **49.7% name presence**
+Total: **234 Redis command metadata entries**, or **51.0% name presence**
 against 459 entries in the pinned Redis 8.10.2 metadata. This is neither a
 behavior pass rate nor a percentage of Redis completed. Run
 `powershell -File scripts/command_coverage.ps1 -RedisSource PATH_TO_REDIS_8_10_2`
@@ -290,6 +291,31 @@ when entries disappear. The ID survives ReRu snapshots and AOF replay.
 Approximate trimming (`~`), `LIMIT`, reference-aware trimming options, and newer
 stream features remain unimplemented. New stream snapshots use a revised type
 tag; new builds read older tags, but older builds cannot read new snapshots.
+
+## Vector sets
+
+`VADD` accepts one binary member with `VALUES <dimensions>` or little-endian
+`FP32` values. Dimensions are fixed at creation (1–65,536), and non-finite
+values are rejected before mutation. The default Q8 mode and `NOQUANT` mode
+cannot be mixed in one set. `VEMB` returns reconstructed values or `RAW`
+representation; `VSIM ... TRUTH` scans every member and supports `COUNT` and
+`WITHSCORES`. Empty sets disappear when their last member is removed.
+
+The exact-search milestone does not implement HNSW approximate search,
+`REDUCE`, `BIN`, `CAS`, `EF`, `M`, `SETATTR`, `WITHATTRIBS`, `FILTER`, `FILTER-EF`,
+`EPSILON`, or `NOTHREAD`; those options return explicit errors. Numerical
+rounding and Q8 scores can differ slightly from Redis 8.10.2. A vector value
+participates in key expiry, `DEL`/`COPY`, WATCH/MULTI, maxmemory accounting,
+ReRu snapshots/AOF and ReRu replication. Snapshot tag 10 stores dimensions,
+Q8/F32 mode, binary member names and little-endian FP32 input components;
+the decoder rejects malformed, duplicate and non-finite entries. Redis RDB
+`SAVE`, `BGSAVE` and `DUMP` reject vector sets explicitly. Redis RDB vector-set
+import and `RESTORE` remain unsupported.
+
+Behavior references: [vector sets](https://redis.io/docs/latest/develop/data-types/vector-sets/),
+[VADD](https://redis.io/docs/latest/commands/vadd/),
+[VEMB](https://redis.io/docs/latest/commands/vemb/), and
+[VSIM](https://redis.io/docs/latest/commands/vsim/).
 
 ## HyperLogLog
 

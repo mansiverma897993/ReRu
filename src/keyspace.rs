@@ -57,6 +57,7 @@ fn kind(value: &Value) -> &'static [u8] {
         Value::Hash(_) => b"hash",
         Value::Set(_) => b"set",
         Value::SortedSet(_) => b"zset",
+        Value::VectorSet(_) => b"vectorset",
     }
 }
 
@@ -180,6 +181,7 @@ fn encoding(value: &Value) -> &'static [u8] {
             }
         }
         Value::Stream(_) => b"stream",
+        Value::VectorSet(_) => b"vectorset",
     }
 }
 

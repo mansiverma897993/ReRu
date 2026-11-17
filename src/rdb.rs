@@ -438,6 +438,7 @@ fn put_value(out: &mut Vec<u8>, key: Option<&[u8]>, value: &Value) -> io::Result
         Value::Hash(_) => 4,
         Value::SortedSet(_) => 5,
         Value::Stream(_) => return Err(invalid("RDB streams are not supported yet")),
+        Value::VectorSet(_) => return Err(invalid("RDB vector sets are not supported yet")),
     };
     out.push(kind);
     if let Some(key) = key {
@@ -476,6 +477,7 @@ fn put_value(out: &mut Vec<u8>, key: Option<&[u8]>, value: &Value) -> io::Result
             }
         }
         Value::Stream(_) => unreachable!(),
+        Value::VectorSet(_) => unreachable!(),
     }
     Ok(())
 }
@@ -775,6 +777,13 @@ fn save(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     {
         store.rdb.saving.store(false, Ordering::Release);
         return protocol::error("RDB hash field expiry is not supported yet");
+    }
+    if entries
+        .values()
+        .any(|entry| matches!(&entry.value, Value::VectorSet(_)))
+    {
+        store.rdb.saving.store(false, Ordering::Release);
+        return protocol::error("RDB vector sets are not supported yet");
     }
     let owned = store.clone();
     let write = move || {

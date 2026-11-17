@@ -302,6 +302,22 @@ fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<(
                 start = end;
             }
         }
+        Value::VectorSet(set) => {
+            let mut members: Vec<_> = set.members.iter().collect();
+            members.sort_by_key(|(member, _)| *member);
+            for (member, vector) in members {
+                let bytes = vector
+                    .input
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>();
+                if set.quantization == crate::vector_sets::Quantization::F32 {
+                    command(output, &[b"VADD", key, b"FP32", &bytes, member, b"NOQUANT"]);
+                } else {
+                    command(output, &[b"VADD", key, b"FP32", &bytes, member]);
+                }
+            }
+        }
         Value::Stream(stream) => {
             append_stream(output, key, stream);
         }

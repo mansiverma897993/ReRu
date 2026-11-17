@@ -8,6 +8,12 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Added bounded Q8/FP32 vector sets with `VADD`, `VCARD`, `VDIM`, `VEMB`,
+  `VREM`, and exact `VSIM ... TRUTH`, including key expiry, transactions,
+  maxmemory rollback, ReRu snapshot/AOF persistence and replication.
+
 ### Fixed
 
 - `MULTI` now uses `COMMAND` arity metadata for ordinary commands: variadic

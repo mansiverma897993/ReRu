@@ -178,6 +178,12 @@ const COMMANDS: &[&str] = &[
     "unwatch",
     "unsubscribe",
     "unlink",
+    "vadd",
+    "vcard",
+    "vdim",
+    "vemb",
+    "vrem",
+    "vsim",
     "watch",
     "xack",
     "xadd",
@@ -253,6 +259,11 @@ fn metadata(name: &str) -> Metadata {
         | "latency|latest" | "get" | "getdel" | "incr" | "decr" | "strlen" | "hgetall" | "hlen"
         | "hkeys" | "hvals" | "scard" | "smembers" | "type" | "ttl" | "pttl" | "persist"
         | "dump" | "xlen" | "zcard" | "expiretime" | "pexpiretime" | "keys" => 2,
+        "vcard" | "vdim" => 2,
+        "vrem" => 3,
+        "vemb" => -3,
+        "vadd" => -5,
+        "vsim" => -4,
         "client|setname" | "append" | "setnx" | "getset" | "decrby" | "incrby" | "incrbyfloat"
         | "latency|history" | "hget" | "hstrlen" | "sismember" | "zscore" | "rpoplpush"
         | "rename" | "renamenx" | "lindex" | "hexists" | "object|encoding" | "object|refcount" => 3,

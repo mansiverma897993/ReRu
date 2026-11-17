@@ -598,6 +598,7 @@ fn entry_bytes(key: &[u8], entry: &Entry) -> usize {
             .entries()
             .map(|(member, _)| member.len() * 2 + 40)
             .sum(),
+        Value::VectorSet(set) => set.estimated_bytes(),
     };
     key.len().saturating_add(64).saturating_add(content)
 }
