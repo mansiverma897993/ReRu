@@ -131,8 +131,11 @@ fn parse_vector(command: &[Vec<u8>], start: usize) -> Result<(Vec<f32>, usize), 
             return Err(invalid_vector());
         }
         let values = bytes
-            .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .map(f32::from_le_bytes)
             .collect::<Vec<_>>();
         if values.iter().any(|v| !v.is_finite()) {
             return Err(invalid_vector());

@@ -357,8 +357,11 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                         return Err(invalid());
                     }
                     let values = bytes
-                        .chunks_exact(4)
-                        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .copied()
+                        .map(f32::from_le_bytes)
                         .collect::<Vec<_>>();
                     if values.iter().any(|v| !v.is_finite()) {
                         return Err(invalid());
