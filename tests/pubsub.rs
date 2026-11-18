@@ -502,3 +502,50 @@ fn a_stalled_exec_reply_drops_the_client_without_blocking_others() {
     #[cfg(windows)]
     let _ = &stalled;
 }
+
+#[test]
+fn numpat_tracks_pattern_reference_counts() {
+    let server = Server::start();
+    let mut publisher = Client::new(&server);
+    let mut first = Client::new(&server);
+    let mut second = Client::new(&server);
+
+    assert_eq!(
+        first.call(&[b"PSUBSCRIBE", b"p\0*"]),
+        ack(b"psubscribe", Some(b"p\0*"), 1)
+    );
+    // Duplicate subscriptions do not increase the distinct count.
+    assert_eq!(
+        first.call(&[b"PSUBSCRIBE", b"p\0*"]),
+        ack(b"psubscribe", Some(b"p\0*"), 1)
+    );
+    assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(1));
+    assert_eq!(
+        second.call(&[b"PSUBSCRIBE", b"p\0*"]),
+        ack(b"psubscribe", Some(b"p\0*"), 1)
+    );
+    assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(1));
+    assert_eq!(
+        second.call(&[b"PUNSUBSCRIBE", b"p\0*"]),
+        ack(b"punsubscribe", Some(b"p\0*"), 0)
+    );
+    assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(1));
+    assert_eq!(first.call(&[b"RESET"]), Reply::Simple(b"RESET".to_vec()));
+    assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(0));
+
+    // A disconnect decrements the pattern reference.
+    assert_eq!(
+        second.call(&[b"PSUBSCRIBE", b"gone:*"]),
+        ack(b"psubscribe", Some(b"gone:*"), 1)
+    );
+    assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(1));
+    drop(second);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if publisher.call(&[b"PUBSUB", b"NUMPAT"]) == integer(0) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "pattern count did not drop");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
