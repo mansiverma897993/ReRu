@@ -1179,25 +1179,39 @@ fn hash_expiry_deadline_range_and_ttl_rounding() {
     );
 
     // HEXPIRETIME rounds the absolute second up; HPEXPIRETIME keeps the millis.
-    assert_eq!(
-        c.call(&[b"HPEXPIREAT", b"h", b"1800000000500", b"FIELDS", b"1", b"f"]),
-        array(vec![integer(1)])
-    );
-    assert_eq!(
-        c.call(&[b"HPEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
-        array(vec![integer(1_800_000_000_500)])
-    );
+    let base = (SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        / 1000
+        + 100)
+        * 1000;
+    for offset in [0u64, 1, 499, 500, 501, 999, 1000] {
+        let deadline = base + offset;
+        assert_eq!(
+            c.call(&[
+                b"HPEXPIREAT",
+                b"h",
+                deadline.to_string().as_bytes(),
+                b"FIELDS",
+                b"1",
+                b"f",
+            ]),
+            array(vec![integer(1)])
+        );
+        assert_eq!(
+            c.call(&[b"HPEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
+            array(vec![integer(deadline as i64)])
+        );
+        assert_eq!(
+            c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
+            array(vec![integer(((deadline + 999) / 1000) as i64)]),
+            "{offset}"
+        );
+    }
     assert_eq!(
         c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
-        array(vec![integer(1_800_000_001)])
-    );
-    assert_eq!(
-        c.call(&[b"HPEXPIREAT", b"h", b"1800000000000", b"FIELDS", b"1", b"f"]),
-        array(vec![integer(1)])
-    );
-    assert_eq!(
-        c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
-        array(vec![integer(1_800_000_000)])
+        array(vec![integer(((base + 1999) / 1000) as i64)])
     );
 
     // A rejected value leaves the existing TTL and field untouched.
