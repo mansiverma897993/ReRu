@@ -225,3 +225,39 @@ fn hgetex_options_after_fields_survive_a_restart() {
     }
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn aof_clamps_legacy_out_of_range_field_deadlines() {
+    let path = path();
+    let filename = path.to_str().unwrap();
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut client = Client::new(&server);
+        assert_eq!(client.call(&[b"HSET", b"h", b"f", b"v"]), integer(1));
+    }
+    // A build that predates the deadline cap could append this value.
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    file.write_all(
+        b"*1\r\n$5\r\nMULTI\r\n*6\r\n$10\r\nHPEXPIREAT\r\n$1\r\nh\r\n$15\r\n101795017799627\r\n$6\r\nFIELDS\r\n$1\r\n1\r\n$1\r\nf\r\n*1\r\n$4\r\nEXEC\r\n",
+    )
+    .unwrap();
+    file.write_all(
+        b"*1\r\n$5\r\nMULTI\r\n*6\r\n$9\r\nHEXPIREAT\r\n$1\r\nh\r\n$15\r\n101795017799627\r\n$6\r\nFIELDS\r\n$1\r\n1\r\n$1\r\nf\r\n*1\r\n$4\r\nEXEC\r\n",
+    )
+    .unwrap();
+    drop(file);
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut client = Client::new(&server);
+        assert_eq!(client.call(&[b"HEXISTS", b"h", b"f"]), integer(1));
+        assert!(matches!(
+            client.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"f"]),
+            Reply::Array(Some(rows)) if matches!(rows[0], Reply::Integer(ttl) if ttl > 0)
+        ));
+    }
+    let _ = std::fs::remove_file(path);
+}

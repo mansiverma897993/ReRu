@@ -1008,3 +1008,210 @@ fn hash_expiry_options_are_accepted_around_fields() {
         Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
     );
 }
+
+#[test]
+fn hash_expiry_deadline_range_and_ttl_rounding() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"HSET", b"h", b"f", b"v"]), integer(1));
+    let invalid = |name: &str| {
+        Reply::Error(format!("ERR invalid expire time in '{name}' command").into_bytes())
+    };
+
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"100000000000", b"FIELDS", b"1", b"f"]),
+        invalid("hexpire")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIRE",
+            b"h",
+            b"9223372036854775",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hpexpire")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIREAT", b"h", b"70368744178", b"FIELDS", b"1", b"f"]),
+        invalid("hexpireat")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIREAT",
+            b"h",
+            b"70368744177664",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hpexpireat")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HSETEX",
+            b"h",
+            b"EX",
+            b"100000000000",
+            b"FIELDS",
+            b"1",
+            b"f",
+            b"v"
+        ]),
+        invalid("hsetex")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HGETEX",
+            b"h",
+            b"EX",
+            b"100000000000",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hgetex")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"-1", b"FIELDS", b"1", b"f"]),
+        Reply::Error(b"ERR invalid expire time, must be >= 0".to_vec())
+    );
+
+    // The 46-bit boundary itself is accepted and readable.
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIREAT",
+            b"h",
+            b"70368744177663",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(
+        c.call(&[b"HPEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
+        array(vec![integer(70_368_744_177_663)])
+    );
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIREAT",
+            b"h",
+            b"70368744177664",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hpexpireat")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIRE",
+            b"h",
+            b"9223372036854775807",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hpexpire")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIRE",
+            b"h",
+            b"99999999999999999999",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+    assert_eq!(
+        c.call(&[
+            b"HSETEX",
+            b"h",
+            b"PX",
+            b"9223372036854775",
+            b"FIELDS",
+            b"1",
+            b"f",
+            b"v"
+        ]),
+        invalid("hsetex")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HSETEX",
+            b"h",
+            b"PXAT",
+            b"70368744177664",
+            b"FIELDS",
+            b"1",
+            b"f",
+            b"v"
+        ]),
+        invalid("hsetex")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HGETEX",
+            b"h",
+            b"PX",
+            b"9223372036854775",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hgetex")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HGETEX",
+            b"h",
+            b"PXAT",
+            b"70368744177664",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hgetex")
+    );
+
+    // A rejected value leaves the existing TTL and field untouched.
+    assert_eq!(
+        c.call(&[b"HPEXPIRE", b"h", b"100000", b"FIELDS", b"1", b"f"]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(
+        c.call(&[b"HPEXPIRE", b"h", b"100000000000000", b"FIELDS", b"1", b"f"]),
+        invalid("hpexpire")
+    );
+    assert_eq!(c.call(&[b"HEXISTS", b"h", b"f"]), integer(1));
+    assert!(matches!(
+        c.call(&[b"HPTTL", b"h", b"FIELDS", b"1", b"f"]),
+        Reply::Array(Some(ref rows)) if matches!(rows[0], Reply::Integer(ttl) if ttl > 50_000)
+    ));
+
+    // HTTL rounds the remaining time up to the next second.
+    for (millis, seconds) in [
+        ("100", 1),
+        ("999", 1),
+        ("1000", 1),
+        ("1001", 2),
+        ("1499", 2),
+        ("2001", 3),
+        ("2500", 3),
+        ("9999", 10),
+    ] {
+        assert_eq!(
+            c.call(&[b"HPEXPIRE", b"h", millis.as_bytes(), b"FIELDS", b"1", b"f"]),
+            array(vec![integer(1)])
+        );
+        assert_eq!(
+            c.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"f"]),
+            array(vec![integer(seconds)]),
+            "{millis}"
+        );
+    }
+}
