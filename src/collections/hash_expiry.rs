@@ -156,7 +156,7 @@ pub(super) fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
 pub(super) fn is_mutating(command: &[Vec<u8>]) -> bool {
     kind(&command[0]).is_some_and(|kind| match kind {
         Kind::Ttl | Kind::Pttl | Kind::Expiretime | Kind::Pexpiretime => false,
-        Kind::Getex => true,
+        // HGETEX carries Redis's write flag, even in its read form.
         _ => true,
     })
 }
