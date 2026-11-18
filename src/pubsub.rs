@@ -361,7 +361,9 @@ impl Hub {
             }
         }
         for (id, writer) in failed {
-            listeners.remove(&id);
+            if let Some(listener) = listeners.remove(&id) {
+                self.remove_patterns(&listener.patterns);
+            }
             // Close the dropped subscriber instead of leaving it half-written.
             let _ = writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
         }
@@ -411,7 +413,10 @@ impl Hub {
     }
 
     fn remove_patterns<'a>(&self, patterns: impl IntoIterator<Item = &'a Vec<u8>>) {
-        let mut counts = self.pattern_counts.lock().unwrap();
+        // Drop tolerates a poisoned lock, so never panic while unwinding.
+        let Ok(mut counts) = self.pattern_counts.lock() else {
+            return;
+        };
         for pattern in patterns {
             if let Some(count) = counts.get_mut(pattern) {
                 *count -= 1;

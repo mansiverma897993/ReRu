@@ -533,6 +533,15 @@ fn numpat_tracks_pattern_reference_counts() {
     assert_eq!(first.call(&[b"RESET"]), Reply::Simple(b"RESET".to_vec()));
     assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(0));
 
+    // The empty pattern is a distinct subscription.
+    assert_eq!(
+        first.call(&[b"PSUBSCRIBE", b""]),
+        ack(b"psubscribe", Some(b""), 1)
+    );
+    assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(1));
+    assert_eq!(first.call(&[b"RESET"]), Reply::Simple(b"RESET".to_vec()));
+    assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(0));
+
     // A disconnect decrements the pattern reference.
     assert_eq!(
         second.call(&[b"PSUBSCRIBE", b"gone:*"]),
@@ -548,4 +557,35 @@ fn numpat_tracks_pattern_reference_counts() {
         assert!(Instant::now() < deadline, "pattern count did not drop");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+fn numpat_drops_patterns_when_a_stalled_subscriber_is_removed() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let server = Server::start();
+    let mut publisher = Client::new(&server);
+    let mut stalled = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    stalled
+        .write_all(&command(&[b"PSUBSCRIBE", b"dropped:*", b"kept:*"]))
+        .unwrap();
+    stalled
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut first = [0u8; 1];
+    assert_eq!(stalled.read(&mut first).unwrap(), 1);
+    assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(2));
+
+    // A large message to a non-reading pattern subscriber makes PUBLISH drop it.
+    let payload = vec![b'x'; 4 * 1024 * 1024];
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while publisher.call(&[b"PUBLISH", b"dropped:x", &payload]) != integer(0) {
+        assert!(Instant::now() < deadline, "subscriber was not dropped");
+    }
+    assert_eq!(publisher.call(&[b"PUBSUB", b"NUMPAT"]), integer(0));
+    assert_eq!(
+        publisher.call(&[b"PUBSUB", b"NUMSUB", b"dropped:x"]),
+        array(vec![bulk(b"dropped:x"), integer(0)])
+    );
 }

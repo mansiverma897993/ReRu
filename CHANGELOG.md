@@ -56,7 +56,6 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   empty `*0`/`*-1` frames are ignored like Redis.
 - `HELLO` reports `replica` on a read-only replica, matching Redis's HELLO role
   field. `INFO` still has no replication section.
-- `PUBSUB NUMPAT` counts unique patterns instead of each client's subscription.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.

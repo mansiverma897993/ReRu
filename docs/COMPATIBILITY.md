@@ -606,8 +606,9 @@ Behavior references: [AUTH](https://redis.io/docs/latest/commands/auth/) and
 Messages are delivered to current subscribers on the same server process.
 Pattern subscriptions use byte-wise, case-sensitive `*`, `?`, bracket ranges,
 and backslash escapes. `PUBSUB NUMPAT` reads a reference-counted pattern map,
-so repeated and shared patterns count once in constant time. A direct and matching pattern subscription on one client
-receive separate messages, and `PUBLISH` counts both. Subscribed RESP2 clients
+so repeated and shared patterns count once in constant time. A direct and
+matching pattern subscription on one client receive separate messages, and
+`PUBLISH` counts both. Subscribed RESP2 clients
 can issue subscription commands, PING, RESET and QUIT. Subscription commands
 inside `MULTI` are queued and executed by `EXEC`, which nests their
 acknowledgements in its reply and leaves the connection subscribed; an invalid
