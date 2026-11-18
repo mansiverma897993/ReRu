@@ -54,13 +54,23 @@ fn number(raw: &[u8]) -> Result<u64> {
         .map(|n| n as u64)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
-fn positive(raw: &[u8]) -> Result<usize> {
-    let n = number(raw)?;
-    if n == 0 {
-        return Err(protocol::error("COUNT must be > 0"));
-    }
-    usize::try_from(n).map_err(|_| protocol::error("value is not an integer or out of range"))
+fn min_idle_time(raw: &[u8], command: &str) -> Result<u64> {
+    let value = protocol::parse_int(raw)
+        .ok_or_else(|| protocol::error(&format!("Invalid min-idle-time argument for {command}")))?;
+    // Redis keeps a signed millisecond value; a negative minimum makes every
+    // pending entry eligible.
+    Ok(u64::try_from(value.max(0)).unwrap_or(0))
 }
+
+fn autoclaim_count(raw: &[u8]) -> Result<usize> {
+    match protocol::parse_int(raw) {
+        Some(value) if value > 0 && value < i64::MAX / 10 => {
+            usize::try_from(value).map_err(|_| protocol::error("COUNT must be > 0"))
+        }
+        _ => Err(protocol::error("COUNT must be > 0")),
+    }
+}
+
 fn syntax<T>() -> Result<T> {
     Err(protocol::error("syntax error"))
 }
@@ -890,7 +900,7 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
 }
 
 fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
-    let min_idle = number(&c[4])?;
+    let min_idle = min_idle_time(&c[4], "XCLAIM")?;
     let now = now_ms();
     let mut ids = Vec::new();
     let mut i = 5;
@@ -1002,14 +1012,14 @@ fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     Ok(array(result))
 }
 fn autoclaim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
-    let min_idle = number(&c[4])?;
+    let min_idle = min_idle_time(&c[4], "XAUTOCLAIM")?;
     let start = id(&c[5])?;
     let mut count = 100;
     let mut justid = false;
     let mut i = 6;
     while i < c.len() {
         if c[i].eq_ignore_ascii_case(b"COUNT") && i + 1 < c.len() {
-            count = positive(&c[i + 1])?;
+            count = autoclaim_count(&c[i + 1])?;
             i += 2;
         } else if c[i].eq_ignore_ascii_case(b"JUSTID") {
             justid = true;

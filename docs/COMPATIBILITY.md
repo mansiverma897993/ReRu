@@ -377,7 +377,7 @@ ID syntax is checked only after those lookups. `XDEL` resolves the key and type
 the same way. `XPENDING` supports summary and range forms,
 IDLE, exclusive bounds and a consumer filter. `XCLAIM` supports IDLE, TIME,
 RETRYCOUNT, FORCE, JUSTID and LASTID, and registers its consumer even when it
-claims nothing. `XAUTOCLAIM` implements bounded scanning (10 x
+claims nothing. `XCLAIM` and `XAUTOCLAIM` accept a negative minimum idle time. `XAUTOCLAIM` implements bounded scanning (10 x
 COUNT), a COUNT shared by claims and deleted pending entries, JUSTID, the Redis
 7 deleted-ID reply, and registers its consumer even when it claims nothing. These provide at-least-once
 processing primitives, not exactly-once application execution.

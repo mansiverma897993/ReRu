@@ -70,6 +70,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `GETEX` validates option syntax first, then the key and type, and only then
   the expiry value, so a missing key replies nil and a wrong type replies
   WRONGTYPE without value errors.
+- `XAUTOCLAIM` and `XCLAIM` accept a negative `min-idle-time` (every pending
+  entry is eligible) and reject non-canonical values with Redis's
+  `Invalid min-idle-time argument` text. `XAUTOCLAIM COUNT` rejects zero,
+  negative, non-canonical, and overflow values with `COUNT must be > 0`.
 - `SET` and `GETEX` parse only the last value of a repeated expiry option and
   reject an `NX`/`XX` conflict as soon as the second flag is seen, so a bad
   earlier value or flag pair no longer wins the error.
