@@ -76,6 +76,15 @@ struct Listener {
     deferred: Vec<u8>,
 }
 
+fn decrement_pattern(counts: &mut HashMap<Vec<u8>, usize>, pattern: &[u8]) {
+    if let Some(count) = counts.get_mut(pattern) {
+        *count -= 1;
+        if *count == 0 {
+            counts.remove(pattern);
+        }
+    }
+}
+
 fn disconnected() -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "subscriber disconnected")
 }
@@ -404,12 +413,7 @@ impl Hub {
 
     fn remove_pattern(&self, pattern: &[u8]) {
         let mut counts = self.pattern_counts.lock().unwrap();
-        if let Some(count) = counts.get_mut(pattern) {
-            *count -= 1;
-            if *count == 0 {
-                counts.remove(pattern);
-            }
-        }
+        decrement_pattern(&mut counts, pattern);
     }
 
     fn remove_patterns<'a>(&self, patterns: impl IntoIterator<Item = &'a Vec<u8>>) {
@@ -418,12 +422,7 @@ impl Hub {
             return;
         };
         for pattern in patterns {
-            if let Some(count) = counts.get_mut(pattern) {
-                *count -= 1;
-                if *count == 0 {
-                    counts.remove(pattern);
-                }
-            }
+            decrement_pattern(&mut counts, pattern);
         }
     }
 
