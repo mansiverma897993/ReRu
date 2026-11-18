@@ -1544,3 +1544,100 @@ fn xclaim_resolves_key_and_group_before_parsing() {
         array(vec![entry(b"1-0", b"v")])
     );
 }
+
+#[test]
+fn stream_arity_and_xgroup_precedence_match_redis() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    let arity = |name: &str| {
+        Reply::Error(format!("ERR wrong number of arguments for '{name}' command").into_bytes())
+    };
+
+    assert_eq!(c.call(&[b"XACK"]), arity("xack"));
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATE", b"s"]),
+        arity("xgroup|create")
+    );
+    assert_eq!(c.call(&[b"XINFO", b"STREAM"]), arity("xinfo|stream"));
+    assert_eq!(
+        c.call(&[b"XGROUP", b"BOGUS", b"x"]),
+        Reply::Error(b"ERR unknown subcommand 'BOGUS'. Try XGROUP HELP.".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"BOGUS", b"x"]),
+        Reply::Error(b"ERR unknown subcommand 'BOGUS'. Try XINFO HELP.".to_vec())
+    );
+    // The echoed token stops at a NUL, while the match itself stays exact.
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM\x00x", b"s"]),
+        Reply::Error(b"ERR unknown subcommand 'STREAM'. Try XINFO HELP.".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"BOGUS\x00x", b"y"]),
+        Reply::Error(b"ERR unknown subcommand 'BOGUS'. Try XGROUP HELP.".to_vec())
+    );
+
+    let requires_key = || {
+        Reply::Error(b"ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.".to_vec())
+    };
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATE", b"nokey", b"g", b"0"]),
+        requires_key()
+    );
+    // The key check precedes ID parsing.
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATE", b"nokey", b"g", b"abc"]),
+        requires_key()
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATE", b"nokey", b"g", b"abc", b"MKSTREAM"]),
+        Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATE", b"nokey", b"g", b"0", b"BOGUS"]),
+        Reply::Error(
+            b"ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP."
+                .to_vec()
+        )
+    );
+
+    assert_eq!(c.call(&[b"SET", b"wrong", b"x"]), ok());
+    let wrong_type = || {
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    };
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATE", b"wrong", b"g", b"0"]),
+        wrong_type()
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATE", b"wrong", b"g", b"abc"]),
+        wrong_type()
+    );
+}
+
+#[test]
+fn xclaim_option_names_are_c_strings() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+    assert!(matches!(
+        c.call(&[b"XREADGROUP", b"GROUP", b"g", b"r", b"STREAMS", b"s", b">"]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"JUSTID\x00x"]),
+        array(vec![bulk(b"1-0")])
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"2-0", b"FORCE\x00x"]),
+        array(vec![])
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"2-0", b"FORCE"]),
+        array(vec![])
+    );
+}

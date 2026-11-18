@@ -266,3 +266,73 @@ fn xrange_count_error_precedence_and_canonical_counts() {
         array(vec![])
     );
 }
+
+#[test]
+fn stream_ids_follow_c_string_parsing() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"5-5", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    for id in [
+        b" 5-5".as_slice(),
+        b"5- 5",
+        b"5-5\x00junk",
+        b"+5-5",
+        b"05-05",
+    ] {
+        assert!(
+            matches!(
+                c.call(&[b"XRANGE", b"s", id, b"+"]),
+                Reply::Array(Some(ref rows)) if rows.len() == 1
+            ),
+            "{id:?}"
+        );
+    }
+    let invalid =
+        || Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec());
+    for id in [b"5-5 ".as_slice(), b"5 -5", b"5-5x"] {
+        assert_eq!(c.call(&[b"XRANGE", b"s", id, b"+"]), invalid(), "{id:?}");
+    }
+    assert_eq!(c.call(&[b"XADD", b"x", b" 9-0", b"f", b"v"]), bulk(b"9-0"));
+    assert_eq!(
+        c.call(&[b"XADD", b"x", b"10-0\x00junk", b"f", b"v"]),
+        bulk(b"10-0")
+    );
+    assert_eq!(c.call(&[b"XADD", b"x", b"11-0 ", b"f", b"v"]), invalid());
+
+    // IDs span the full unsigned 64-bit range, but explicit negatives do not.
+    assert!(matches!(
+        c.call(&[b"XRANGE", b"s", b"-", b"18446744073709551615"]),
+        Reply::Array(Some(ref rows)) if rows.len() == 1
+    ));
+    assert!(matches!(
+        c.call(&[b"XRANGE", b"s", b"9223372036854775808-0", b"+"]),
+        Reply::Array(Some(ref rows)) if rows.is_empty()
+    ));
+    assert_eq!(
+        c.call(&[b"XADD", b"x", b"18446744073709551615-*", b"f", b"v"]),
+        bulk(b"18446744073709551615-0")
+    );
+    assert_eq!(
+        c.call(&[b"XADD", b"x", b"18446744073709551616-0", b"f", b"v"]),
+        invalid()
+    );
+    assert_eq!(
+        c.call(&[b"XADD", b"x", b"0-18446744073709551616", b"f", b"v"]),
+        invalid()
+    );
+    for id in [b"-0".as_slice(), b" -0", b"-00"] {
+        assert_eq!(c.call(&[b"XRANGE", b"s", id, b"+"]), invalid(), "{id:?}");
+    }
+    for id in [b"5--0".as_slice(), b"5--00", b"5--0000", b"5- -0"] {
+        assert!(
+            matches!(
+                c.call(&[b"XRANGE", b"s", id, b"+"]),
+                Reply::Array(Some(ref rows)) if rows.len() == 1
+            ),
+            "{id:?}"
+        );
+    }
+}
