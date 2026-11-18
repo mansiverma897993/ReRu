@@ -105,10 +105,16 @@ fn wrongtype() -> Vec<u8> {
     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()
 }
 fn push_quoted(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend(bytes.iter().map(|byte| match byte {
-        b'\r' | b'\n' => b' ',
-        _ => *byte,
-    }));
+    // Redis formats these names with %s: stop at NUL, keep other bytes raw.
+    out.extend(
+        bytes
+            .iter()
+            .take_while(|byte| **byte != 0)
+            .map(|byte| match byte {
+                b'\r' | b'\n' => b' ',
+                _ => *byte,
+            }),
+    );
 }
 
 fn nogroup(key: &[u8], group: &[u8], read: bool) -> Vec<u8> {
