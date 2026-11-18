@@ -888,12 +888,12 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         3 => 10,
         4 if full => 10,
         6 if full && cstr_eq(&c[4], b"COUNT") => {
-            let value = protocol::parse_int(&c[5])
-                .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
-            if value <= 0 {
-                usize::MAX
-            } else {
-                usize::try_from(value).unwrap_or(usize::MAX)
+            match protocol::parse_int(&c[5]) {
+                None => return Err(protocol::error("value is not an integer or out of range")),
+                // Zero means every entry; a negative count falls back to 10.
+                Some(0) => usize::MAX,
+                Some(value) if value < 0 => 10,
+                Some(value) => usize::try_from(value).unwrap_or(usize::MAX),
             }
         }
         _ => {
@@ -903,7 +903,6 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
             )))
         }
     };
-    let limit = count;
     let mut fields = vec![
         protocol::bulk(b"length"),
         integer(stream.entries.len() as u64),
@@ -951,7 +950,7 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
                 stream
                     .entries
                     .iter()
-                    .take(limit)
+                    .take(count)
                     .map(|entry| entry_reply(entry.id, Some(entry)))
                     .collect(),
             ),
@@ -965,7 +964,7 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
                             group
                                 .pending
                                 .iter()
-                                .take(limit)
+                                .take(count)
                                 .map(|(id, pending)| {
                                     array(vec![
                                         protocol::bulk(id.to_string().as_bytes()),
@@ -1001,7 +1000,7 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
                                         array(
                                             owned
                                                 .into_iter()
-                                                .take(limit)
+                                                .take(count)
                                                 .map(|(id, pending)| {
                                                     array(vec![
                                                         protocol::bulk(id.to_string().as_bytes()),
