@@ -72,7 +72,7 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   WRONGTYPE without value errors.
 - `XCLAIM` resolves the key, type, and group before parsing IDs and options,
   reports `Unrecognized XCLAIM option '<token>'` for unknown tokens, and returns
-  an empty array when no IDs are given.
+  an empty array when only options follow the min-idle time.
 - `XCLAIM` reports `Invalid IDLE/TIME/RETRYCOUNT option argument for XCLAIM`
   for unusable option values, accepts negative values, and `XSETID ...
   ENTRIESADDED` rejects negatives with `entries_added must be positive`.

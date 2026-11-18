@@ -57,7 +57,11 @@ fn number(raw: &[u8]) -> Result<u64> {
 fn unrecognized_option(token: &[u8]) -> Vec<u8> {
     let token = token.split(|byte| *byte == 0).next().unwrap_or(b"");
     let mut reply = b"-ERR Unrecognized XCLAIM option '".to_vec();
-    reply.extend_from_slice(token);
+    // Keep raw bytes but never let a token inject a second reply.
+    reply.extend(token.iter().map(|byte| match byte {
+        b'\r' | b'\n' => b' ',
+        _ => *byte,
+    }));
     reply.extend_from_slice(b"'\r\n");
     reply
 }

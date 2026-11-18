@@ -1511,6 +1511,16 @@ fn xclaim_resolves_key_and_group_before_parsing() {
         c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"IDLE"]),
         unrecognized("IDLE")
     );
+    // Control characters are sanitized and NUL truncates, so one command can
+    // never inject a second reply frame.
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"BAD\r\n+X"]),
+        unrecognized("BAD  +X")
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"BAD\0MORE"]),
+        unrecognized("BAD")
+    );
     assert_eq!(
         c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"LASTID", b"bad"]),
         Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec())
