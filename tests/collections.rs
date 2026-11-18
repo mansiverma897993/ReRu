@@ -1205,13 +1205,13 @@ fn hash_expiry_deadline_range_and_ttl_rounding() {
         );
         assert_eq!(
             c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
-            array(vec![integer(((deadline + 999) / 1000) as i64)]),
+            array(vec![integer(deadline.div_ceil(1000) as i64)]),
             "{offset}"
         );
     }
     assert_eq!(
         c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
-        array(vec![integer(((base + 1999) / 1000) as i64)])
+        array(vec![integer(((base + 1000) / 1000) as i64)])
     );
 
     // A rejected value leaves the existing TTL and field untouched.
