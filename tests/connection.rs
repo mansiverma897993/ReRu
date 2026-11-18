@@ -349,6 +349,14 @@ fn replica_reports_role_and_accepts_connection_metadata() {
     assert_eq!(c.call(&[b"SELECT", b"0"]), ok());
     assert_eq!(c.call(&[b"RESET"]), reset());
     assert!(matches!(c.call(&[b"SET", b"k", b"v"]), Reply::Error(e) if e.starts_with(b"READONLY")));
+    assert!(matches!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"EX", b"10"]),
+        Reply::Error(e) if e.starts_with(b"READONLY")
+    ));
+    assert!(matches!(
+        c.call(&[b"HGETEX", b"h", b"EX", b"10", b"FIELDS", b"1", b"f"]),
+        Reply::Error(e) if e.starts_with(b"READONLY")
+    ));
     assert_eq!(c.call(&[b"CONFIG", b"SET", b"maxclients", b"500"]), ok());
     assert_eq!(
         c.call(&[b"CONFIG", b"GET", b"maxclients"]),

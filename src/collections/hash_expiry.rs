@@ -156,14 +156,13 @@ pub(super) fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
 pub(super) fn is_mutating(command: &[Vec<u8>]) -> bool {
     kind(&command[0]).is_some_and(|kind| match kind {
         Kind::Ttl | Kind::Pttl | Kind::Expiretime | Kind::Pexpiretime => false,
-        Kind::Getex => command
-            .get(2)
-            .is_some_and(|arg| !arg.eq_ignore_ascii_case(b"FIELDS")),
+        Kind::Getex => true,
         _ => true,
     })
 }
 
 fn unknown_argument(token: &[u8]) -> Vec<u8> {
+    let token = token.split(|byte| *byte == 0).next().unwrap_or(b"");
     let mut reply = b"-ERR unknown argument: ".to_vec();
     reply.extend_from_slice(token);
     reply.extend_from_slice(b"\r\n");
@@ -254,7 +253,11 @@ fn parse_arguments<'a>(kind: Kind, command: &'a [Vec<u8>]) -> Result<HashArgumen
         }
         if token.eq_ignore_ascii_case(b"FIELDS") {
             if fields.is_some() {
-                return Err(protocol::error("FIELDS keyword specified multiple times"));
+                return Err(if ttl {
+                    field_list_error(kind)
+                } else {
+                    protocol::error("FIELDS keyword specified multiple times")
+                });
             }
             let (list, next) = parse_field_list(kind, command, at)?;
             fields = Some(list);
@@ -262,7 +265,11 @@ fn parse_arguments<'a>(kind: Kind, command: &'a [Vec<u8>]) -> Result<HashArgumen
             continue;
         }
         if ttl {
-            return Err(field_list_error(kind));
+            return Err(if fields.is_some() {
+                field_list_error(kind)
+            } else {
+                protocol::error("Mandatory argument FIELDS is missing or not at the right position")
+            });
         }
         if let Some(flag) = condition_flag(kind, token) {
             if condition.is_some() {
@@ -348,7 +355,7 @@ fn parse_expiry_token(command: &[Vec<u8>], at: &mut usize) -> Result<Expiration,
     let absolute = token.eq_ignore_ascii_case(b"EXAT") || token.eq_ignore_ascii_case(b"PXAT");
     let raw = command
         .get(*at + 1)
-        .ok_or_else(|| protocol::error("syntax error"))?;
+        .ok_or_else(|| protocol::error("missing expire time"))?;
     let expiry = deadline(raw, millis, absolute)?;
     *at += 2;
     Ok(Expiration::Deadline(expiry))
@@ -364,7 +371,7 @@ fn expiry_conflict(kind: Kind) -> Vec<u8> {
 
 fn field_count_error(kind: Kind) -> Vec<u8> {
     protocol::error(match kind {
-        Kind::Setex => "invalid number of fields",
+        Kind::Setex | Kind::Getex => "invalid number of fields",
         Kind::Ttl | Kind::Pttl | Kind::Expiretime | Kind::Pexpiretime | Kind::Persist => {
             "Number of fields must be a positive integer"
         }
@@ -388,6 +395,13 @@ fn parse_field_list(
 ) -> Result<(&[Vec<u8>], usize), Vec<u8>> {
     let raw = command.get(at + 1).ok_or_else(|| field_count_error(kind))?;
     let parsed = parse_number(raw).map_err(|_| field_count_error(kind))?;
+    if matches!(
+        kind,
+        Kind::Ttl | Kind::Pttl | Kind::Expiretime | Kind::Pexpiretime | Kind::Persist
+    ) && parsed > i64::from(i32::MAX)
+    {
+        return Err(field_list_error(kind));
+    }
     let count = usize::try_from(parsed)
         .ok()
         .filter(|count| *count > 0 && parsed <= i64::from(i32::MAX))

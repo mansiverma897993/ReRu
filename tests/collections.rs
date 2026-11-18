@@ -961,6 +961,36 @@ fn hash_expiry_options_are_accepted_around_fields() {
         c.call(&[b"HTTL", b"h", b"FIELDS", b"0", b"f"]),
         error("Number of fields must be a positive integer")
     );
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"2147483648", b"f"]),
+        error("The `numfields` parameter must match the number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"f", b"FIELDS", b"1", b"f"]),
+        error("The `numfields` parameter must match the number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FOO", b"FIELDS", b"1", b"f"]),
+        error("Mandatory argument FIELDS is missing or not at the right position")
+    );
+
+    // HGETEX uses the HSETEX count text, and a missing expiry value is named.
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"0", b"f"]),
+        error("invalid number of fields")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"EX"]),
+        error("missing expire time")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"FIELDS", b"1", b"f", b"v", b"PXAT"]),
+        error("missing expire time")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"\x00"]),
+        error("unknown argument: ")
+    );
 
     // A wrong type wins before field-list validation for HEXPIRE/HGETEX, but
     // HSETEX validates its arguments first.
