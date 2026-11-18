@@ -803,9 +803,19 @@ fn try_zpop(
     entries: &mut HashMap<Vec<u8>, Entry>,
     options: &ZPopOptions<'_>,
     store: &Store,
+    recheck: bool,
 ) -> Option<Vec<u8>> {
     for key in options.keys {
         remove_expired(entries, key);
+    }
+    // A type error is only reported once the search could return data.
+    let servable = options.keys.iter().any(|key| {
+        matches!(
+            entries.get(key).map(|entry| &entry.value),
+            Some(Value::SortedSet(scores)) if !scores.is_empty()
+        )
+    });
+    for key in options.keys {
         match entries.get_mut(key) {
             Some(Entry {
                 value: Value::SortedSet(scores),
@@ -853,6 +863,9 @@ fn try_zpop(
                 }
                 return Some(reply);
             }
+            // A type change alone does not wake a blocked client, but a wrong
+            // type earlier in the list still wins once another key is ready.
+            Some(_) if recheck && !servable => {}
             Some(_) => {
                 return Some(
                     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
@@ -876,13 +889,14 @@ fn zpop_command(
         Err(error) => return error,
     };
     let blocking = command[0].eq_ignore_ascii_case(b"BZMPOP") || options.legacy;
+    let mut recheck = false;
     loop {
         if connection_closed(probe) {
             return b"*-1\r\n".to_vec();
         }
         let gate = (blocking && allow_blocking).then(|| store.command_gate.lock().unwrap());
         let mut entries = store.entries.lock().unwrap();
-        if let Some(response) = try_zpop(&mut entries, &options, store) {
+        if let Some(response) = try_zpop(&mut entries, &options, store, recheck) {
             return response;
         }
         if !blocking || !allow_blocking {
@@ -894,6 +908,7 @@ fn zpop_command(
             None => return b"*-1\r\n".to_vec(),
         };
         drop(entries);
+        recheck = true;
     }
 }
 

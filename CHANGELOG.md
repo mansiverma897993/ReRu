@@ -70,6 +70,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `GETEX` validates option syntax first, then the key and type, and only then
   the expiry value, so a missing key replies nil and a wrong type replies
   WRONGTYPE without value errors.
+- `BZPOPMIN`, `BZPOPMAX`, and `BZMPOP` stay blocked when a watched key only
+  changes type; a sorted set with data is required to wake them, while an
+  existing wrong type still errors on the first call.
 - Stream IDs use Redis's C-string parsing: leading whitespace before either
   number, `+`, leading zeros, and bytes after a NUL are accepted; trailing bytes
   are rejected. `XGROUP CREATE` resolves the key and type before parsing the ID

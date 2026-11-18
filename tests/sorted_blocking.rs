@@ -93,3 +93,50 @@ fn sorted_blocking_commands_return_immediately_in_transactions() {
         Reply::Error(_)
     ));
 }
+
+#[test]
+fn type_changes_do_not_wake_blocking_sorted_pops() {
+    let server = Server::start();
+    let commands: [Vec<&[u8]>; 3] = [
+        vec![b"BZPOPMIN".as_slice(), b"z", b"2"],
+        vec![b"BZPOPMAX".as_slice(), b"z", b"2"],
+        vec![b"BZMPOP".as_slice(), b"2", b"1", b"z", b"MIN"],
+    ];
+    for command in commands {
+        let mut blocked = Client::new(&server);
+        let mut writer = Client::new(&server);
+        let _ = writer.call(&[b"DEL", b"z"]);
+        let call: Vec<Vec<u8>> = command.iter().map(|arg| arg.to_vec()).collect();
+        let waiter = std::thread::spawn(move || {
+            let args: Vec<&[u8]> = call.iter().map(Vec::as_slice).collect();
+            blocked.call(&args)
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        // A type change alone must not wake the waiter.
+        assert_eq!(writer.call(&[b"SET", b"z", b"text"]), ok());
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!waiter.is_finished(), "{command:?} woke on a type change");
+        // Only a sorted set with data wakes it.
+        assert_eq!(writer.call(&[b"DEL", b"z"]), integer(1));
+        assert_eq!(writer.call(&[b"ZADD", b"z", b"3", b"job"]), integer(1));
+        let result = waiter.join().unwrap();
+        assert!(
+            matches!(result, Reply::Array(Some(_))),
+            "{command:?} -> {result:?}"
+        );
+    }
+
+    // An existing wrong type still errors on the first call.
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"SET", b"wrong", b"text"]), ok());
+    for command in [
+        &[b"BZPOPMIN".as_slice(), b"wrong", b"0.05"] as &[&[u8]],
+        &[b"BZPOPMAX", b"wrong", b"0.05"],
+        &[b"BZMPOP", b"0.05", b"1", b"wrong", b"MIN"],
+    ] {
+        assert!(
+            matches!(c.call(command), Reply::Error(ref message) if message.starts_with(b"WRONGTYPE")),
+            "{command:?}"
+        );
+    }
+}
