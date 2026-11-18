@@ -212,8 +212,8 @@ The index's memory overhead is not included in ReRu's logical maxmemory estimate
 connections, including replication and subscriptions, hold a slot until their
 handler exits. Excess clients receive `ERR max number of clients reached`.
 Blocking list and sorted-set commands ignore a type change alone and wake only
-when data becomes available; an existing wrong type still errors on the first
-call. Blocking list, sorted-set and stream commands probe their TCP connection while
+when data becomes available; a wrong-type key that comes before any key with
+data errors, either on the first call or when another key supplies data. Blocking list, sorted-set and stream commands probe their TCP connection while
 waiting; a closed connection releases its client slot without waiting for a key
 change or command timeout. The probe does not consume pipelined request bytes.
 An OS-unreported half-open connection cannot be detected until TCP reports it.

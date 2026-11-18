@@ -809,12 +809,13 @@ fn try_zpop(
         remove_expired(entries, key);
     }
     // A type error is only reported once the search could return data.
-    let servable = options.keys.iter().any(|key| {
-        matches!(
-            entries.get(key).map(|entry| &entry.value),
-            Some(Value::SortedSet(scores)) if !scores.is_empty()
-        )
-    });
+    let servable = recheck
+        && options.keys.iter().any(|key| {
+            matches!(
+                entries.get(key).map(|entry| &entry.value),
+                Some(Value::SortedSet(scores)) if !scores.is_empty()
+            )
+        });
     for key in options.keys {
         match entries.get_mut(key) {
             Some(Entry {

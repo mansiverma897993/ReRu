@@ -97,15 +97,15 @@ fn sorted_blocking_commands_return_immediately_in_transactions() {
 #[test]
 fn type_changes_do_not_wake_blocking_sorted_pops() {
     let server = Server::start();
-    let commands: [Vec<&[u8]>; 3] = [
-        vec![b"BZPOPMIN".as_slice(), b"z", b"2"],
-        vec![b"BZPOPMAX".as_slice(), b"z", b"2"],
-        vec![b"BZMPOP".as_slice(), b"2", b"1", b"z", b"MIN"],
+    let commands: [(Vec<&[u8]>, bool); 3] = [
+        (vec![b"BZPOPMIN".as_slice(), b"z", b"2"], false),
+        (vec![b"BZPOPMAX".as_slice(), b"z", b"2"], false),
+        (vec![b"BZMPOP".as_slice(), b"2", b"1", b"z", b"MIN"], true),
     ];
-    for command in commands {
+    for (command, zmpop) in commands {
         let mut blocked = Client::new(&server);
         let mut writer = Client::new(&server);
-        let _ = writer.call(&[b"DEL", b"z"]);
+        assert!(matches!(writer.call(&[b"DEL", b"z"]), Reply::Integer(_)));
         let call: Vec<Vec<u8>> = command.iter().map(|arg| arg.to_vec()).collect();
         let waiter = std::thread::spawn(move || {
             let args: Vec<&[u8]> = call.iter().map(Vec::as_slice).collect();
@@ -120,11 +120,33 @@ fn type_changes_do_not_wake_blocking_sorted_pops() {
         assert_eq!(writer.call(&[b"DEL", b"z"]), integer(1));
         assert_eq!(writer.call(&[b"ZADD", b"z", b"3", b"job"]), integer(1));
         let result = waiter.join().unwrap();
-        assert!(
-            matches!(result, Reply::Array(Some(_))),
-            "{command:?} -> {result:?}"
-        );
+        let expected = if zmpop {
+            popped(b"z", &[(b"job", b"3")])
+        } else {
+            array(vec![bulk(b"z"), bulk(b"job"), bulk(b"3")])
+        };
+        assert_eq!(result, expected, "{command:?}");
     }
+
+    // A wrong type before a ready key errors without consuming the ready key.
+    let mut blocked = Client::new(&server);
+    let mut writer = Client::new(&server);
+    assert!(matches!(
+        writer.call(&[b"DEL", b"first", b"ready"]),
+        Reply::Integer(_)
+    ));
+    let waiter = std::thread::spawn(move || blocked.call(&[b"BZPOPMIN", b"first", b"ready", b"2"]));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(writer.call(&[b"SET", b"first", b"text"]), ok());
+    assert_eq!(writer.call(&[b"ZADD", b"ready", b"1", b"m"]), integer(1));
+    assert_eq!(
+        waiter.join().unwrap(),
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    );
+    assert_eq!(
+        writer.call(&[b"ZRANGE", b"ready", b"0", b"-1", b"WITHSCORES"]),
+        array(vec![bulk(b"m"), bulk(b"1")])
+    );
 
     // An existing wrong type still errors on the first call.
     let mut c = Client::new(&server);
@@ -134,8 +156,11 @@ fn type_changes_do_not_wake_blocking_sorted_pops() {
         &[b"BZPOPMAX", b"wrong", b"0.05"],
         &[b"BZMPOP", b"0.05", b"1", b"wrong", b"MIN"],
     ] {
-        assert!(
-            matches!(c.call(command), Reply::Error(ref message) if message.starts_with(b"WRONGTYPE")),
+        assert_eq!(
+            c.call(command),
+            Reply::Error(
+                b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec()
+            ),
             "{command:?}"
         );
     }
