@@ -1178,6 +1178,42 @@ fn hash_expiry_deadline_range_and_ttl_rounding() {
         invalid("hgetex")
     );
 
+    // HEXPIRETIME rounds the absolute second up; HPEXPIRETIME keeps the millis.
+    let base = (SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        / 1000
+        + 100)
+        * 1000;
+    for offset in [0u64, 1, 499, 500, 501, 999, 1000] {
+        let deadline = base + offset;
+        assert_eq!(
+            c.call(&[
+                b"HPEXPIREAT",
+                b"h",
+                deadline.to_string().as_bytes(),
+                b"FIELDS",
+                b"1",
+                b"f",
+            ]),
+            array(vec![integer(1)])
+        );
+        assert_eq!(
+            c.call(&[b"HPEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
+            array(vec![integer(deadline as i64)])
+        );
+        assert_eq!(
+            c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
+            array(vec![integer(deadline.div_ceil(1000) as i64)]),
+            "{offset}"
+        );
+    }
+    assert_eq!(
+        c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
+        array(vec![integer(((base + 1000) / 1000) as i64)])
+    );
+
     // A rejected value leaves the existing TTL and field untouched.
     assert_eq!(
         c.call(&[b"HPEXPIRE", b"h", b"100000", b"FIELDS", b"1", b"f"]),
