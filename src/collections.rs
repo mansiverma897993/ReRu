@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::hash::BuildHasher;
 
 mod hash_expiry;
-pub(crate) use hash_expiry::{FieldDeadline, HashValue};
+pub(crate) use hash_expiry::{FieldDeadline, HashValue, MAX_FIELD_DEADLINE_MS};
 
 #[derive(Clone, Copy)]
 enum Command {

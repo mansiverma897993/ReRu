@@ -174,7 +174,7 @@ fn parse_number(bytes: &[u8]) -> Result<i64, Vec<u8>> {
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
 
-const MAX_FIELD_DEADLINE_MS: i128 = (1 << 46) - 1;
+pub(crate) const MAX_FIELD_DEADLINE_MS: i128 = (1 << 46) - 1;
 
 fn command_name(kind: Kind) -> &'static str {
     match kind {
@@ -619,8 +619,9 @@ fn execute_inner(kind: Kind, command: &[Vec<u8>], store: &Store) -> Result<Vec<u
                     let remaining = at.at.saturating_duration_since(Instant::now());
                     let millis = i64::try_from(remaining.as_millis()).unwrap_or(i64::MAX);
                     if matches!(kind, Kind::Ttl) {
-                        // HTTL rounds the remaining milliseconds up.
-                        millis.saturating_add(999) / 1000
+                        // HTTL rounds the remaining time up to the next second.
+                        i64::try_from(remaining.as_nanos().div_ceil(1_000_000_000))
+                            .unwrap_or(i64::MAX)
                     } else {
                         millis
                     }

@@ -460,6 +460,27 @@ pub fn append(
     Ok(())
 }
 
+/// Older builds accepted field deadlines beyond Redis's 46-bit range. Clamp
+/// them during replay so a legacy AOF still loads.
+fn clamp_field_deadline(command: &mut [Vec<u8>]) {
+    if command.len() < 3 {
+        return;
+    }
+    let millis = command[0].eq_ignore_ascii_case(b"HPEXPIREAT");
+    let seconds = command[0].eq_ignore_ascii_case(b"HEXPIREAT");
+    if !millis && !seconds {
+        return;
+    }
+    let Some(value) = protocol::parse_int(&command[2]) else {
+        return;
+    };
+    let max = crate::collections::MAX_FIELD_DEADLINE_MS;
+    let limit = if millis { max } else { max / 1000 };
+    if i128::from(value) > limit {
+        command[2] = limit.to_string().into_bytes();
+    }
+}
+
 pub fn replay(path: &Path, store: &Store) -> io::Result<()> {
     let file = OpenOptions::new()
         .create(true)
@@ -500,6 +521,8 @@ pub fn replay(path: &Path, store: &Store) -> io::Result<()> {
             }
             committed = reader.stream_position()?;
         } else if let Some(batch) = transaction.as_mut() {
+            let mut command = command;
+            clamp_field_deadline(&mut command);
             batch.push(command);
         } else {
             return Err(invalid("AOF command outside transaction"));
