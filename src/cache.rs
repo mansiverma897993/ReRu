@@ -449,7 +449,14 @@ fn set(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     }
 }
 
-fn getex_options(command: &[Vec<u8>]) -> Result<Expiration, Vec<u8>> {
+struct GetexOptions<'a> {
+    persist: bool,
+    expiry: Option<(&'static [u8], &'a [u8])>,
+}
+
+/// Validate GETEX option syntax only. Redis looks up the key before parsing
+/// the expiry value, so a missing key returns nil without value validation.
+fn getex_options(command: &[Vec<u8>]) -> Result<GetexOptions<'_>, Vec<u8>> {
     let mut persist = false;
     let mut expiry: Option<(&'static [u8], &[u8])> = None;
     let mut index = 2;
@@ -475,15 +482,11 @@ fn getex_options(command: &[Vec<u8>]) -> Result<Expiration, Vec<u8>> {
             return Err(protocol::error("syntax error"));
         }
     }
-    Ok(match expiry {
-        Some((unit, value)) => Expiration::At(deadline(unit, value, "getex")?),
-        None if persist => Expiration::Keep,
-        None => Expiration::Reset,
-    })
+    Ok(GetexOptions { persist, expiry })
 }
 
 fn getex(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
-    let expiration = match getex_options(command) {
+    let options = match getex_options(command) {
         Ok(value) => value,
         Err(error) => return error,
     };
@@ -495,6 +498,14 @@ fn getex(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     };
     let Value::String(value) = &entry.value else {
         return wrong_type();
+    };
+    let expiration = match options.expiry {
+        Some((unit, raw)) => match deadline(unit, raw, "getex") {
+            Ok(value) => Expiration::At(value),
+            Err(error) => return error,
+        },
+        None if options.persist => Expiration::Keep,
+        None => Expiration::Reset,
     };
     let reply = protocol::bulk(value);
     let changed = if command.len() == 2 {
