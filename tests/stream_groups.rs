@@ -1082,3 +1082,143 @@ fn stream_commands_look_up_keys_and_groups_before_parsing_ids() {
         Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec())
     );
 }
+
+#[test]
+fn xautoclaim_signed_min_idle_and_count_validation() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+
+    let count_error = || Reply::Error(b"ERR COUNT must be > 0".to_vec());
+    for count in [
+        b"-1".as_slice(),
+        b"0",
+        b"abc",
+        b"+1",
+        b"010",
+        b"9223372036854775807",
+        b"922337203685477580",
+        b"922337203685477579",
+        b"576460752303423488",
+        b"\xff",
+    ] {
+        assert_eq!(
+            c.call(&[
+                b"XAUTOCLAIM",
+                b"s",
+                b"g",
+                b"c",
+                b"0",
+                b"0-0",
+                b"COUNT",
+                count
+            ]),
+            count_error()
+        );
+    }
+    assert_eq!(
+        c.call(&[
+            b"XAUTOCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"0-0",
+            b"COUNT",
+            b"10000000000"
+        ]),
+        array(vec![bulk(b"0-0"), array(vec![]), array(vec![])])
+    );
+    // The accept-side boundary is one less than the i64::MAX/16 cap.
+    assert_eq!(
+        c.call(&[
+            b"XAUTOCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"0-0",
+            b"COUNT",
+            b"576460752303423487",
+        ]),
+        array(vec![bulk(b"0-0"), array(vec![]), array(vec![])])
+    );
+
+    let min_idle_error =
+        || Reply::Error(b"ERR Invalid min-idle-time argument for XAUTOCLAIM".to_vec());
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"abc", b"0-0"]),
+        min_idle_error()
+    );
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"010", b"0-0"]),
+        min_idle_error()
+    );
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"+1", b"0-0"]),
+        min_idle_error()
+    );
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"-0", b"0-0"]),
+        min_idle_error()
+    );
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"\xff", b"0-0"]),
+        min_idle_error()
+    );
+
+    // A negative minimum idle claims like zero.
+    assert!(matches!(
+        c.call(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"g",
+            b"reader",
+            b"STREAMS",
+            b"s",
+            b">"
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"-1", b"0-0"]),
+        array(vec![
+            bulk(b"0-0"),
+            array(vec![entry(b"1-0", b"v")]),
+            array(vec![])
+        ])
+    );
+    assert_eq!(
+        c.call(&[
+            b"XAUTOCLAIM",
+            b"s",
+            b"g",
+            b"d",
+            b"-9223372036854775808",
+            b"0-0",
+        ]),
+        array(vec![
+            bulk(b"0-0"),
+            array(vec![entry(b"1-0", b"v")]),
+            array(vec![])
+        ])
+    );
+
+    // XCLAIM accepts the same signed minimum idle but rejects non-canonical text.
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"e", b"-1", b"1-0"]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"e", b"-9223372036854775808", b"1-0"]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"e", b"010", b"1-0"]),
+        Reply::Error(b"ERR Invalid min-idle-time argument for XCLAIM".to_vec())
+    );
+}
