@@ -60,6 +60,7 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
+- `HSETEX`, `HGETEX`, and `HEXPIRE` report `wrong number of arguments` for a short field list and `unknown argument: <token>` for extra tokens; `HEXPIRE`/`HGETEX` without `FIELDS` report the command arity error.
 - `GETEX` validates option syntax first, then the key and type, and only then
   the expiry value, so a missing key replies nil and a wrong type replies
   WRONGTYPE without value errors.

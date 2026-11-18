@@ -163,6 +163,13 @@ pub(super) fn is_mutating(command: &[Vec<u8>]) -> bool {
     })
 }
 
+fn unknown_argument(token: &[u8]) -> Vec<u8> {
+    protocol::error(&format!(
+        "unknown argument: {}",
+        String::from_utf8_lossy(token)
+    ))
+}
+
 fn parse_number(bytes: &[u8]) -> Result<i64, Vec<u8>> {
     protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
@@ -173,11 +180,17 @@ fn parse_fields(command: &[Vec<u8>], at: usize, pairs: bool) -> Result<&[Vec<u8>
         .get(at)
         .is_none_or(|word| !word.eq_ignore_ascii_case(b"FIELDS"))
     {
-        return Err(protocol::error("syntax error"));
+        if pairs {
+            return Err(unknown_argument(command.get(at).map_or(b"", Vec::as_slice)));
+        }
+        let name = String::from_utf8_lossy(&command[0]).to_ascii_lowercase();
+        return Err(protocol::error(&format!(
+            "wrong number of arguments for '{name}' command"
+        )));
     }
     let count = command
         .get(at + 1)
-        .ok_or_else(|| protocol::error("syntax error"))?;
+        .ok_or_else(|| protocol::error("wrong number of arguments"))?;
     let invalid_count = || {
         protocol::error(if pairs {
             "invalid number of fields"
@@ -200,12 +213,11 @@ fn parse_fields(command: &[Vec<u8>], at: usize, pairs: bool) -> Result<&[Vec<u8>
     }) else {
         return Err(invalid_count());
     };
-    if end != command.len() {
-        return Err(protocol::error(if pairs {
-            "syntax error"
-        } else {
-            "wrong number of arguments"
-        }));
+    if end > command.len() {
+        return Err(protocol::error("wrong number of arguments"));
+    }
+    if end < command.len() {
+        return Err(unknown_argument(&command[end]));
     }
     Ok(&command[at + 2..])
 }

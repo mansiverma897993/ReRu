@@ -825,3 +825,60 @@ fn negative_hash_field_expiry_is_rejected_without_changes() {
     );
     assert_eq!(c.call(&[b"HGET", b"h", b"new"]), Reply::Bulk(None));
 }
+
+#[test]
+fn hash_field_count_and_arity_errors_match_redis() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"HSET", b"h", b"f", b"v"]), integer(1));
+    let syntax = |message: &str| Reply::Error(format!("ERR {message}").into_bytes());
+
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FOO", b"f"]),
+        syntax("wrong number of arguments for 'hexpire' command")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"f"]),
+        syntax("wrong number of arguments for 'hexpire' command")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"2", b"f"]),
+        syntax("wrong number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"1", b"f", b"g"]),
+        syntax("unknown argument: g")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FOO"]),
+        syntax("wrong number of arguments for 'hgetex' command")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"2", b"f"]),
+        syntax("wrong number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"g"]),
+        syntax("unknown argument: g")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FOO", b"f", b"v"]),
+        syntax("unknown argument: FOO")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"2", b"f", b"v"]),
+        syntax("wrong number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"1", b"f", b"v", b"g", b"w"]),
+        syntax("unknown argument: g")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"1", b"f"]),
+        syntax("wrong number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"1", b"f", b"v"]),
+        integer(1)
+    );
+}
