@@ -146,7 +146,7 @@ fn absolute_set_and_getex_expiry_round_expiretime() {
         assert!((pexpire - deadline.parse::<i64>().unwrap()).abs() <= 1);
         assert_eq!(
             client.call(&[b"EXPIRETIME", b"k"]),
-            integer(base / 1000 + offset / 1000 + i64::from(offset % 1000 >= 500)),
+            integer(base / 1000 + i64::from(offset >= 500)),
             "{offset}"
         );
 
@@ -160,7 +160,7 @@ fn absolute_set_and_getex_expiry_round_expiretime() {
         assert!((pexpire - deadline.parse::<i64>().unwrap()).abs() <= 1);
         assert_eq!(
             client.call(&[b"EXPIRETIME", b"k"]),
-            integer(base / 1000 + offset / 1000 + i64::from(offset % 1000 >= 500)),
+            integer(base / 1000 + i64::from(offset >= 500)),
             "{offset}"
         );
     }
