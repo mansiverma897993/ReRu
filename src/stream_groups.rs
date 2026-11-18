@@ -963,10 +963,13 @@ fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
                 };
             } else if c[i].eq_ignore_ascii_case(b"RETRYCOUNT") {
                 let count = option_number(&c[i + 1], "RETRYCOUNT", "XCLAIM")?;
-                // A negative count means "not given": the claim still increments.
-                if count >= 0 {
-                    retry = Some(u64::try_from(count).unwrap_or(u64::MAX));
-                }
+                // The last option wins; a negative count means "not given", so
+                // the claim still increments the counter.
+                retry = if count >= 0 {
+                    Some(u64::try_from(count).unwrap_or(u64::MAX))
+                } else {
+                    None
+                };
             } else if c[i].eq_ignore_ascii_case(b"LASTID") {
                 lastid = Some(id(&c[i + 1])?);
             } else {

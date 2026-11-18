@@ -1378,6 +1378,23 @@ fn xclaim_negative_options_keep_redis_pending_state() {
         Reply::Array(Some(_))
     ));
     assert_eq!(pending(&mut c).1, 7);
+    // A later negative retry count resets the override to "not given".
+    assert!(matches!(
+        c.call(&[
+            b"XCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"1-0",
+            b"RETRYCOUNT",
+            b"5",
+            b"RETRYCOUNT",
+            b"-1",
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(pending(&mut c).1, 8);
 
     // Negative or oversized delivery times clamp to now, so idle stays small.
     assert!(matches!(
