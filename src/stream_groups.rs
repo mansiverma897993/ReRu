@@ -54,6 +54,11 @@ fn number(raw: &[u8]) -> Result<u64> {
         .map(|n| n as u64)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
+fn option_number(raw: &[u8], option: &str, command: &str) -> Result<i64> {
+    protocol::parse_int(raw)
+        .ok_or_else(|| protocol::error(&format!("Invalid {option} option argument for {command}")))
+}
+
 fn min_idle_time(raw: &[u8], command: &str) -> Result<u64> {
     let value = protocol::parse_int(raw)
         .ok_or_else(|| protocol::error(&format!("Invalid min-idle-time argument for {command}")))?;
@@ -603,7 +608,12 @@ fn set_id(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
             return syntax();
         }
         if c[i].eq_ignore_ascii_case(b"ENTRIESADDED") {
-            added = Some(number(&c[i + 1])?);
+            let value = protocol::parse_int(&c[i + 1])
+                .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
+            if value < 0 {
+                return Err(protocol::error("entries_added must be positive"));
+            }
+            added = Some(value as u64);
         } else if c[i].eq_ignore_ascii_case(b"MAXDELETEDID") {
             deleted = Some(id(&c[i + 1])?);
         } else {
@@ -939,11 +949,14 @@ fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
             i += 1;
         } else if i + 1 < c.len() {
             if c[i].eq_ignore_ascii_case(b"IDLE") {
-                delivered_at = now.saturating_sub(number(&c[i + 1])?);
+                let idle = option_number(&c[i + 1], "IDLE", "XCLAIM")?;
+                delivered_at = now.saturating_sub(u64::try_from(idle.max(0)).unwrap_or(0));
             } else if c[i].eq_ignore_ascii_case(b"TIME") {
-                delivered_at = number(&c[i + 1])?.min(now);
+                let time = option_number(&c[i + 1], "TIME", "XCLAIM")?;
+                delivered_at = u64::try_from(time.max(0)).unwrap_or(0).min(now);
             } else if c[i].eq_ignore_ascii_case(b"RETRYCOUNT") {
-                retry = Some(number(&c[i + 1])?);
+                let count = option_number(&c[i + 1], "RETRYCOUNT", "XCLAIM")?;
+                retry = Some(u64::try_from(count.max(0)).unwrap_or(0));
             } else if c[i].eq_ignore_ascii_case(b"LASTID") {
                 lastid = Some(id(&c[i + 1])?);
             } else {

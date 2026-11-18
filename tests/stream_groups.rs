@@ -1222,3 +1222,101 @@ fn xautoclaim_signed_min_idle_and_count_validation() {
         Reply::Error(b"ERR Invalid min-idle-time argument for XCLAIM".to_vec())
     );
 }
+
+#[test]
+fn xclaim_option_errors_use_redis_text() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+    assert!(matches!(
+        c.call(&[b"XREADGROUP", b"GROUP", b"g", b"r", b"STREAMS", b"s", b">"]),
+        Reply::Array(Some(_))
+    ));
+
+    let option_error = |option: &str| {
+        Reply::Error(format!("ERR Invalid {option} option argument for XCLAIM").into_bytes())
+    };
+    for (option, value) in [("IDLE", b"abc".as_slice()), ("IDLE", b"010")] {
+        assert_eq!(
+            c.call(&[
+                b"XCLAIM",
+                b"s",
+                b"g",
+                b"c",
+                b"0",
+                b"1-0",
+                option.as_bytes(),
+                value,
+            ]),
+            option_error(option)
+        );
+    }
+    for (option, value) in [("TIME", b"abc".as_slice()), ("TIME", b"010")] {
+        assert_eq!(
+            c.call(&[
+                b"XCLAIM",
+                b"s",
+                b"g",
+                b"c",
+                b"0",
+                b"1-0",
+                option.as_bytes(),
+                value,
+            ]),
+            option_error(option)
+        );
+    }
+    for (option, value) in [("RETRYCOUNT", b"abc".as_slice()), ("RETRYCOUNT", b"010")] {
+        assert_eq!(
+            c.call(&[
+                b"XCLAIM",
+                b"s",
+                b"g",
+                b"c",
+                b"0",
+                b"1-0",
+                option.as_bytes(),
+                value,
+            ]),
+            option_error(option)
+        );
+    }
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"IDLE", b"-1"]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"TIME", b"-1"]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+    assert_eq!(
+        c.call(&[
+            b"XCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"1-0",
+            b"RETRYCOUNT",
+            b"-1"
+        ]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+
+    assert_eq!(
+        c.call(&[b"XSETID", b"s", b"5-0", b"ENTRIESADDED", b"-1"]),
+        Reply::Error(b"ERR entries_added must be positive".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XSETID", b"s", b"5-0", b"ENTRIESADDED", b"010"]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XSETID", b"s", b"5-0", b"ENTRIESADDED", b"10"]),
+        ok()
+    );
+}
