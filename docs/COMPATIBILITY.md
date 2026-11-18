@@ -400,7 +400,7 @@ nothing. These provide at-least-once processing primitives, not exactly-once
 application execution.
 
 `XINFO GROUPS/CONSUMERS/STREAM` exposes group cursors, pending counts, consumers,
-entry counters and stream endpoints. STREAM FULL accepts COUNT (zero means all)
+entry counters and stream endpoints. STREAM FULL accepts COUNT (zero means all; a negative count uses the default 10)
 and returns entries plus group/consumer pending lists with delivery timestamps.
 ReRu uses a vector for streams: both radix-tree allocation metrics report zero.
 Consumer diagnostics include the Redis 7.2+ inactive/active-time fields. Newer
