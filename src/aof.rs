@@ -581,16 +581,20 @@ mod tests {
         assert_eq!(commands, 3);
         assert_eq!(members, 8);
 
-        // Strings above the replay budget become SET plus APPEND chunks.
+        // Strings above the replay budget become SET plus APPEND chunks. Use
+        // position-distinct bytes so a reordered chunk is visible.
+        let value: Vec<u8> = (0..70 * 1024 * 1024)
+            .map(|index| (index % 251) as u8)
+            .collect();
         let entry = Entry {
-            value: Value::String(vec![b'y'; 70 * 1024 * 1024]),
+            value: Value::String(value.clone()),
             expires_at: None,
         };
         let mut output = Vec::new();
         append_value(&mut output, b"grown", &entry).unwrap();
         let mut cursor = std::io::Cursor::new(output.as_slice());
         let mut commands = 0;
-        let mut total = 0;
+        let mut reassembled = Vec::with_capacity(value.len());
         while let Some(command) = protocol::read_command(&mut cursor).unwrap() {
             let bytes: usize = command.iter().map(Vec::len).sum();
             assert!(bytes <= MAX_REPLAY_COMMAND_BYTES + 1024, "{bytes} bytes");
@@ -599,11 +603,11 @@ mod tests {
             } else {
                 assert_eq!(command[0], b"APPEND");
             }
-            total += command[2].len();
+            reassembled.extend_from_slice(&command[2]);
             commands += 1;
         }
         assert_eq!(commands, 3);
-        assert_eq!(total, 70 * 1024 * 1024);
+        assert_eq!(reassembled, value);
 
         // Exactly one budget stays a single SET; one extra byte adds an APPEND.
         for (size, expected) in [
