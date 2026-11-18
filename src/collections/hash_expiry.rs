@@ -164,62 +164,15 @@ pub(super) fn is_mutating(command: &[Vec<u8>]) -> bool {
 }
 
 fn unknown_argument(token: &[u8]) -> Vec<u8> {
-    protocol::error(&format!(
-        "unknown argument: {}",
-        String::from_utf8_lossy(token)
-    ))
+    let mut reply = b"-ERR unknown argument: ".to_vec();
+    reply.extend_from_slice(token);
+    reply.extend_from_slice(b"\r\n");
+    reply
 }
 
 fn parse_number(bytes: &[u8]) -> Result<i64, Vec<u8>> {
     protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
-}
-
-fn parse_fields(command: &[Vec<u8>], at: usize, pairs: bool) -> Result<&[Vec<u8>], Vec<u8>> {
-    if command
-        .get(at)
-        .is_none_or(|word| !word.eq_ignore_ascii_case(b"FIELDS"))
-    {
-        if pairs {
-            return Err(unknown_argument(command.get(at).map_or(b"", Vec::as_slice)));
-        }
-        let name = String::from_utf8_lossy(&command[0]).to_ascii_lowercase();
-        return Err(protocol::error(&format!(
-            "wrong number of arguments for '{name}' command"
-        )));
-    }
-    let count = command
-        .get(at + 1)
-        .ok_or_else(|| protocol::error("wrong number of arguments"))?;
-    let invalid_count = || {
-        protocol::error(if pairs {
-            "invalid number of fields"
-        } else {
-            "Parameter `numFields` should be greater than 0"
-        })
-    };
-    // Redis reads the count as a 32-bit integer; larger values are rejected
-    // before the argument count is compared.
-    let parsed = parse_number(count).map_err(|_| invalid_count())?;
-    let count = usize::try_from(parsed)
-        .ok()
-        .filter(|count| *count > 0 && parsed <= i64::from(i32::MAX))
-        .ok_or_else(invalid_count)?;
-    let width = if pairs { 2 } else { 1 };
-    let Some(end) = at.checked_add(2).and_then(|base| {
-        count
-            .checked_mul(width)
-            .and_then(|fields| base.checked_add(fields))
-    }) else {
-        return Err(invalid_count());
-    };
-    if end > command.len() {
-        return Err(protocol::error("wrong number of arguments"));
-    }
-    if end < command.len() {
-        return Err(unknown_argument(&command[end]));
-    }
-    Ok(&command[at + 2..])
 }
 
 fn deadline(raw: &[u8], millis: bool, absolute: bool) -> Result<FieldDeadline, Vec<u8>> {
@@ -268,36 +221,188 @@ enum Condition {
     Fxx,
 }
 
-fn parse_expiration(
-    command: &[Vec<u8>],
-    at: &mut usize,
-    allow_keep: bool,
-) -> Result<Option<Expiration>, Vec<u8>> {
-    let Some(token) = command.get(*at) else {
-        return Ok(None);
+struct HashArguments<'a> {
+    condition: Option<Condition>,
+    expiration: Option<Expiration>,
+    fields: &'a [Vec<u8>],
+}
+
+fn parse_arguments<'a>(kind: Kind, command: &'a [Vec<u8>]) -> Result<HashArguments<'a>, Vec<u8>> {
+    let expire = matches!(
+        kind,
+        Kind::Expire | Kind::Pexpire | Kind::Expireat | Kind::Pexpireat
+    );
+    let ttl = matches!(
+        kind,
+        Kind::Ttl | Kind::Pttl | Kind::Expiretime | Kind::Pexpiretime | Kind::Persist
+    );
+    let setex = matches!(kind, Kind::Setex);
+    let mut condition = None;
+    let mut expiration = None;
+    let mut fields = None;
+    let mut at = 2;
+    while at < command.len() {
+        let token = command[at].as_slice();
+        if expire && at == 2 {
+            expiration = Some(Expiration::Deadline(deadline(
+                &command[2],
+                matches!(kind, Kind::Pexpire | Kind::Pexpireat),
+                matches!(kind, Kind::Expireat | Kind::Pexpireat),
+            )?));
+            at += 1;
+            continue;
+        }
+        if token.eq_ignore_ascii_case(b"FIELDS") {
+            if fields.is_some() {
+                return Err(protocol::error("FIELDS keyword specified multiple times"));
+            }
+            let (list, next) = parse_field_list(kind, command, at)?;
+            fields = Some(list);
+            at = next;
+            continue;
+        }
+        if ttl {
+            return Err(field_list_error(kind));
+        }
+        if let Some(flag) = condition_flag(kind, token) {
+            if condition.is_some() {
+                return Err(protocol::error(if setex {
+                    "Only one of FXX or FNX arguments can be specified"
+                } else {
+                    "Multiple condition flags specified"
+                }));
+            }
+            condition = Some(flag);
+            at += 1;
+            continue;
+        }
+        if is_expiry_token(kind, token) {
+            if expiration.is_some() {
+                return Err(expiry_conflict(kind));
+            }
+            expiration = Some(parse_expiry_token(command, &mut at)?);
+            continue;
+        }
+        return Err(unknown_argument(token));
+    }
+    let Some(fields) = fields else {
+        return Err(protocol::error("wrong number of arguments"));
     };
-    if token.eq_ignore_ascii_case(b"FIELDS") {
-        return Ok(None);
+    Ok(HashArguments {
+        condition,
+        expiration,
+        fields,
+    })
+}
+
+fn condition_flag(kind: Kind, token: &[u8]) -> Option<Condition> {
+    match kind {
+        Kind::Expire | Kind::Pexpire | Kind::Expireat | Kind::Pexpireat => {
+            if token.eq_ignore_ascii_case(b"NX") {
+                Some(Condition::Nx)
+            } else if token.eq_ignore_ascii_case(b"XX") {
+                Some(Condition::Xx)
+            } else if token.eq_ignore_ascii_case(b"GT") {
+                Some(Condition::Gt)
+            } else if token.eq_ignore_ascii_case(b"LT") {
+                Some(Condition::Lt)
+            } else {
+                None
+            }
+        }
+        Kind::Setex => {
+            if token.eq_ignore_ascii_case(b"FNX") {
+                Some(Condition::Fnx)
+            } else if token.eq_ignore_ascii_case(b"FXX") {
+                Some(Condition::Fxx)
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
-    if token.eq_ignore_ascii_case(b"PERSIST") && !allow_keep {
-        *at += 1;
-        return Ok(Some(Expiration::Persist));
+}
+
+fn is_expiry_token(kind: Kind, token: &[u8]) -> bool {
+    let unit = [b"EX".as_slice(), b"PX", b"EXAT", b"PXAT"]
+        .iter()
+        .any(|unit| token.eq_ignore_ascii_case(unit));
+    match kind {
+        Kind::Getex => unit || token.eq_ignore_ascii_case(b"PERSIST"),
+        Kind::Setex => unit || token.eq_ignore_ascii_case(b"KEEPTTL"),
+        _ => false,
     }
-    if token.eq_ignore_ascii_case(b"KEEPTTL") && allow_keep {
+}
+
+fn parse_expiry_token(command: &[Vec<u8>], at: &mut usize) -> Result<Expiration, Vec<u8>> {
+    let token = command[*at].as_slice();
+    if token.eq_ignore_ascii_case(b"PERSIST") {
         *at += 1;
-        return Ok(Some(Expiration::KeepTtl));
+        return Ok(Expiration::Persist);
+    }
+    if token.eq_ignore_ascii_case(b"KEEPTTL") {
+        *at += 1;
+        return Ok(Expiration::KeepTtl);
     }
     let millis = token.eq_ignore_ascii_case(b"PX") || token.eq_ignore_ascii_case(b"PXAT");
     let absolute = token.eq_ignore_ascii_case(b"EXAT") || token.eq_ignore_ascii_case(b"PXAT");
-    if !millis && !absolute && !token.eq_ignore_ascii_case(b"EX") {
-        return Err(protocol::error("syntax error"));
-    }
     let raw = command
         .get(*at + 1)
         .ok_or_else(|| protocol::error("syntax error"))?;
     let expiry = deadline(raw, millis, absolute)?;
     *at += 2;
-    Ok(Some(Expiration::Deadline(expiry)))
+    Ok(Expiration::Deadline(expiry))
+}
+
+fn expiry_conflict(kind: Kind) -> Vec<u8> {
+    protocol::error(if matches!(kind, Kind::Getex) {
+        "Only one of EX, PX, EXAT, PXAT or PERSIST arguments can be specified"
+    } else {
+        "Only one of EX, PX, EXAT, PXAT or KEEPTTL arguments can be specified"
+    })
+}
+
+fn field_count_error(kind: Kind) -> Vec<u8> {
+    protocol::error(match kind {
+        Kind::Setex => "invalid number of fields",
+        Kind::Ttl | Kind::Pttl | Kind::Expiretime | Kind::Pexpiretime | Kind::Persist => {
+            "Number of fields must be a positive integer"
+        }
+        _ => "Parameter `numFields` should be greater than 0",
+    })
+}
+
+fn field_list_error(kind: Kind) -> Vec<u8> {
+    protocol::error(match kind {
+        Kind::Ttl | Kind::Pttl | Kind::Expiretime | Kind::Pexpiretime | Kind::Persist => {
+            "The `numfields` parameter must match the number of arguments"
+        }
+        _ => "wrong number of arguments",
+    })
+}
+
+fn parse_field_list(
+    kind: Kind,
+    command: &[Vec<u8>],
+    at: usize,
+) -> Result<(&[Vec<u8>], usize), Vec<u8>> {
+    let raw = command.get(at + 1).ok_or_else(|| field_count_error(kind))?;
+    let parsed = parse_number(raw).map_err(|_| field_count_error(kind))?;
+    let count = usize::try_from(parsed)
+        .ok()
+        .filter(|count| *count > 0 && parsed <= i64::from(i32::MAX))
+        .ok_or_else(|| field_count_error(kind))?;
+    let width = if matches!(kind, Kind::Setex) { 2 } else { 1 };
+    let Some(end) = count.checked_mul(width).and_then(|fields| {
+        at.checked_add(2)
+            .and_then(|start| start.checked_add(fields))
+    }) else {
+        return Err(field_count_error(kind));
+    };
+    if end > command.len() {
+        return Err(field_list_error(kind));
+    }
+    Ok((&command[at + 2..end], end))
 }
 
 fn array_integers(values: Vec<i64>) -> Vec<u8> {
@@ -320,108 +425,24 @@ pub(super) fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
 }
 
 fn execute_inner(kind: Kind, command: &[Vec<u8>], store: &Store) -> Result<Vec<u8>, Vec<u8>> {
-    let mut at = 2;
-    let mut condition = None;
-    let expiration = match kind {
-        Kind::Expire | Kind::Pexpire | Kind::Expireat | Kind::Pexpireat => {
-            at += 1;
-            if command
-                .get(at)
-                .is_some_and(|token| !token.eq_ignore_ascii_case(b"FIELDS"))
-            {
-                let token = &command[at];
-                condition = if token.eq_ignore_ascii_case(b"NX") {
-                    Some(Condition::Nx)
-                } else if token.eq_ignore_ascii_case(b"XX") {
-                    Some(Condition::Xx)
-                } else if token.eq_ignore_ascii_case(b"GT") {
-                    Some(Condition::Gt)
-                } else if token.eq_ignore_ascii_case(b"LT") {
-                    Some(Condition::Lt)
-                } else {
-                    return Err(protocol::error("syntax error"));
-                };
-                at += 1;
-            }
-            Some(Expiration::Deadline(deadline(
-                &command[2],
-                matches!(kind, Kind::Pexpire | Kind::Pexpireat),
-                matches!(kind, Kind::Expireat | Kind::Pexpireat),
-            )?))
-        }
-        Kind::Getex => parse_expiration(command, &mut at, false)?,
-        Kind::Setex => {
-            if command.get(at).is_some_and(|token| {
-                token.eq_ignore_ascii_case(b"FNX") || token.eq_ignore_ascii_case(b"FXX")
-            }) {
-                condition = Some(if command[at].eq_ignore_ascii_case(b"FNX") {
-                    Condition::Fnx
-                } else {
-                    Condition::Fxx
-                });
-                at += 1;
-            }
-            if condition.is_some()
-                && command.get(at).is_some_and(|token| {
-                    token.eq_ignore_ascii_case(b"FNX") || token.eq_ignore_ascii_case(b"FXX")
-                })
-            {
-                return Err(protocol::error(
-                    "Only one of FXX or FNX arguments can be specified",
-                ));
-            }
-            parse_expiration(command, &mut at, true)?
-        }
-        _ => None,
-    };
-    if let Some(next) = command.get(at) {
-        if matches!(
-            kind,
-            Kind::Expire | Kind::Pexpire | Kind::Expireat | Kind::Pexpireat
-        ) && condition.is_some()
-            && [b"NX".as_slice(), b"XX", b"GT", b"LT"]
-                .iter()
-                .any(|flag| next.eq_ignore_ascii_case(flag))
-        {
-            return Err(protocol::error("Multiple condition flags specified"));
-        }
-        if matches!(kind, Kind::Setex)
-            && condition.is_some()
-            && [b"FNX".as_slice(), b"FXX"]
-                .iter()
-                .any(|flag| next.eq_ignore_ascii_case(flag))
-        {
-            return Err(protocol::error(
-                "Only one of FXX or FNX arguments can be specified",
-            ));
-        }
-        if expiration.is_some()
-            && [
-                b"EX".as_slice(),
-                b"PX",
-                b"EXAT",
-                b"PXAT",
-                b"PERSIST",
-                b"KEEPTTL",
-            ]
-            .iter()
-            .any(|flag| next.eq_ignore_ascii_case(flag))
-        {
-            return Err(protocol::error(if matches!(kind, Kind::Getex) {
-                "Only one of EX, PX, EXAT, PXAT or PERSIST arguments can be specified"
-            } else {
-                "Only one of EX, PX, EXAT, PXAT or KEEPTTL arguments can be specified"
-            }));
-        }
-    }
-    let fields = parse_fields(command, at, matches!(kind, Kind::Setex))?;
+    let setex = matches!(kind, Kind::Setex);
     let key = &command[1];
     let mut entries = store.entries.lock().unwrap();
     remove_expired(&mut entries, key);
-    if entries
+    let wrong_kind = entries
         .get(key)
-        .is_some_and(|entry| !matches!(entry.value, Value::Hash(_)))
-    {
+        .is_some_and(|entry| !matches!(entry.value, Value::Hash(_)));
+    // HSETEX validates its whole argument list before the type check; the
+    // other commands reject a wrong type first.
+    if wrong_kind && !setex {
+        return Err(wrong_type());
+    }
+    let HashArguments {
+        condition,
+        expiration,
+        fields,
+    } = parse_arguments(kind, command)?;
+    if wrong_kind {
         return Err(wrong_type());
     }
     if matches!(kind, Kind::Setex) {
