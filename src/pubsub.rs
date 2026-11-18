@@ -65,6 +65,7 @@ type Writer = Arc<Mutex<TcpStream>>;
 pub struct Hub {
     next_id: AtomicU64,
     listeners: Mutex<HashMap<u64, Listener>>,
+    pattern_counts: Mutex<HashMap<Vec<u8>, usize>>,
 }
 
 struct Listener {
@@ -73,6 +74,15 @@ struct Listener {
     patterns: HashSet<Vec<u8>>,
     held: bool,
     deferred: Vec<u8>,
+}
+
+fn decrement_pattern(counts: &mut HashMap<Vec<u8>, usize>, pattern: &[u8]) {
+    if let Some(count) = counts.get_mut(pattern) {
+        *count -= 1;
+        if *count == 0 {
+            counts.remove(pattern);
+        }
+    }
 }
 
 fn disconnected() -> io::Error {
@@ -89,7 +99,9 @@ impl Drop for ClientSubscription<'_> {
         // A peer dropped by a failed publish may already have removed this
         // entry, and a poisoned lock must not panic during unwinding.
         if let Ok(mut listeners) = self.hub.listeners.lock() {
-            listeners.remove(&self.id);
+            if let Some(listener) = listeners.remove(&self.id) {
+                self.hub.remove_patterns(&listener.patterns);
+            }
         }
     }
 }
@@ -100,6 +112,7 @@ impl ClientSubscription<'_> {
     pub fn reset(&self) {
         if let Some(listener) = self.hub.listeners.lock().unwrap().get_mut(&self.id) {
             listener.channels.clear();
+            self.hub.remove_patterns(&listener.patterns);
             listener.patterns.clear();
         }
     }
@@ -121,10 +134,16 @@ impl ClientSubscription<'_> {
         let Some(listener) = listeners.get_mut(&self.id) else {
             return Err(disconnected());
         };
-        Self::apply_change(listener, command, deadline, |writer, frame, deadline| {
-            let mut writer = writer.lock().unwrap();
-            write_frame(&mut writer, frame, ACK_IDLE, deadline)
-        })
+        Self::apply_change(
+            self.hub,
+            listener,
+            command,
+            deadline,
+            |writer, frame, deadline| {
+                let mut writer = writer.lock().unwrap();
+                write_frame(&mut writer, frame, ACK_IDLE, deadline)
+            },
+        )
     }
 
     /// Apply a subscription change and return the acknowledgement frames
@@ -135,7 +154,7 @@ impl ClientSubscription<'_> {
             return Err(disconnected());
         };
         let mut frames = Vec::new();
-        Self::apply_change(listener, command, deadline, |_, frame, _| {
+        Self::apply_change(self.hub, listener, command, deadline, |_, frame, _| {
             frames.extend_from_slice(frame);
             Ok(())
         })?;
@@ -143,6 +162,7 @@ impl ClientSubscription<'_> {
     }
 
     fn apply_change(
+        hub: &Hub,
         listener: &mut Listener,
         command: &[Vec<u8>],
         deadline: Instant,
@@ -204,7 +224,14 @@ impl ClientSubscription<'_> {
                     &mut listener.channels
                 };
                 if adding {
-                    subscriptions.insert(item.clone());
+                    let inserted = subscriptions.insert(item.clone());
+                    if pattern && inserted {
+                        hub.add_pattern(item);
+                    }
+                } else if pattern {
+                    if subscriptions.remove(item) {
+                        hub.remove_pattern(item);
+                    }
                 } else {
                     subscriptions.remove(item);
                 }
@@ -343,7 +370,9 @@ impl Hub {
             }
         }
         for (id, writer) in failed {
-            listeners.remove(&id);
+            if let Some(listener) = listeners.remove(&id) {
+                self.remove_patterns(&listener.patterns);
+            }
             // Close the dropped subscriber instead of leaving it half-written.
             let _ = writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
         }
@@ -377,13 +406,28 @@ impl Hub {
         response
     }
 
-    fn numpat(&self) -> usize {
-        let listeners = self.listeners.lock().unwrap();
-        let mut patterns = HashSet::new();
-        for listener in listeners.values() {
-            patterns.extend(listener.patterns.iter().cloned());
+    fn add_pattern(&self, pattern: &[u8]) {
+        let mut counts = self.pattern_counts.lock().unwrap();
+        *counts.entry(pattern.to_vec()).or_insert(0) += 1;
+    }
+
+    fn remove_pattern(&self, pattern: &[u8]) {
+        let mut counts = self.pattern_counts.lock().unwrap();
+        decrement_pattern(&mut counts, pattern);
+    }
+
+    fn remove_patterns<'a>(&self, patterns: impl IntoIterator<Item = &'a Vec<u8>>) {
+        // Drop tolerates a poisoned lock, so never panic while unwinding.
+        let Ok(mut counts) = self.pattern_counts.lock() else {
+            return;
+        };
+        for pattern in patterns {
+            decrement_pattern(&mut counts, pattern);
         }
-        patterns.len()
+    }
+
+    fn numpat(&self) -> usize {
+        self.pattern_counts.lock().unwrap().len()
     }
 }
 

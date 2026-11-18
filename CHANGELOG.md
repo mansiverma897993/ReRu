@@ -56,7 +56,6 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   empty `*0`/`*-1` frames are ignored like Redis.
 - `HELLO` reports `replica` on a read-only replica, matching Redis's HELLO role
   field. `INFO` still has no replication section.
-- `PUBSUB NUMPAT` counts unique patterns instead of each client's subscription.
 - `PFADD`, `PFCOUNT`, and `PFMERGE` use the generic WRONGTYPE error for non-string
   keys; a string with a bad sketch header keeps the HyperLogLog-specific text.
 - `QUIT` ignores extra arguments, replies `+OK`, and closes the connection.
@@ -70,6 +69,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `GETEX` validates option syntax first, then the key and type, and only then
   the expiry value, so a missing key replies nil and a wrong type replies
   WRONGTYPE without value errors.
+- `PUBSUB NUMPAT` reads a reference-counted pattern map instead of rebuilding a
+  set of every listener's patterns on each call.
 - `BZPOPMIN`, `BZPOPMAX`, and `BZMPOP` stay blocked when a watched key only
   changes type; a sorted set with data is required to wake them, while an
   existing wrong type still errors on the first call.
