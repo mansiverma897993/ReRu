@@ -15,26 +15,69 @@ impl fmt::Display for StreamId {
     }
 }
 
+const INVALID_ID: &str = "Invalid stream ID specified as stream command argument";
+
+/// Redis treats IDs as C strings: trailing bytes after a NUL are ignored.
+fn nul_terminated(raw: &[u8]) -> &[u8] {
+    &raw[..raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len())]
+}
+
+/// Parse an integer the way C `strtoll` does: leading whitespace and an
+/// optional sign are accepted, and parsing stops at the first non-digit.
+fn parse_c_int(raw: &[u8]) -> Option<(i64, &[u8])> {
+    let mut at = 0;
+    while raw
+        .get(at)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c))
+    {
+        at += 1;
+    }
+    let negative = match raw.get(at) {
+        Some(b'-') => {
+            at += 1;
+            true
+        }
+        Some(b'+') => {
+            at += 1;
+            false
+        }
+        _ => false,
+    };
+    let start = at;
+    let mut magnitude: i128 = 0;
+    while let Some(byte) = raw.get(at).filter(|byte| byte.is_ascii_digit()) {
+        magnitude = magnitude
+            .checked_mul(10)?
+            .checked_add(i128::from(byte - b'0'))?;
+        at += 1;
+    }
+    if at == start {
+        return None;
+    }
+    let value = i64::try_from(if negative { -magnitude } else { magnitude }).ok()?;
+    Some((value, &raw[at..]))
+}
+
 impl StreamId {
     pub fn parse_query(raw: &[u8]) -> Result<Self, &'static str> {
-        let text = std::str::from_utf8(raw)
-            .map_err(|_| "Invalid stream ID specified as stream command argument")?;
-        let (milliseconds, sequence) = match text.split_once('-') {
-            Some((milliseconds, sequence)) => (milliseconds, Some(sequence)),
-            None => (text, None),
-        };
-        let milliseconds = milliseconds
-            .parse::<u64>()
-            .map_err(|_| "Invalid stream ID specified as stream command argument")?;
-        let sequence = match sequence {
-            Some(sequence) => sequence
-                .parse::<u64>()
-                .map_err(|_| "Invalid stream ID specified as stream command argument")?,
-            None => 0,
-        };
+        let bytes = nul_terminated(raw);
+        let (milliseconds, rest) = parse_c_int(bytes).ok_or(INVALID_ID)?;
+        if milliseconds < 0 || rest.first().is_some_and(|byte| *byte != b'-') {
+            return Err(INVALID_ID);
+        }
+        if rest.is_empty() {
+            return Ok(Self {
+                milliseconds: milliseconds as u64,
+                sequence: 0,
+            });
+        }
+        let (sequence, tail) = parse_c_int(&rest[1..]).ok_or(INVALID_ID)?;
+        if sequence < 0 || !tail.is_empty() {
+            return Err(INVALID_ID);
+        }
         Ok(Self {
-            milliseconds,
-            sequence,
+            milliseconds: milliseconds as u64,
+            sequence: sequence as u64,
         })
     }
 }
@@ -78,24 +121,12 @@ impl IdInput {
         if raw == b"*" {
             return Ok(Self::Automatic);
         }
-        let text = std::str::from_utf8(raw)
-            .map_err(|_| "Invalid stream ID specified as stream command argument")?;
-        let Some((milliseconds, sequence)) = text.split_once('-') else {
-            return StreamId::parse_query(raw).map(Self::Explicit);
-        };
-        let milliseconds = milliseconds
-            .parse::<u64>()
-            .map_err(|_| "Invalid stream ID specified as stream command argument")?;
-        if sequence == "*" {
-            return Ok(Self::Partial(milliseconds));
+        if let Some((milliseconds, rest)) = parse_c_int(nul_terminated(raw)) {
+            if milliseconds >= 0 && rest == b"-*" {
+                return Ok(Self::Partial(milliseconds as u64));
+            }
         }
-        let sequence = sequence
-            .parse::<u64>()
-            .map_err(|_| "Invalid stream ID specified as stream command argument")?;
-        Ok(Self::Explicit(StreamId {
-            milliseconds,
-            sequence,
-        }))
+        StreamId::parse_query(raw).map(Self::Explicit)
     }
 }
 
@@ -382,25 +413,30 @@ pub(crate) fn parse_bound(raw: &[u8], upper: bool) -> Result<(StreamId, bool), &
     } else {
         (raw, false)
     };
-    let text = std::str::from_utf8(raw)
-        .map_err(|_| "Invalid stream ID specified as stream command argument")?;
-    let (milliseconds, sequence) = match text.split_once('-') {
-        Some((milliseconds, sequence)) => (milliseconds, Some(sequence)),
-        None => (text, None),
+    let bytes = nul_terminated(raw);
+    let (milliseconds, rest) = parse_c_int(bytes).ok_or(INVALID_ID)?;
+    if milliseconds < 0 || rest.first().is_some_and(|byte| *byte != b'-') {
+        return Err(INVALID_ID);
+    }
+    let (sequence, tail, present) = if rest.is_empty() {
+        (0, b"".as_slice(), false)
+    } else {
+        let (sequence, tail) = parse_c_int(&rest[1..]).ok_or(INVALID_ID)?;
+        (sequence, tail, true)
     };
-    let milliseconds = milliseconds
-        .parse::<u64>()
-        .map_err(|_| "Invalid stream ID specified as stream command argument")?;
-    let sequence = match sequence {
-        Some(sequence) => sequence
-            .parse::<u64>()
-            .map_err(|_| "Invalid stream ID specified as stream command argument")?,
-        None if upper => u64::MAX,
-        None => 0,
+    if sequence < 0 || !tail.is_empty() {
+        return Err(INVALID_ID);
+    }
+    let sequence = if present {
+        sequence as u64
+    } else if upper {
+        u64::MAX
+    } else {
+        0
     };
     Ok((
         StreamId {
-            milliseconds,
+            milliseconds: milliseconds as u64,
             sequence,
         },
         exclusive,

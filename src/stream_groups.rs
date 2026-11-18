@@ -54,6 +54,15 @@ fn number(raw: &[u8]) -> Result<u64> {
         .map(|n| n as u64)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
+/// Option names are C strings: a NUL terminates the comparison.
+fn cstr_eq(token: &[u8], name: &[u8]) -> bool {
+    token
+        .split(|byte| *byte == 0)
+        .next()
+        .unwrap_or(b"")
+        .eq_ignore_ascii_case(name)
+}
+
 fn unrecognized_option(token: &[u8]) -> Vec<u8> {
     let token = token.split(|byte| *byte == 0).next().unwrap_or(b"");
     let mut reply = b"-ERR Unrecognized XCLAIM option '".to_vec();
@@ -177,12 +186,44 @@ pub fn is_mutating(command: &[Vec<u8>]) -> bool {
         && !command[0].eq_ignore_ascii_case(b"XPENDING")
         && !command[0].eq_ignore_ascii_case(b"XINFO")
 }
+fn known_subcommand(command: &[Vec<u8>]) -> bool {
+    let sub = command.get(1).map(|token| token.to_ascii_uppercase());
+    match command[0].to_ascii_uppercase().as_slice() {
+        b"XGROUP" => matches!(
+            sub.as_deref(),
+            Some(b"CREATE" | b"SETID" | b"DESTROY" | b"CREATECONSUMER" | b"DELCONSUMER")
+        ),
+        b"XINFO" => matches!(sub.as_deref(), Some(b"STREAM" | b"GROUPS" | b"CONSUMERS")),
+        _ => true,
+    }
+}
+
+fn arity_error(command: &[Vec<u8>]) -> Vec<u8> {
+    let base = String::from_utf8_lossy(&command[0]).to_ascii_lowercase();
+    let name = match base.as_str() {
+        "xgroup" | "xinfo" => match command.get(1) {
+            Some(sub) => format!(
+                "{base}|{}",
+                String::from_utf8_lossy(sub).to_ascii_lowercase()
+            ),
+            None => base,
+        },
+        _ => base,
+    };
+    protocol::error(&format!("wrong number of arguments for '{name}' command"))
+}
+
 pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
     let valid = valid_arity(command)?;
     if !valid {
-        return Some(protocol::error(
-            "wrong number of arguments or unsupported stream subcommand",
-        ));
+        if command.len() > 1 && !known_subcommand(command) {
+            let sub = String::from_utf8_lossy(&command[1]);
+            let parent = String::from_utf8_lossy(&command[0]).to_ascii_uppercase();
+            return Some(protocol::error(&format!(
+                "unknown subcommand '{sub}'. Try {parent} HELP."
+            )));
+        }
+        return Some(arity_error(command));
     }
     Some(execute_inner(command, store).unwrap_or_else(|error| error))
 }
@@ -208,10 +249,10 @@ fn group_command(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     let setid = sub == b"SETID";
     let mut mkstream = false;
     let mut entries_read = None;
-    let mut parsed_id = None;
+    let mut raw_id = None;
     if create || setid {
         if c[4] != b"$" {
-            parsed_id = Some(id(&c[4])?);
+            raw_id = Some(c[4].as_slice());
         }
         let mut i = 5;
         while i < c.len() {
@@ -226,27 +267,39 @@ fn group_command(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
                 });
                 i += 2;
             } else {
-                return syntax();
+                let sub = String::from_utf8_lossy(&c[1]);
+                return Err(protocol::error(&format!(
+                    "unknown subcommand or wrong number of arguments for '{sub}'. Try XGROUP HELP."
+                )));
             }
         }
     }
     let mut entries = store.entries.lock().unwrap();
     remove_expired(&mut entries, key);
-    if !entries.contains_key(key) {
+    let missing = !entries.contains_key(key);
+    if missing {
         if sub == b"DESTROY" {
             return Ok(integer(0));
         }
-        if create && mkstream {
-            entries.insert(
-                key.clone(),
-                Entry {
-                    value: Value::Stream(Stream::default()),
-                    expires_at: None,
-                },
-            );
-        } else {
-            return Err(protocol::error("The XGROUP subcommand requires the key to exist. Use MKSTREAM to create an empty stream."));
+        if !(create && mkstream) {
+            return Err(protocol::error("The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically."));
         }
+    } else {
+        let _ = stream_mut(&mut entries, key)?;
+    }
+    // Parse the ID only after the key and type are resolved.
+    let parsed_id = match raw_id {
+        Some(raw) => Some(id(raw)?),
+        None => None,
+    };
+    if missing {
+        entries.insert(
+            key.clone(),
+            Entry {
+                value: Value::Stream(Stream::default()),
+                expires_at: None,
+            },
+        );
     }
     let stream = stream_mut(&mut entries, key)?;
     let reply = if create || setid {
@@ -953,31 +1006,31 @@ fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     let mut justid = false;
     let mut lastid = None;
     while i < c.len() {
-        if c[i].eq_ignore_ascii_case(b"FORCE") {
+        if cstr_eq(&c[i], b"FORCE") {
             force = true;
             i += 1;
-        } else if c[i].eq_ignore_ascii_case(b"JUSTID") {
+        } else if cstr_eq(&c[i], b"JUSTID") {
             justid = true;
             i += 1;
         } else if i + 1 < c.len()
             && [b"IDLE".as_slice(), b"TIME", b"RETRYCOUNT", b"LASTID"]
                 .iter()
-                .any(|option| c[i].eq_ignore_ascii_case(option))
+                .any(|option| cstr_eq(&c[i], option))
         {
-            if c[i].eq_ignore_ascii_case(b"IDLE") {
+            if cstr_eq(&c[i], b"IDLE") {
                 let idle = option_number(&c[i + 1], "IDLE", "XCLAIM")?;
                 // Redis clamps a delivery time before 0 or after now to now.
                 delivered_at = now
                     .checked_sub(u64::try_from(idle).unwrap_or(u64::MAX))
                     .unwrap_or(now);
-            } else if c[i].eq_ignore_ascii_case(b"TIME") {
+            } else if cstr_eq(&c[i], b"TIME") {
                 let time = option_number(&c[i + 1], "TIME", "XCLAIM")?;
                 delivered_at = if time < 0 {
                     now
                 } else {
                     u64::try_from(time).unwrap_or(u64::MAX).min(now)
                 };
-            } else if c[i].eq_ignore_ascii_case(b"RETRYCOUNT") {
+            } else if cstr_eq(&c[i], b"RETRYCOUNT") {
                 let count = option_number(&c[i + 1], "RETRYCOUNT", "XCLAIM")?;
                 // The last option wins; a negative count means "not given", so
                 // the claim still increments the counter.

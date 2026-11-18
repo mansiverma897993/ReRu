@@ -266,3 +266,39 @@ fn xrange_count_error_precedence_and_canonical_counts() {
         array(vec![])
     );
 }
+
+#[test]
+fn stream_ids_follow_c_string_parsing() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"5-5", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    for id in [
+        b" 5-5".as_slice(),
+        b"5- 5",
+        b"5-5\x00junk",
+        b"+5-5",
+        b"05-05",
+    ] {
+        assert!(
+            matches!(
+                c.call(&[b"XRANGE", b"s", id, b"+"]),
+                Reply::Array(Some(ref rows)) if rows.len() == 1
+            ),
+            "{id:?}"
+        );
+    }
+    let invalid =
+        || Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec());
+    for id in [b"5-5 ".as_slice(), b"5 -5", b"5-5x"] {
+        assert_eq!(c.call(&[b"XRANGE", b"s", id, b"+"]), invalid(), "{id:?}");
+    }
+    assert_eq!(c.call(&[b"XADD", b"x", b" 9-0", b"f", b"v"]), bulk(b"9-0"));
+    assert_eq!(
+        c.call(&[b"XADD", b"x", b"10-0\x00junk", b"f", b"v"]),
+        bulk(b"10-0")
+    );
+    assert_eq!(c.call(&[b"XADD", b"x", b"11-0 ", b"f", b"v"]), invalid());
+}

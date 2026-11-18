@@ -484,7 +484,7 @@ fn variadic_commands_report_excess_arguments_inside_exec() {
         ),
         (
             &[b"XPENDING", b"s", b"g", b"x"],
-            b"ERR wrong number of arguments or unsupported stream subcommand",
+            b"ERR wrong number of arguments for 'xpending' command",
         ),
         (
             &[b"XRANGE", b"s", b"-", b"+", b"COUNT"],
