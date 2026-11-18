@@ -269,7 +269,7 @@ fn grown_strings_above_the_bulk_limit_survive_restart() {
     let chunk = vec![b'x'; 130 * 1024 * 1024];
     {
         let server = Server::start_with(&["--appendonly", filename]);
-        let mut client = Client::new(&server);
+        let mut client = Client::with_read_timeout(&server, std::time::Duration::from_secs(30));
         assert_eq!(
             client.call(&[b"APPEND", b"gk", &chunk]),
             integer(130 * 1024 * 1024)
@@ -281,7 +281,7 @@ fn grown_strings_above_the_bulk_limit_survive_restart() {
     }
     {
         let server = Server::start_with(&["--appendonly", filename]);
-        let mut client = Client::new(&server);
+        let mut client = Client::with_read_timeout(&server, std::time::Duration::from_secs(30));
         assert_eq!(client.call(&[b"STRLEN", b"gk"]), integer(260 * 1024 * 1024));
     }
     let _ = std::fs::remove_file(path);
