@@ -52,6 +52,20 @@ fn parse_c_uint(raw: &[u8]) -> Option<(u64, &[u8])> {
     Some((u64::try_from(magnitude).ok()?, &raw[at..]))
 }
 
+/// Redis accepts a negative sequence only when its value is zero, including
+/// after leading whitespace.
+fn zero_negative_seq(part: &[u8]) -> Option<(u64, &[u8])> {
+    let mut at = 0;
+    while part
+        .get(at)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c))
+    {
+        at += 1;
+    }
+    let digits = part[at..].strip_prefix(b"-")?;
+    (!digits.is_empty() && digits.iter().all(|byte| *byte == b'0')).then_some((0, b"".as_slice()))
+}
+
 impl StreamId {
     pub fn parse_query(raw: &[u8]) -> Result<Self, &'static str> {
         let bytes = nul_terminated(raw);
@@ -65,12 +79,9 @@ impl StreamId {
                 sequence: 0,
             });
         }
-        // Redis accepts a `-0` sequence (but not other negative sequences).
-        let (sequence, tail) = if &rest[1..] == b"-0" {
-            (0, b"".as_slice())
-        } else {
-            parse_c_uint(&rest[1..]).ok_or(INVALID_ID)?
-        };
+        let (sequence, tail) = parse_c_uint(&rest[1..])
+            .or_else(|| zero_negative_seq(&rest[1..]))
+            .ok_or(INVALID_ID)?;
         if !tail.is_empty() {
             return Err(INVALID_ID);
         }
@@ -419,11 +430,12 @@ pub(crate) fn parse_bound(raw: &[u8], upper: bool) -> Result<(StreamId, bool), &
     }
     let (sequence, tail, present) = if rest.is_empty() {
         (0, b"".as_slice(), false)
-    } else if &rest[1..] == b"-0" {
-        (0, b"".as_slice(), true)
-    } else {
-        let (sequence, tail) = parse_c_uint(&rest[1..]).ok_or(INVALID_ID)?;
+    } else if let Some((sequence, tail)) =
+        parse_c_uint(&rest[1..]).or_else(|| zero_negative_seq(&rest[1..]))
+    {
         (sequence, tail, true)
+    } else {
+        return Err(INVALID_ID);
     };
     if !tail.is_empty() {
         return Err(INVALID_ID);

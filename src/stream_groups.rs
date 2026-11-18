@@ -171,14 +171,10 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
         b"XACK" => n >= 4,
         b"XPENDING" => n == 3 || n >= 6,
         b"XCLAIM" | b"XAUTOCLAIM" => n >= 6,
-        b"XINFO" => match command
-            .get(1)
-            .map(|sub| sub.to_ascii_uppercase())
-            .as_deref()
-        {
-            Some(b"GROUPS") => n == 3,
-            Some(b"CONSUMERS") => n == 4,
-            Some(b"STREAM") => n >= 3,
+        b"XINFO" => match command.get(1) {
+            Some(sub) if xinfo_sub(sub, b"GROUPS") => n == 3,
+            Some(sub) if xinfo_sub(sub, b"CONSUMERS") => n == 4,
+            Some(sub) if xinfo_sub(sub, b"STREAM") => n >= 3,
             _ => false,
         },
         b"XSETID" => n >= 3,
@@ -190,7 +186,12 @@ pub fn is_mutating(command: &[Vec<u8>]) -> bool {
         && !command[0].eq_ignore_ascii_case(b"XPENDING")
         && !command[0].eq_ignore_ascii_case(b"XINFO")
 }
-/// XINFO subcommands compare as C strings; XGROUP requires an exact token.
+/// XINFO accepts a subcommand with exactly one trailing NUL, as Redis does.
+fn xinfo_sub(sub: &[u8], name: &[u8]) -> bool {
+    let sub = sub.strip_suffix(b"\0").unwrap_or(sub);
+    sub.eq_ignore_ascii_case(name)
+}
+
 fn sub_token(command: &[Vec<u8>]) -> Option<&[u8]> {
     command
         .get(1)
@@ -207,13 +208,9 @@ fn known_subcommand(command: &[Vec<u8>]) -> bool {
                 .as_deref(),
             Some(b"CREATE" | b"SETID" | b"DESTROY" | b"CREATECONSUMER" | b"DELCONSUMER")
         ),
-        b"XINFO" => matches!(
-            command
-                .get(1)
-                .map(|sub| sub.to_ascii_uppercase())
-                .as_deref(),
-            Some(b"STREAM" | b"GROUPS" | b"CONSUMERS")
-        ),
+        b"XINFO" => command.get(1).is_some_and(|sub| {
+            xinfo_sub(sub, b"STREAM") || xinfo_sub(sub, b"GROUPS") || xinfo_sub(sub, b"CONSUMERS")
+        }),
         _ => true,
     }
 }
@@ -221,7 +218,7 @@ fn known_subcommand(command: &[Vec<u8>]) -> bool {
 fn arity_error(command: &[Vec<u8>]) -> Vec<u8> {
     let base = String::from_utf8_lossy(&command[0]).to_ascii_lowercase();
     let name = match base.as_str() {
-        "xgroup" | "xinfo" => match command.get(1) {
+        "xgroup" | "xinfo" => match sub_token(command) {
             Some(sub) => format!(
                 "{base}|{}",
                 String::from_utf8_lossy(sub).to_ascii_lowercase()
@@ -758,12 +755,12 @@ fn estimate_read(
 
 fn info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     let sub = &c[1];
-    if sub.eq_ignore_ascii_case(b"STREAM") {
+    if xinfo_sub(sub, b"STREAM") {
         return stream_info(c, store);
     }
     let mut entries = store.entries.lock().unwrap();
     let stream = stream_mut(&mut entries, &c[2])?;
-    if sub.eq_ignore_ascii_case(b"GROUPS") {
+    if xinfo_sub(sub, b"GROUPS") {
         Ok(array(
             stream
                 .groups
