@@ -104,19 +104,33 @@ fn syntax<T>() -> Result<T> {
 fn wrongtype() -> Vec<u8> {
     b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()
 }
+fn push_quoted(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend(bytes.iter().map(|byte| match byte {
+        b'\r' | b'\n' => b' ',
+        _ => *byte,
+    }));
+}
+
 fn nogroup(key: &[u8], group: &[u8], read: bool) -> Vec<u8> {
-    let msg = format!(
-        "No such key '{}' or consumer group '{}'{}",
-        String::from_utf8_lossy(key),
-        String::from_utf8_lossy(group),
-        if read {
-            " in XREADGROUP with GROUP option"
-        } else {
-            ""
-        }
-    )
-    .replace(['\r', '\n'], " ");
-    format!("-NOGROUP {msg}\r\n").into_bytes()
+    let mut reply = b"-NOGROUP No such key '".to_vec();
+    push_quoted(&mut reply, key);
+    reply.extend_from_slice(b"' or consumer group '");
+    push_quoted(&mut reply, group);
+    reply.extend_from_slice(if read {
+        b"' in XREADGROUP with GROUP option\r\n"
+    } else {
+        b"'\r\n"
+    });
+    reply
+}
+
+fn missing_group(key: &[u8], group: &[u8]) -> Vec<u8> {
+    let mut reply = b"-NOGROUP No such consumer group '".to_vec();
+    push_quoted(&mut reply, group);
+    reply.extend_from_slice(b"' for key name '");
+    push_quoted(&mut reply, key);
+    reply.extend_from_slice(b"'\r\n");
+    reply
 }
 fn stream_mut<'a>(entries: &'a mut HashMap<Vec<u8>, Entry>, key: &[u8]) -> Result<&'a mut Stream> {
     remove_expired(entries, key);
@@ -130,15 +144,10 @@ fn stream_mut<'a>(entries: &'a mut HashMap<Vec<u8>, Entry>, key: &[u8]) -> Resul
     }
 }
 fn group_mut<'a>(stream: &'a mut Stream, key: &[u8], name: &[u8]) -> Result<&'a mut Group> {
-    stream.groups.get_mut(name).ok_or_else(|| {
-        let message = format!(
-            "No such consumer group '{}' for key name '{}'",
-            String::from_utf8_lossy(name),
-            String::from_utf8_lossy(key)
-        )
-        .replace(['\r', '\n'], " ");
-        format!("-NOGROUP {message}\r\n").into_bytes()
-    })
+    stream
+        .groups
+        .get_mut(name)
+        .ok_or_else(|| missing_group(key, name))
 }
 fn entry_reply(id: StreamId, entry: Option<&StreamEntry>) -> Vec<u8> {
     array(vec![
@@ -177,9 +186,9 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
         b"XPENDING" => n == 3 || n >= 6,
         b"XCLAIM" | b"XAUTOCLAIM" => n >= 6,
         b"XINFO" => match command.get(1) {
-            Some(sub) if xinfo_sub(sub, b"GROUPS") => n == 3,
-            Some(sub) if xinfo_sub(sub, b"CONSUMERS") => n == 4,
-            Some(sub) if xinfo_sub(sub, b"STREAM") => n >= 3,
+            Some(sub) if sub.eq_ignore_ascii_case(b"GROUPS") => n == 3,
+            Some(sub) if sub.eq_ignore_ascii_case(b"CONSUMERS") => n == 4,
+            Some(sub) if sub.eq_ignore_ascii_case(b"STREAM") => n >= 3,
             _ => false,
         },
         b"XSETID" => n >= 3,
@@ -191,12 +200,6 @@ pub fn is_mutating(command: &[Vec<u8>]) -> bool {
         && !command[0].eq_ignore_ascii_case(b"XPENDING")
         && !command[0].eq_ignore_ascii_case(b"XINFO")
 }
-/// XINFO accepts a subcommand with exactly one trailing NUL, as Redis does.
-fn xinfo_sub(sub: &[u8], name: &[u8]) -> bool {
-    let sub = sub.strip_suffix(b"\0").unwrap_or(sub);
-    sub.eq_ignore_ascii_case(name)
-}
-
 fn sub_token(command: &[Vec<u8>]) -> Option<&[u8]> {
     command
         .get(1)
@@ -214,7 +217,9 @@ fn known_subcommand(command: &[Vec<u8>]) -> bool {
             Some(b"CREATE" | b"SETID" | b"DESTROY" | b"CREATECONSUMER" | b"DELCONSUMER")
         ),
         b"XINFO" => command.get(1).is_some_and(|sub| {
-            xinfo_sub(sub, b"STREAM") || xinfo_sub(sub, b"GROUPS") || xinfo_sub(sub, b"CONSUMERS")
+            sub.eq_ignore_ascii_case(b"STREAM")
+                || sub.eq_ignore_ascii_case(b"GROUPS")
+                || sub.eq_ignore_ascii_case(b"CONSUMERS")
         }),
         _ => true,
     }
@@ -309,10 +314,15 @@ fn group_command(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     } else {
         let _ = stream_mut(&mut entries, key)?;
     }
-    // Parse the ID only after the key and type are resolved.
-    let parsed_id = match raw_id {
-        Some(raw) => Some(id(raw)?),
-        None => None,
+    // CREATE validates the ID before creating an empty stream; SETID resolves
+    // the group before parsing it.
+    let parsed_id = if create {
+        match raw_id {
+            Some(raw) => Some(id(raw)?),
+            None => None,
+        }
+    } else {
+        None
     };
     if missing {
         entries.insert(
@@ -325,10 +335,20 @@ fn group_command(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     }
     let stream = stream_mut(&mut entries, key)?;
     let reply = if create || setid {
+        if setid && !stream.groups.contains_key(name) {
+            return Err(missing_group(key, name));
+        }
+        let last = if create {
+            parsed_id.unwrap_or(stream.last_generated_id)
+        } else {
+            match raw_id {
+                Some(raw) => id(raw)?,
+                None => stream.last_generated_id,
+            }
+        };
         if create && stream.groups.contains_key(name) {
             return Err(b"-BUSYGROUP Consumer Group name already exists\r\n".to_vec());
         }
-        let last = parsed_id.unwrap_or(stream.last_generated_id);
         if create {
             stream.groups.insert(
                 name.clone(),
@@ -764,12 +784,12 @@ fn estimate_read(
 
 fn info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     let sub = &c[1];
-    if xinfo_sub(sub, b"STREAM") {
+    if sub.eq_ignore_ascii_case(b"STREAM") {
         return stream_info(c, store);
     }
     let mut entries = store.entries.lock().unwrap();
     let stream = stream_mut(&mut entries, &c[2])?;
-    if xinfo_sub(sub, b"GROUPS") {
+    if sub.eq_ignore_ascii_case(b"GROUPS") {
         Ok(array(
             stream
                 .groups
@@ -855,6 +875,8 @@ fn group_lag(stream: &Stream, group: &Group) -> Option<u64> {
 }
 
 fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
+    let mut entries = store.entries.lock().unwrap();
+    let stream = stream_mut(&mut entries, &c[2])?;
     let full = c.get(3).is_some_and(|v| v.eq_ignore_ascii_case(b"FULL"));
     let count = match c.len() {
         3 => 10,
@@ -863,13 +885,11 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         _ => {
             return Err(protocol::error(&format!(
                 "unknown subcommand or wrong number of arguments for '{}'. Try XINFO HELP.",
-                String::from_utf8_lossy(&c[1])
+                String::from_utf8_lossy(sub_token(c).unwrap_or(b""))
             )))
         }
     };
     let limit = if count == 0 { usize::MAX } else { count };
-    let mut entries = store.entries.lock().unwrap();
-    let stream = stream_mut(&mut entries, &c[2])?;
     let mut fields = vec![
         protocol::bulk(b"length"),
         integer(stream.entries.len() as u64),

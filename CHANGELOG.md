@@ -72,7 +72,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `XINFO STREAM` argument-shape errors and per-group `NOGROUP` texts match
   Redis: `XGROUP`/`XINFO CONSUMERS` name the missing group, `XPENDING` keeps the
   combined key/group text, and malformed `XINFO STREAM` shapes report the
-  subcommand error.
+  subcommand error after the key and type are resolved. `XGROUP SETID` resolves
+  the group before parsing the ID, and non-UTF-8 key/group names are echoed as
+  raw bytes.
 - Hash field deadlines are capped at the 46-bit millisecond range Redis uses:
   larger `HEXPIRE`/`HPEXPIRE`/`HEXPIREAT`/`HPEXPIREAT`/`HSETEX`/`HGETEX` values
   report `invalid expire time in '<cmd>' command`. `HTTL` rounds the remaining
