@@ -1641,3 +1641,65 @@ fn xclaim_option_names_are_c_strings() {
         array(vec![])
     );
 }
+
+#[test]
+fn stream_group_texts_name_the_group_and_xinfo_stream_shapes() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+
+    let missing_group =
+        || Reply::Error(b"NOGROUP No such consumer group 'nogrp' for key name 's'".to_vec());
+    assert_eq!(
+        c.call(&[b"XGROUP", b"SETID", b"s", b"nogrp", b"0"]),
+        missing_group()
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATECONSUMER", b"s", b"nogrp", b"c"]),
+        missing_group()
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"DELCONSUMER", b"s", b"nogrp", b"c"]),
+        missing_group()
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"CONSUMERS", b"s", b"nogrp"]),
+        missing_group()
+    );
+    assert_eq!(
+        c.call(&[b"XPENDING", b"s", b"nogrp"]),
+        Reply::Error(b"NOGROUP No such key 's' or consumer group 'nogrp'".to_vec())
+    );
+
+    let shape = |token: &str| {
+        Reply::Error(
+            format!(
+                "ERR unknown subcommand or wrong number of arguments for '{token}'. Try XINFO HELP."
+            )
+            .into_bytes(),
+        )
+    };
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"s", b"COUNT", b"1"]),
+        shape("STREAM")
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"stream", b"s", b"count", b"1"]),
+        shape("stream")
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"s", b"FULL", b"COUNT", b"1", b"x"]),
+        shape("STREAM")
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"s", b"FULL", b"BAD"]),
+        shape("STREAM")
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"s", b"COUNT"]),
+        shape("STREAM")
+    );
+}

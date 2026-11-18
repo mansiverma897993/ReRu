@@ -130,10 +130,15 @@ fn stream_mut<'a>(entries: &'a mut HashMap<Vec<u8>, Entry>, key: &[u8]) -> Resul
     }
 }
 fn group_mut<'a>(stream: &'a mut Stream, key: &[u8], name: &[u8]) -> Result<&'a mut Group> {
-    stream
-        .groups
-        .get_mut(name)
-        .ok_or_else(|| nogroup(key, name, false))
+    stream.groups.get_mut(name).ok_or_else(|| {
+        let message = format!(
+            "No such consumer group '{}' for key name '{}'",
+            String::from_utf8_lossy(name),
+            String::from_utf8_lossy(key)
+        )
+        .replace(['\r', '\n'], " ");
+        format!("-NOGROUP {message}\r\n").into_bytes()
+    })
 }
 fn entry_reply(id: StreamId, entry: Option<&StreamEntry>) -> Vec<u8> {
     array(vec![
@@ -620,7 +625,11 @@ fn pending(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     if !entries.contains_key(&c[1]) {
         return Err(nogroup(&c[1], &c[2], false));
     }
-    let group = group_mut(stream_mut(&mut entries, &c[1])?, &c[1], &c[2])?;
+    let stream = stream_mut(&mut entries, &c[1])?;
+    let group = stream
+        .groups
+        .get_mut(&c[2])
+        .ok_or_else(|| nogroup(&c[1], &c[2], false))?;
     if let Some(((start, exclusive_start), (end, exclusive_end), count, consumer, idle)) = range {
         let now = now_ms();
         return Ok(array(
@@ -851,7 +860,12 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         3 => 10,
         4 if full => 10,
         6 if full && c[4].eq_ignore_ascii_case(b"COUNT") => number(&c[5])? as usize,
-        _ => return syntax(),
+        _ => {
+            return Err(protocol::error(&format!(
+                "unknown subcommand or wrong number of arguments for '{}'. Try XINFO HELP.",
+                String::from_utf8_lossy(&c[1])
+            )))
+        }
     };
     let limit = if count == 0 { usize::MAX } else { count };
     let mut entries = store.entries.lock().unwrap();
