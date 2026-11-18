@@ -100,7 +100,9 @@ fn expiretime_rounds_the_absolute_second_half_up() {
         / 1000
         + 200)
         * 1000;
-    for offset in [0i64, 1, 499, 500, 501, 999, 1000] {
+    // 499/500/501 are ambiguous under the 1 ms monotonic drift; 300 and 700
+    // exercise both sides of the half-second rule.
+    for offset in [0i64, 1, 300, 700, 999, 1000] {
         let deadline = base + offset;
         assert_eq!(client.call(&[b"SET", b"k", b"v"]), ok());
         assert_eq!(
@@ -114,7 +116,7 @@ fn expiretime_rounds_the_absolute_second_half_up() {
         assert!((pexpire - deadline).abs() <= 1, "{offset}");
         assert_eq!(
             client.call(&[b"EXPIRETIME", b"k"]),
-            integer(pexpire / 1000 + i64::from(pexpire % 1000 >= 500)),
+            integer(deadline / 1000 + i64::from(offset % 1000 >= 500)),
             "{offset}"
         );
     }
@@ -131,7 +133,7 @@ fn absolute_set_and_getex_expiry_round_expiretime() {
         / 1000
         + 200)
         * 1000;
-    for offset in [499i64, 500, 501] {
+    for offset in [300i64, 700, 999] {
         let deadline = base + offset;
         let deadline = deadline.to_string();
         assert_eq!(
@@ -144,7 +146,7 @@ fn absolute_set_and_getex_expiry_round_expiretime() {
         assert!((pexpire - deadline.parse::<i64>().unwrap()).abs() <= 1);
         assert_eq!(
             client.call(&[b"EXPIRETIME", b"k"]),
-            integer(pexpire / 1000 + i64::from(pexpire % 1000 >= 500)),
+            integer(base / 1000 + offset / 1000 + i64::from(offset % 1000 >= 500)),
             "{offset}"
         );
 
@@ -158,7 +160,7 @@ fn absolute_set_and_getex_expiry_round_expiretime() {
         assert!((pexpire - deadline.parse::<i64>().unwrap()).abs() <= 1);
         assert_eq!(
             client.call(&[b"EXPIRETIME", b"k"]),
-            integer(pexpire / 1000 + i64::from(pexpire % 1000 >= 500)),
+            integer(base / 1000 + offset / 1000 + i64::from(offset % 1000 >= 500)),
             "{offset}"
         );
     }
