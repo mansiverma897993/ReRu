@@ -210,3 +210,113 @@ fn rewrite_errors_preserve_data_and_allow_retry() {
     }
     std::fs::remove_file(path).unwrap();
 }
+
+struct RemoveOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[test]
+fn chunked_strings_survive_rewrite_expiry_and_setrange() {
+    let path = path();
+    let _cleanup = RemoveOnDrop(path.clone());
+    let filename = path.to_str().unwrap();
+    let size = 40 * 1024 * 1024usize;
+    let head = vec![b'x'; 32 * 1024 * 1024];
+    let tail = vec![b'y'; 8 * 1024 * 1024];
+    let timeout = Duration::from_secs(30);
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut c = Client::with_read_timeout(&server, timeout);
+        assert_eq!(
+            c.call(&[b"APPEND", b"grown", &head]),
+            integer(head.len() as i64)
+        );
+        assert_eq!(c.call(&[b"APPEND", b"grown", &tail]), integer(size as i64));
+        assert_eq!(c.call(&[b"PEXPIRE", b"grown", b"600000"]), integer(1));
+        assert_eq!(c.call(&[b"SET", b"ranged", b""]), ok());
+        assert_eq!(
+            c.call(&[
+                b"SETRANGE",
+                b"ranged",
+                (size - 1).to_string().as_bytes(),
+                b"z",
+            ]),
+            integer(size as i64)
+        );
+        let before = std::fs::metadata(&path).unwrap().len();
+        start(&mut c);
+        wait(&mut c, 1);
+        // The rewrite compacts the re-encoded history into a chunked image.
+        assert!(std::fs::metadata(&path).unwrap().len() < before);
+        let base = std::fs::read(&path).unwrap();
+        assert!(
+            base.windows(b"APPEND".len())
+                .any(|window| window == b"APPEND"),
+            "rewritten base is not chunked"
+        );
+    }
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut c = Client::with_read_timeout(&server, timeout);
+        assert_eq!(c.call(&[b"STRLEN", b"grown"]), integer(size as i64));
+        // The first chunk boundary is 32 MiB; the two fills make order visible.
+        assert_eq!(c.call(&[b"GETRANGE", b"grown", b"0", b"0"]), bulk(b"x"));
+        assert_eq!(
+            c.call(&[b"GETRANGE", b"grown", b"33554431", b"33554432"]),
+            bulk(b"xy")
+        );
+        assert_eq!(c.call(&[b"GETRANGE", b"grown", b"-1", b"-1"]), bulk(b"y"));
+        assert!(
+            matches!(c.call(&[b"PTTL", b"grown"]), Reply::Integer(ttl) if ttl > 0 && ttl <= 600_000)
+        );
+
+        assert_eq!(c.call(&[b"STRLEN", b"ranged"]), integer(size as i64));
+        assert_eq!(
+            c.call(&[b"GETRANGE", b"ranged", b"33554431", b"33554432"]),
+            bulk(b"\0\0")
+        );
+        assert_eq!(c.call(&[b"GETRANGE", b"ranged", b"-1", b"-1"]), bulk(b"z"));
+    }
+}
+
+#[test]
+fn chunked_string_tail_replays_without_rewrite() {
+    let path = path();
+    let _cleanup = RemoveOnDrop(path.clone());
+    let filename = path.to_str().unwrap();
+    let head = vec![b'x'; 32 * 1024 * 1024];
+    let tail = vec![b'y'; 8 * 1024 * 1024];
+    let timeout = Duration::from_secs(30);
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut c = Client::with_read_timeout(&server, timeout);
+        assert_eq!(
+            c.call(&[b"APPEND", b"grown", &head]),
+            integer(head.len() as i64)
+        );
+        assert_eq!(
+            c.call(&[b"APPEND", b"grown", &tail]),
+            integer((head.len() + tail.len()) as i64)
+        );
+        assert_eq!(c.call(&[b"PEXPIRE", b"grown", b"600000"]), integer(1));
+    }
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut c = Client::with_read_timeout(&server, timeout);
+        assert_eq!(
+            c.call(&[b"STRLEN", b"grown"]),
+            integer((head.len() + tail.len()) as i64)
+        );
+        assert_eq!(
+            c.call(&[b"GETRANGE", b"grown", b"33554431", b"33554432"]),
+            bulk(b"xy")
+        );
+        assert!(
+            matches!(c.call(&[b"PTTL", b"grown"]), Reply::Integer(ttl) if ttl > 0 && ttl <= 600_000)
+        );
+    }
+}
