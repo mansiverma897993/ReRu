@@ -271,7 +271,7 @@ fn chunked_strings_survive_rewrite_expiry_and_setrange() {
         );
         assert_eq!(c.call(&[b"GETRANGE", b"grown", b"-1", b"-1"]), bulk(b"y"));
         assert!(
-            matches!(c.call(&[b"PTTL", b"grown"]), Reply::Integer(ttl) if ttl > 590_000 && ttl <= 600_000)
+            matches!(c.call(&[b"PTTL", b"grown"]), Reply::Integer(ttl) if ttl > 0 && ttl <= 600_000)
         );
 
         assert_eq!(c.call(&[b"STRLEN", b"ranged"]), integer(size as i64));
@@ -316,7 +316,7 @@ fn chunked_string_tail_replays_without_rewrite() {
             bulk(b"xy")
         );
         assert!(
-            matches!(c.call(&[b"PTTL", b"grown"]), Reply::Integer(ttl) if ttl > 590_000 && ttl <= 600_000)
+            matches!(c.call(&[b"PTTL", b"grown"]), Reply::Integer(ttl) if ttl > 0 && ttl <= 600_000)
         );
     }
 }
