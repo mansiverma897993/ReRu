@@ -950,13 +950,23 @@ fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         } else if i + 1 < c.len() {
             if c[i].eq_ignore_ascii_case(b"IDLE") {
                 let idle = option_number(&c[i + 1], "IDLE", "XCLAIM")?;
-                delivered_at = now.saturating_sub(u64::try_from(idle.max(0)).unwrap_or(0));
+                // Redis clamps a delivery time before 0 or after now to now.
+                delivered_at = now
+                    .checked_sub(u64::try_from(idle).unwrap_or(u64::MAX))
+                    .unwrap_or(now);
             } else if c[i].eq_ignore_ascii_case(b"TIME") {
                 let time = option_number(&c[i + 1], "TIME", "XCLAIM")?;
-                delivered_at = u64::try_from(time.max(0)).unwrap_or(0).min(now);
+                delivered_at = if time < 0 {
+                    now
+                } else {
+                    u64::try_from(time).unwrap_or(u64::MAX).min(now)
+                };
             } else if c[i].eq_ignore_ascii_case(b"RETRYCOUNT") {
                 let count = option_number(&c[i + 1], "RETRYCOUNT", "XCLAIM")?;
-                retry = Some(u64::try_from(count.max(0)).unwrap_or(0));
+                // A negative count means "not given": the claim still increments.
+                if count >= 0 {
+                    retry = Some(u64::try_from(count).unwrap_or(u64::MAX));
+                }
             } else if c[i].eq_ignore_ascii_case(b"LASTID") {
                 lastid = Some(id(&c[i + 1])?);
             } else {
