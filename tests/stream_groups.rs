@@ -1133,6 +1133,20 @@ fn xautoclaim_signed_min_idle_and_count_validation() {
         ]),
         array(vec![bulk(b"0-0"), array(vec![]), array(vec![])])
     );
+    // The accept-side boundary is one less than the i64::MAX/16 cap.
+    assert_eq!(
+        c.call(&[
+            b"XAUTOCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"0-0",
+            b"COUNT",
+            b"576460752303423487",
+        ]),
+        array(vec![bulk(b"0-0"), array(vec![]), array(vec![])])
+    );
 
     let min_idle_error =
         || Reply::Error(b"ERR Invalid min-idle-time argument for XAUTOCLAIM".to_vec());

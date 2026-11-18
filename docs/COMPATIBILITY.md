@@ -380,10 +380,11 @@ RETRYCOUNT, FORCE, JUSTID and LASTID, and registers its consumer even when it
 claims nothing. `XCLAIM` and `XAUTOCLAIM` accept a negative minimum idle time.
 Redis can also reply `Insufficient memory, failed allocating transient memory,
 COUNT too high.` for an enormous `XAUTOCLAIM COUNT`; ReRu scans lazily and does
-not allocate a deleted-ID buffer, so it returns the bounded reply instead. `XAUTOCLAIM` implements bounded scanning (10 x
-COUNT), a COUNT shared by claims and deleted pending entries, JUSTID, the Redis
-7 deleted-ID reply, and registers its consumer even when it claims nothing. These provide at-least-once
-processing primitives, not exactly-once application execution.
+not allocate a deleted-ID buffer, so it returns the bounded reply instead.
+`XAUTOCLAIM` implements bounded scanning (10 x COUNT), a COUNT shared by claims
+and deleted pending entries, JUSTID, the Redis 7 deleted-ID reply, and registers
+its consumer even when it claims nothing. These provide at-least-once processing
+primitives, not exactly-once application execution.
 
 `XINFO GROUPS/CONSUMERS/STREAM` exposes group cursors, pending counts, consumers,
 entry counters and stream endpoints. STREAM FULL accepts COUNT (zero means all)
