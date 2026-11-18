@@ -261,3 +261,36 @@ fn aof_clamps_legacy_out_of_range_field_deadlines() {
     }
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn grown_strings_above_the_bulk_limit_survive_restart() {
+    let path = path();
+    let filename = path.to_str().unwrap();
+    let first = vec![b'x'; 130 * 1024 * 1024];
+    let second = vec![b'y'; 130 * 1024 * 1024];
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut client = Client::with_read_timeout(&server, std::time::Duration::from_secs(30));
+        assert_eq!(
+            client.call(&[b"APPEND", b"gk", &first]),
+            integer(130 * 1024 * 1024)
+        );
+        assert_eq!(
+            client.call(&[b"APPEND", b"gk", &second]),
+            integer(260 * 1024 * 1024)
+        );
+    }
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut client = Client::with_read_timeout(&server, std::time::Duration::from_secs(30));
+        assert_eq!(client.call(&[b"STRLEN", b"gk"]), integer(260 * 1024 * 1024));
+        // Bytes and chunk order survive the split image.
+        assert_eq!(
+            client.call(&[b"GETRANGE", b"gk", b"136314878", b"136314881"]),
+            bulk(b"xxyy")
+        );
+        assert_eq!(client.call(&[b"GETRANGE", b"gk", b"0", b"0"]), bulk(b"x"));
+        assert_eq!(client.call(&[b"GETRANGE", b"gk", b"-1", b"-1"]), bulk(b"y"));
+    }
+    let _ = std::fs::remove_file(path);
+}

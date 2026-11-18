@@ -221,7 +221,19 @@ where
 
 fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<()> {
     match &entry.value {
-        Value::String(value) => command(output, &[b"SET", key, value]),
+        Value::String(value) => {
+            if value.len() <= MAX_REPLAY_COMMAND_BYTES {
+                command(output, &[b"SET", key, value]);
+            } else {
+                // A grown string can exceed the protocol bulk limit; emit it in
+                // replay-sized chunks so the AOF still loads.
+                let (first, rest) = value.split_at(MAX_REPLAY_COMMAND_BYTES);
+                command(output, &[b"SET", key, first]);
+                for chunk in rest.chunks(MAX_REPLAY_COMMAND_BYTES) {
+                    command(output, &[b"APPEND", key, chunk]);
+                }
+            }
+        }
         Value::List(items) => {
             chunk_items(items.iter().map(Vec::as_slice), |chunk| {
                 let mut args: Vec<&[u8]> = vec![b"RPUSH", key];
@@ -568,6 +580,53 @@ mod tests {
         // One 72 MiB command would exceed the 64 MiB replay limit.
         assert_eq!(commands, 3);
         assert_eq!(members, 8);
+
+        // Strings above the replay budget become SET plus APPEND chunks. Use
+        // position-distinct bytes so a reordered chunk is visible.
+        let value: Vec<u8> = (0..70 * 1024 * 1024)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let entry = Entry {
+            value: Value::String(value.clone()),
+            expires_at: None,
+        };
+        let mut output = Vec::new();
+        append_value(&mut output, b"grown", &entry).unwrap();
+        let mut cursor = std::io::Cursor::new(output.as_slice());
+        let mut commands = 0;
+        let mut reassembled = Vec::with_capacity(value.len());
+        while let Some(command) = protocol::read_command(&mut cursor).unwrap() {
+            let bytes: usize = command.iter().map(Vec::len).sum();
+            assert!(bytes <= MAX_REPLAY_COMMAND_BYTES + 1024, "{bytes} bytes");
+            if commands == 0 {
+                assert_eq!(command[0], b"SET");
+            } else {
+                assert_eq!(command[0], b"APPEND");
+            }
+            reassembled.extend_from_slice(&command[2]);
+            commands += 1;
+        }
+        assert_eq!(commands, 3);
+        assert_eq!(reassembled, value);
+
+        // Exactly one budget stays a single SET; one extra byte adds an APPEND.
+        for (size, expected) in [
+            (MAX_REPLAY_COMMAND_BYTES, 1),
+            (MAX_REPLAY_COMMAND_BYTES + 1, 2),
+        ] {
+            let entry = Entry {
+                value: Value::String(vec![b'z'; size]),
+                expires_at: None,
+            };
+            let mut output = Vec::new();
+            append_value(&mut output, b"edge", &entry).unwrap();
+            let mut cursor = std::io::Cursor::new(output.as_slice());
+            let mut commands = 0;
+            while let Some(_command) = protocol::read_command(&mut cursor).unwrap() {
+                commands += 1;
+            }
+            assert_eq!(commands, expected, "{size} bytes");
+        }
     }
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
