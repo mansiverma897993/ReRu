@@ -506,7 +506,9 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
                             Some(milliseconds) if name.eq_ignore_ascii_case(b"PEXPIRETIME") => {
                                 milliseconds
                             }
-                            Some(milliseconds) => milliseconds.saturating_add(500) / 1000,
+                            Some(milliseconds) => {
+                                milliseconds / 1000 + i64::from(milliseconds % 1000 >= 500)
+                            }
                             None => return Some(protocol::error("expire time out of range")),
                         }
                     } else if name.eq_ignore_ascii_case(b"PTTL") {
