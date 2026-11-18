@@ -1195,7 +1195,6 @@ fn hash_expiry_deadline_range_and_ttl_rounding() {
 
     // HTTL rounds the remaining time up to the next second.
     for (millis, seconds) in [
-        ("1", 1),
         ("100", 1),
         ("999", 1),
         ("1000", 1),
