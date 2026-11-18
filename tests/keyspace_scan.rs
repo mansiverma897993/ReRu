@@ -88,3 +88,80 @@ fn randomkey_and_expiretime_handle_missing_and_absolute_deadlines() {
         matches!(client.call(&[b"EXPIRETIME", b"only"]), Reply::Integer(value) if (future / 1000 - value).abs() <= 1)
     );
 }
+
+#[test]
+fn expiretime_rounds_the_absolute_second_half_up() {
+    let server = Server::start();
+    let mut client = Client::new(&server);
+    let base = (SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        / 1000
+        + 200)
+        * 1000;
+    // 499/500/501 are ambiguous under the 1 ms monotonic drift; 300 and 700
+    // exercise both sides of the half-second rule.
+    for offset in [0i64, 1, 300, 700, 999, 1000] {
+        let deadline = base + offset;
+        assert_eq!(client.call(&[b"SET", b"k", b"v"]), ok());
+        assert_eq!(
+            client.call(&[b"PEXPIREAT", b"k", deadline.to_string().as_bytes()]),
+            integer(1)
+        );
+        // The key stores a monotonic deadline, so allow a millisecond of drift.
+        let Reply::Integer(pexpire) = client.call(&[b"PEXPIRETIME", b"k"]) else {
+            panic!("PEXPIRETIME must return an integer")
+        };
+        assert!((pexpire - deadline).abs() <= 1, "{offset}");
+        assert_eq!(
+            client.call(&[b"EXPIRETIME", b"k"]),
+            integer(deadline / 1000 + i64::from(offset % 1000 >= 500)),
+            "{offset}"
+        );
+    }
+}
+
+#[test]
+fn absolute_set_and_getex_expiry_round_expiretime() {
+    let server = Server::start();
+    let mut client = Client::new(&server);
+    let base = (SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        / 1000
+        + 200)
+        * 1000;
+    for offset in [300i64, 700, 999] {
+        let deadline = base + offset;
+        let deadline = deadline.to_string();
+        assert_eq!(
+            client.call(&[b"SET", b"k", b"v", b"PXAT", deadline.as_bytes()]),
+            ok()
+        );
+        let Reply::Integer(pexpire) = client.call(&[b"PEXPIRETIME", b"k"]) else {
+            panic!("PEXPIRETIME must return an integer")
+        };
+        assert!((pexpire - deadline.parse::<i64>().unwrap()).abs() <= 1);
+        assert_eq!(
+            client.call(&[b"EXPIRETIME", b"k"]),
+            integer(base / 1000 + i64::from(offset >= 500)),
+            "{offset}"
+        );
+
+        assert_eq!(
+            client.call(&[b"GETEX", b"k", b"PXAT", deadline.as_bytes()]),
+            bulk(b"v")
+        );
+        let Reply::Integer(pexpire) = client.call(&[b"PEXPIRETIME", b"k"]) else {
+            panic!("PEXPIRETIME must return an integer")
+        };
+        assert!((pexpire - deadline.parse::<i64>().unwrap()).abs() <= 1);
+        assert_eq!(
+            client.call(&[b"EXPIRETIME", b"k"]),
+            integer(base / 1000 + i64::from(offset >= 500)),
+            "{offset}"
+        );
+    }
+}
