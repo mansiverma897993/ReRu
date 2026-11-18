@@ -245,6 +245,10 @@ fn aof_clamps_legacy_out_of_range_field_deadlines() {
         b"*1\r\n$5\r\nMULTI\r\n*6\r\n$10\r\nHPEXPIREAT\r\n$1\r\nh\r\n$15\r\n101795017799627\r\n$6\r\nFIELDS\r\n$1\r\n1\r\n$1\r\nf\r\n*1\r\n$4\r\nEXEC\r\n",
     )
     .unwrap();
+    file.write_all(
+        b"*1\r\n$5\r\nMULTI\r\n*6\r\n$9\r\nHEXPIREAT\r\n$1\r\nh\r\n$15\r\n101795017799627\r\n$6\r\nFIELDS\r\n$1\r\n1\r\n$1\r\nf\r\n*1\r\n$4\r\nEXEC\r\n",
+    )
+    .unwrap();
     drop(file);
     {
         let server = Server::start_with(&["--appendonly", filename]);
