@@ -124,7 +124,9 @@ or second-to-millisecond overflow returns `invalid expire time`. Relative
 expiries near `i64` milliseconds keep the key in ReRu where Redis's own
 arithmetic overflows and drops it. `SET` allows repeated
 `NX`/`XX`/`GET`/`KEEPTTL` flags and last-wins repeated expiry options with the
-same unit; `GETEX` does the same for `PERSIST`. Mixing expiry units, or
+same unit; `GETEX` does the same for `PERSIST` and
+checks option syntax, then the key and type, then the expiry value, matching
+Redis's nil/WRONGTYPE precedence. Mixing expiry units, or
 combining an expiry with `KEEPTTL`/`PERSIST`, is a syntax error.
 
 `LCS` returns the longest common subsequence of two string values. `LEN`

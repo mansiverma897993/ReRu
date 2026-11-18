@@ -835,3 +835,53 @@ fn repeated_expiry_parses_only_the_last_value_and_flags_fail_first() {
     assert_eq!(c.call(&[b"TTL", b"g"]), integer(10));
     assert_eq!(c.call(&[b"GETEX", b"g", b"EX", b"foo", b"PERSIST"]), syntax);
 }
+
+#[test]
+fn getex_validates_expiry_after_the_key_lookup() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    let syntax = Reply::Error(b"ERR syntax error".to_vec());
+
+    assert_eq!(
+        c.call(&[b"GETEX", b"missing", b"EX", b"abc"]),
+        Reply::Bulk(None)
+    );
+    assert_eq!(
+        c.call(&[b"GETEX", b"missing", b"EX", b"0"]),
+        Reply::Bulk(None)
+    );
+    assert_eq!(c.call(&[b"GETEX", b"missing", b"EX"]), syntax);
+    assert_eq!(c.call(&[b"GETEX", b"missing", b"FOO"]), syntax);
+    assert_eq!(
+        c.call(&[b"GETEX", b"missing", b"EX", b"10", b"FOO"]),
+        syntax
+    );
+    assert_eq!(
+        c.call(&[b"GETEX", b"missing", b"PERSIST", b"EX", b"10"]),
+        syntax
+    );
+
+    assert_eq!(c.call(&[b"RPUSH", b"wrong", b"a"]), integer(1));
+    let wrong_type = || {
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    };
+    assert_eq!(c.call(&[b"GETEX", b"wrong", b"EX", b"abc"]), wrong_type());
+    assert_eq!(c.call(&[b"GETEX", b"wrong", b"EX", b"0"]), wrong_type());
+    assert_eq!(c.call(&[b"GETEX", b"wrong", b"PERSIST"]), wrong_type());
+    assert_eq!(c.call(&[b"GETEX", b"wrong", b"FOO"]), syntax);
+
+    assert_eq!(c.call(&[b"SET", b"k", b"v"]), ok());
+    assert_eq!(
+        c.call(&[b"GETEX", b"k", b"EX", b"abc"]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"GETEX", b"k", b"EX", b"0"]),
+        Reply::Error(b"ERR invalid expire time in 'getex' command".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"GETEX", b"k", b"EX", b"10"]),
+        Reply::Bulk(Some(b"v".to_vec()))
+    );
+    assert_eq!(c.call(&[b"TTL", b"k"]), integer(10));
+}
