@@ -506,10 +506,17 @@ fn stream_diagnostics_include_pending_owners_limits_and_deleted_metadata() {
         c.call(&[b"XINFO", b"STREAM", b"s", b"COUNT", b"1"]),
         Reply::Error(_)
     ));
-    assert!(matches!(
-        c.call(&[b"XINFO", b"STREAM", b"s", b"FULL", b"COUNT", b"-1"]),
-        Reply::Error(_)
-    ));
+    let full = c.call(&[b"XINFO", b"STREAM", b"s", b"FULL", b"COUNT", b"-1"]);
+    assert_eq!(rows(field(&full, b"entries")).len(), 2);
+    let full = c.call(&[
+        b"XINFO",
+        b"STREAM",
+        b"s",
+        b"FULL\x00junk",
+        b"COUNT\x00junk",
+        b"1",
+    ]);
+    assert_eq!(rows(field(&full, b"entries")).len(), 1);
     c.call(&[b"MULTI"]);
     c.call(&[b"XLEN", b"s"]);
     assert_eq!(c.call(&[b"EXEC"]), array(vec![integer(2)]));
@@ -1752,5 +1759,42 @@ fn stream_group_texts_name_the_group_and_xinfo_stream_shapes() {
     assert_eq!(
         c.call(&[b"XINFO", b"stream\x00", b"s", b"COUNT", b"1"]),
         Reply::Error(b"ERR unknown subcommand 'stream'. Try XINFO HELP.".to_vec())
+    );
+}
+
+#[test]
+fn xinfo_stream_count_zero_is_unlimited_and_negative_uses_the_default() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    for index in 1..=11 {
+        let id = format!("{index}-0");
+        assert!(matches!(
+            c.call(&[b"XADD", b"big", id.as_bytes(), b"f", b"v"]),
+            Reply::Bulk(Some(_))
+        ));
+    }
+
+    for count in [b"-1".as_slice(), b"-100", b"-9223372036854775808"] {
+        let full = c.call(&[b"XINFO", b"STREAM", b"big", b"FULL", b"COUNT", count]);
+        assert_eq!(
+            rows(field(&full, b"entries")).len(),
+            10,
+            "{count:?} must fall back to the default count"
+        );
+    }
+    for count in [b"0".as_slice(), b"9223372036854775807"] {
+        let full = c.call(&[b"XINFO", b"STREAM", b"big", b"FULL", b"COUNT", count]);
+        assert_eq!(rows(field(&full, b"entries")).len(), 11, "{count:?}");
+    }
+    assert_eq!(
+        c.call(&[
+            b"XINFO",
+            b"STREAM",
+            b"big",
+            b"FULL",
+            b"COUNT",
+            b"9223372036854775808",
+        ]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
     );
 }

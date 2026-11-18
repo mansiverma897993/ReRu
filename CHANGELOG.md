@@ -69,6 +69,8 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 - `GETEX` validates option syntax first, then the key and type, and only then
   the expiry value, so a missing key replies nil and a wrong type replies
   WRONGTYPE without value errors.
+- `XINFO STREAM` compares `FULL` and `COUNT` as C strings, treats `COUNT 0` as
+  unlimited, and falls back to the default count of 10 for a negative count.
 - `XINFO STREAM` argument-shape errors and per-group `NOGROUP` texts match
   Redis: `XGROUP`/`XINFO CONSUMERS` name the missing group, `XPENDING` keeps the
   combined key/group text, and malformed `XINFO STREAM` shapes report the

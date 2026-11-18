@@ -389,8 +389,7 @@ Stream IDs are parsed as C strings: leading whitespace, a leading `+`, leading
 zeros, and a NUL terminator are accepted, while trailing bytes are not. Stream
 subcommand arity errors name the command or `parent|subcommand`, and unknown
 subcommands are reported. A few stream keyword comparisons remain exact rather
-than C-string (`XADD`/`XTRIM`/`XGROUP`/`XAUTOCLAIM` and `XINFO` options with a
-NUL suffix),
+than C-string (`XADD`/`XTRIM`/`XGROUP`/`XAUTOCLAIM` options with a NUL suffix),
 `XAUTOCLAIM`'s start ID, `XGROUP SETID`, and `XREAD` IDs do not accept `+`/`-`,
 `XGROUP DESTROY` on a missing key replies 0, `ENTRIESREAD` uses the generic
 integer error and its reporting differs from Redis, and some `XTRIM`/`XREAD`
@@ -401,7 +400,7 @@ nothing. These provide at-least-once processing primitives, not exactly-once
 application execution.
 
 `XINFO GROUPS/CONSUMERS/STREAM` exposes group cursors, pending counts, consumers,
-entry counters and stream endpoints. STREAM FULL accepts COUNT (zero means all)
+entry counters and stream endpoints. STREAM FULL accepts COUNT (zero means all; a negative count uses the default 10)
 and returns entries plus group/consumer pending lists with delivery timestamps.
 ReRu uses a vector for streams: both radix-tree allocation metrics report zero.
 Consumer diagnostics include the Redis 7.2+ inactive/active-time fields. Newer
