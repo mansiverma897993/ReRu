@@ -1222,3 +1222,235 @@ fn xautoclaim_signed_min_idle_and_count_validation() {
         Reply::Error(b"ERR Invalid min-idle-time argument for XCLAIM".to_vec())
     );
 }
+
+#[test]
+fn xclaim_option_errors_use_redis_text() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+    assert!(matches!(
+        c.call(&[b"XREADGROUP", b"GROUP", b"g", b"r", b"STREAMS", b"s", b">"]),
+        Reply::Array(Some(_))
+    ));
+
+    let option_error = |option: &str| {
+        Reply::Error(format!("ERR Invalid {option} option argument for XCLAIM").into_bytes())
+    };
+    for (option, value) in [("IDLE", b"abc".as_slice()), ("IDLE", b"010")] {
+        assert_eq!(
+            c.call(&[
+                b"XCLAIM",
+                b"s",
+                b"g",
+                b"c",
+                b"0",
+                b"1-0",
+                option.as_bytes(),
+                value,
+            ]),
+            option_error(option)
+        );
+    }
+    for (option, value) in [("TIME", b"abc".as_slice()), ("TIME", b"010")] {
+        assert_eq!(
+            c.call(&[
+                b"XCLAIM",
+                b"s",
+                b"g",
+                b"c",
+                b"0",
+                b"1-0",
+                option.as_bytes(),
+                value,
+            ]),
+            option_error(option)
+        );
+    }
+    for (option, value) in [("RETRYCOUNT", b"abc".as_slice()), ("RETRYCOUNT", b"010")] {
+        assert_eq!(
+            c.call(&[
+                b"XCLAIM",
+                b"s",
+                b"g",
+                b"c",
+                b"0",
+                b"1-0",
+                option.as_bytes(),
+                value,
+            ]),
+            option_error(option)
+        );
+    }
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"IDLE", b"-1"]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"TIME", b"-1"]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+    assert_eq!(
+        c.call(&[
+            b"XCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"1-0",
+            b"RETRYCOUNT",
+            b"-1"
+        ]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+
+    assert_eq!(
+        c.call(&[b"XSETID", b"s", b"5-0", b"ENTRIESADDED", b"-1"]),
+        Reply::Error(b"ERR entries_added must be positive".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XSETID", b"s", b"5-0", b"ENTRIESADDED", b"010"]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XSETID", b"s", b"5-0", b"ENTRIESADDED", b"10"]),
+        ok()
+    );
+}
+
+#[test]
+fn xclaim_negative_options_keep_redis_pending_state() {
+    fn pending(c: &mut Client) -> (i64, i64) {
+        let Reply::Array(Some(rows)) = c.call(&[b"XPENDING", b"s", b"g", b"-", b"+", b"1"]) else {
+            panic!("XPENDING must return an array")
+        };
+        let Reply::Array(Some(fields)) = &rows[0] else {
+            panic!("XPENDING entry must be an array")
+        };
+        match (&fields[2], &fields[3]) {
+            (Reply::Integer(idle), Reply::Integer(deliveries)) => (*idle, *deliveries),
+            _ => panic!("XPENDING fields must be integers"),
+        }
+    }
+
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+    assert!(matches!(
+        c.call(&[b"XREADGROUP", b"GROUP", b"g", b"r", b"STREAMS", b"s", b">"]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(pending(&mut c).1, 1);
+
+    // A negative retry count is "not given": the claim still increments.
+    assert!(matches!(
+        c.call(&[
+            b"XCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"1-0",
+            b"RETRYCOUNT",
+            b"-1"
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(pending(&mut c).1, 2);
+    assert!(matches!(
+        c.call(&[
+            b"XCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"1-0",
+            b"RETRYCOUNT",
+            b"7"
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(pending(&mut c).1, 7);
+    // A later negative retry count resets the override to "not given".
+    assert!(matches!(
+        c.call(&[
+            b"XCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"1-0",
+            b"RETRYCOUNT",
+            b"5",
+            b"RETRYCOUNT",
+            b"-1",
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(pending(&mut c).1, 8);
+
+    // Negative or oversized delivery times clamp to now, so idle stays small.
+    assert!(matches!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"TIME", b"-1"]),
+        Reply::Array(Some(_))
+    ));
+    assert!(pending(&mut c).0 < 5_000);
+    assert!(matches!(
+        c.call(&[
+            b"XCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"1-0",
+            b"IDLE",
+            b"2000000000000"
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert!(pending(&mut c).0 < 5_000);
+    assert!(matches!(
+        c.call(&[
+            b"XCLAIM",
+            b"s",
+            b"g",
+            b"c",
+            b"0",
+            b"1-0",
+            b"IDLE",
+            b"9223372036854775807",
+        ]),
+        Reply::Array(Some(_))
+    ));
+    assert!(pending(&mut c).0 < 5_000);
+
+    // Remaining integer boundaries for XSETID.
+    let positive = Reply::Error(b"ERR entries_added must be positive".to_vec());
+    assert_eq!(
+        c.call(&[
+            b"XSETID",
+            b"s",
+            b"5-0",
+            b"ENTRIESADDED",
+            b"-9223372036854775808"
+        ]),
+        positive
+    );
+    assert_eq!(
+        c.call(&[
+            b"XSETID",
+            b"s",
+            b"5-0",
+            b"ENTRIESADDED",
+            b"9223372036854775808"
+        ]),
+        Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+    );
+}
