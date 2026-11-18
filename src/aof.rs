@@ -604,6 +604,25 @@ mod tests {
         }
         assert_eq!(commands, 3);
         assert_eq!(total, 70 * 1024 * 1024);
+
+        // Exactly one budget stays a single SET; one extra byte adds an APPEND.
+        for (size, expected) in [
+            (MAX_REPLAY_COMMAND_BYTES, 1),
+            (MAX_REPLAY_COMMAND_BYTES + 1, 2),
+        ] {
+            let entry = Entry {
+                value: Value::String(vec![b'z'; size]),
+                expires_at: None,
+            };
+            let mut output = Vec::new();
+            append_value(&mut output, b"edge", &entry).unwrap();
+            let mut cursor = std::io::Cursor::new(output.as_slice());
+            let mut commands = 0;
+            while let Some(_command) = protocol::read_command(&mut cursor).unwrap() {
+                commands += 1;
+            }
+            assert_eq!(commands, expected, "{size} bytes");
+        }
     }
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
