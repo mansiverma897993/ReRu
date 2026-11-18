@@ -174,7 +174,30 @@ fn parse_number(bytes: &[u8]) -> Result<i64, Vec<u8>> {
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
 
-fn deadline(raw: &[u8], millis: bool, absolute: bool) -> Result<FieldDeadline, Vec<u8>> {
+const MAX_FIELD_DEADLINE_MS: i128 = (1 << 46) - 1;
+
+fn command_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Expire => "hexpire",
+        Kind::Pexpire => "hpexpire",
+        Kind::Expireat => "hexpireat",
+        Kind::Pexpireat => "hpexpireat",
+        Kind::Ttl => "httl",
+        Kind::Pttl => "hpttl",
+        Kind::Expiretime => "hexpiretime",
+        Kind::Pexpiretime => "hpexpiretime",
+        Kind::Persist => "hpersist",
+        Kind::Getex => "hgetex",
+        Kind::Setex => "hsetex",
+    }
+}
+
+fn deadline(
+    raw: &[u8],
+    millis: bool,
+    absolute: bool,
+    command: &str,
+) -> Result<FieldDeadline, Vec<u8>> {
     let amount = parse_number(raw)?;
     if amount < 0 {
         return Err(protocol::error("invalid expire time, must be >= 0"));
@@ -190,6 +213,12 @@ fn deadline(raw: &[u8], millis: bool, absolute: bool) -> Result<FieldDeadline, V
     } else {
         current + delta_or_absolute
     };
+    // Field deadlines are stored with a 46-bit millisecond timestamp.
+    if !(0..=MAX_FIELD_DEADLINE_MS).contains(&unix_ms) {
+        return Err(protocol::error(&format!(
+            "invalid expire time in '{command}' command"
+        )));
+    }
     let unix_ms = i64::try_from(unix_ms).map_err(|_| protocol::error("invalid expire time"))?;
     let remaining = i128::from(unix_ms) - current;
     let at = if remaining <= 0 {
@@ -247,6 +276,7 @@ fn parse_arguments<'a>(kind: Kind, command: &'a [Vec<u8>]) -> Result<HashArgumen
                 &command[2],
                 matches!(kind, Kind::Pexpire | Kind::Pexpireat),
                 matches!(kind, Kind::Expireat | Kind::Pexpireat),
+                command_name(kind),
             )?));
             at += 1;
             continue;
@@ -287,7 +317,7 @@ fn parse_arguments<'a>(kind: Kind, command: &'a [Vec<u8>]) -> Result<HashArgumen
             if expiration.is_some() {
                 return Err(expiry_conflict(kind));
             }
-            expiration = Some(parse_expiry_token(command, &mut at)?);
+            expiration = Some(parse_expiry_token(kind, command, &mut at)?);
             continue;
         }
         return Err(unknown_argument(token));
@@ -341,7 +371,11 @@ fn is_expiry_token(kind: Kind, token: &[u8]) -> bool {
     }
 }
 
-fn parse_expiry_token(command: &[Vec<u8>], at: &mut usize) -> Result<Expiration, Vec<u8>> {
+fn parse_expiry_token(
+    kind: Kind,
+    command: &[Vec<u8>],
+    at: &mut usize,
+) -> Result<Expiration, Vec<u8>> {
     let token = command[*at].as_slice();
     if token.eq_ignore_ascii_case(b"PERSIST") {
         *at += 1;
@@ -356,7 +390,7 @@ fn parse_expiry_token(command: &[Vec<u8>], at: &mut usize) -> Result<Expiration,
     let raw = command
         .get(*at + 1)
         .ok_or_else(|| protocol::error("missing expire time"))?;
-    let expiry = deadline(raw, millis, absolute)?;
+    let expiry = deadline(raw, millis, absolute, command_name(kind))?;
     *at += 2;
     Ok(Expiration::Deadline(expiry))
 }
@@ -585,7 +619,8 @@ fn execute_inner(kind: Kind, command: &[Vec<u8>], store: &Store) -> Result<Vec<u
                     let remaining = at.at.saturating_duration_since(Instant::now());
                     let millis = i64::try_from(remaining.as_millis()).unwrap_or(i64::MAX);
                     if matches!(kind, Kind::Ttl) {
-                        millis / 1000
+                        // HTTL rounds the remaining milliseconds up.
+                        millis.saturating_add(999) / 1000
                     } else {
                         millis
                     }

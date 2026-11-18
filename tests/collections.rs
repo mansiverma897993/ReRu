@@ -1008,3 +1008,92 @@ fn hash_expiry_options_are_accepted_around_fields() {
         Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
     );
 }
+
+#[test]
+fn hash_expiry_deadline_range_and_ttl_rounding() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"HSET", b"h", b"f", b"v"]), integer(1));
+    let invalid = |name: &str| {
+        Reply::Error(format!("ERR invalid expire time in '{name}' command").into_bytes())
+    };
+
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"100000000000", b"FIELDS", b"1", b"f"]),
+        invalid("hexpire")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIRE",
+            b"h",
+            b"9223372036854775",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hpexpire")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIREAT", b"h", b"70368744178", b"FIELDS", b"1", b"f"]),
+        invalid("hexpireat")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HPEXPIREAT",
+            b"h",
+            b"70368744177664",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hpexpireat")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HSETEX",
+            b"h",
+            b"EX",
+            b"100000000000",
+            b"FIELDS",
+            b"1",
+            b"f",
+            b"v"
+        ]),
+        invalid("hsetex")
+    );
+    assert_eq!(
+        c.call(&[
+            b"HGETEX",
+            b"h",
+            b"EX",
+            b"100000000000",
+            b"FIELDS",
+            b"1",
+            b"f"
+        ]),
+        invalid("hgetex")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"-1", b"FIELDS", b"1", b"f"]),
+        Reply::Error(b"ERR invalid expire time, must be >= 0".to_vec())
+    );
+
+    // HTTL rounds the remaining milliseconds up to the next second.
+    for (millis, seconds) in [
+        ("100", 1),
+        ("999", 1),
+        ("1499", 2),
+        ("2500", 3),
+        ("9999", 10),
+    ] {
+        assert_eq!(
+            c.call(&[b"HPEXPIRE", b"h", millis.as_bytes(), b"FIELDS", b"1", b"f"]),
+            array(vec![integer(1)])
+        );
+        assert_eq!(
+            c.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"f"]),
+            array(vec![integer(seconds)]),
+            "{millis}"
+        );
+    }
+}
