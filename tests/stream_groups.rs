@@ -1641,3 +1641,116 @@ fn xclaim_option_names_are_c_strings() {
         array(vec![])
     );
 }
+
+#[test]
+fn stream_group_texts_name_the_group_and_xinfo_stream_shapes() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+
+    let missing_group =
+        || Reply::Error(b"NOGROUP No such consumer group 'nogrp' for key name 's'".to_vec());
+    assert_eq!(
+        c.call(&[b"XGROUP", b"SETID", b"s", b"nogrp", b"0"]),
+        missing_group()
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATECONSUMER", b"s", b"nogrp", b"c"]),
+        missing_group()
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"DELCONSUMER", b"s", b"nogrp", b"c"]),
+        missing_group()
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"CONSUMERS", b"s", b"nogrp"]),
+        missing_group()
+    );
+    assert_eq!(
+        c.call(&[b"XPENDING", b"s", b"nogrp"]),
+        Reply::Error(b"NOGROUP No such key 's' or consumer group 'nogrp'".to_vec())
+    );
+
+    let shape = |token: &str| {
+        Reply::Error(
+            format!(
+                "ERR unknown subcommand or wrong number of arguments for '{token}'. Try XINFO HELP."
+            )
+            .into_bytes(),
+        )
+    };
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"s", b"COUNT", b"1"]),
+        shape("STREAM")
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"stream", b"s", b"count", b"1"]),
+        shape("stream")
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"s", b"FULL", b"COUNT", b"1", b"x"]),
+        shape("STREAM")
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"s", b"FULL", b"BAD"]),
+        shape("STREAM")
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"s", b"COUNT"]),
+        shape("STREAM")
+    );
+
+    // The key and type are checked before the shape.
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"missing", b"COUNT", b"1"]),
+        Reply::Error(b"ERR no such key".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"missing", b"FULL", b"COUNT", b"abc"]),
+        Reply::Error(b"ERR no such key".to_vec())
+    );
+    assert_eq!(c.call(&[b"SET", b"str", b"x"]), ok());
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM", b"str", b"FULL", b"BAD"]),
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    );
+
+    // SETID resolves the group before parsing the ID; CREATE parses first.
+    assert_eq!(
+        c.call(&[b"XGROUP", b"SETID", b"s", b"nogrp", b"badid"]),
+        missing_group()
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"SETID", b"s", b"g", b"badid"]),
+        Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"badid"]),
+        Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec())
+    );
+    assert_eq!(
+        c.call(&[
+            b"XGROUP",
+            b"CREATE",
+            b"absent",
+            b"g2",
+            b"badid",
+            b"MKSTREAM"
+        ]),
+        Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec())
+    );
+
+    // Non-UTF-8 names are echoed as raw bytes, and NUL-suffixed subcommands are unknown.
+    assert_eq!(
+        c.call(&[b"XGROUP", b"SETID", b"s", b"no\xffgrp", b"0"]),
+        Reply::Error(b"NOGROUP No such consumer group 'no\xffgrp' for key name 's'".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XINFO", b"stream\x00", b"s", b"COUNT", b"1"]),
+        Reply::Error(b"ERR unknown subcommand 'stream'. Try XINFO HELP.".to_vec())
+    );
+}

@@ -389,13 +389,12 @@ Stream IDs are parsed as C strings: leading whitespace, a leading `+`, leading
 zeros, and a NUL terminator are accepted, while trailing bytes are not. Stream
 subcommand arity errors name the command or `parent|subcommand`, and unknown
 subcommands are reported. A few stream keyword comparisons remain exact rather
-than C-string (`XADD`/`XTRIM`/`XGROUP`/`XAUTOCLAIM` options with a NUL suffix),
+than C-string (`XADD`/`XTRIM`/`XGROUP`/`XAUTOCLAIM` and `XINFO` options with a
+NUL suffix),
 `XAUTOCLAIM`'s start ID, `XGROUP SETID`, and `XREAD` IDs do not accept `+`/`-`,
 `XGROUP DESTROY` on a missing key replies 0, `ENTRIESREAD` uses the generic
-integer error and its reporting differs from Redis, `XINFO STREAM ... COUNT`
-without `FULL` reports a syntax error, an existing key with a missing group uses
-the combined NOGROUP text, and some `XTRIM`/`XREAD` arity and syntax texts still
-differ. `XAUTOCLAIM` implements bounded scanning
+integer error and its reporting differs from Redis, and some `XTRIM`/`XREAD`
+arity and syntax texts still differ. `XAUTOCLAIM` implements bounded scanning
 (10 x COUNT), a COUNT shared by claims and deleted pending entries, JUSTID, the
 Redis 7 deleted-ID reply, and registers its consumer even when it claims
 nothing. These provide at-least-once processing primitives, not exactly-once
