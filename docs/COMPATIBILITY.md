@@ -378,7 +378,8 @@ the same way. `XPENDING` supports summary and range forms,
 IDLE, exclusive bounds and a consumer filter. `XCLAIM` supports IDLE, TIME,
 RETRYCOUNT, FORCE, JUSTID and LASTID, and registers its consumer even when it
 claims nothing. `XCLAIM` and `XAUTOCLAIM` accept a negative minimum idle time, and XCLAIM's
-`IDLE`/`TIME`/`RETRYCOUNT` errors name the option.
+`IDLE`/`TIME`/`RETRYCOUNT` errors name the option, and XCLAIM resolves the key,
+type, and group before parsing IDs and options.
 Redis can also reply `Insufficient memory, failed allocating transient memory,
 COUNT too high.` for an enormous `XAUTOCLAIM COUNT`; ReRu scans lazily and does
 not allocate a deleted-ID buffer, so it returns the bounded reply instead.

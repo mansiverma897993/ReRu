@@ -54,6 +54,18 @@ fn number(raw: &[u8]) -> Result<u64> {
         .map(|n| n as u64)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))
 }
+fn unrecognized_option(token: &[u8]) -> Vec<u8> {
+    let token = token.split(|byte| *byte == 0).next().unwrap_or(b"");
+    let mut reply = b"-ERR Unrecognized XCLAIM option '".to_vec();
+    // Keep raw bytes but never let a token inject a second reply.
+    reply.extend(token.iter().map(|byte| match byte {
+        b'\r' | b'\n' => b' ',
+        _ => *byte,
+    }));
+    reply.extend_from_slice(b"'\r\n");
+    reply
+}
+
 fn option_number(raw: &[u8], option: &str, command: &str) -> Result<i64> {
     protocol::parse_int(raw)
         .ok_or_else(|| protocol::error(&format!("Invalid {option} option argument for {command}")))
@@ -911,29 +923,29 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
 }
 
 fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
-    let min_idle = min_idle_time(&c[4], "XCLAIM")?;
     let now = now_ms();
+    // Redis resolves the key, type, and group before parsing IDs or options.
+    let mut entries = store.entries.lock().unwrap();
+    remove_expired(&mut entries, &c[1]);
+    if !entries.contains_key(&c[1]) {
+        return Err(nogroup(&c[1], &c[2], false));
+    }
+    let stream = stream_mut(&mut entries, &c[1])?;
+    let group = stream
+        .groups
+        .get_mut(&c[2])
+        .ok_or_else(|| nogroup(&c[1], &c[2], false))?;
+    let min_idle = min_idle_time(&c[4], "XCLAIM")?;
     let mut ids = Vec::new();
     let mut i = 5;
     while i < c.len() {
-        if [
-            b"IDLE".as_slice(),
-            b"TIME",
-            b"RETRYCOUNT",
-            b"FORCE",
-            b"JUSTID",
-            b"LASTID",
-        ]
-        .iter()
-        .any(|option| c[i].eq_ignore_ascii_case(option))
-        {
-            break;
+        match id(&c[i]) {
+            Ok(value) => {
+                ids.push(value);
+                i += 1;
+            }
+            Err(_) => break,
         }
-        ids.push(id(&c[i])?);
-        i += 1;
-    }
-    if ids.is_empty() {
-        return syntax();
     }
     let mut delivered_at = now;
     let mut retry = None;
@@ -947,7 +959,11 @@ fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
         } else if c[i].eq_ignore_ascii_case(b"JUSTID") {
             justid = true;
             i += 1;
-        } else if i + 1 < c.len() {
+        } else if i + 1 < c.len()
+            && [b"IDLE".as_slice(), b"TIME", b"RETRYCOUNT", b"LASTID"]
+                .iter()
+                .any(|option| c[i].eq_ignore_ascii_case(option))
+        {
             if c[i].eq_ignore_ascii_case(b"IDLE") {
                 let idle = option_number(&c[i + 1], "IDLE", "XCLAIM")?;
                 // Redis clamps a delivery time before 0 or after now to now.
@@ -970,26 +986,14 @@ fn claim(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
                 } else {
                     None
                 };
-            } else if c[i].eq_ignore_ascii_case(b"LASTID") {
-                lastid = Some(id(&c[i + 1])?);
             } else {
-                return syntax();
+                lastid = Some(id(&c[i + 1])?);
             }
             i += 2;
         } else {
-            return syntax();
+            return Err(unrecognized_option(&c[i]));
         }
     }
-    let mut entries = store.entries.lock().unwrap();
-    remove_expired(&mut entries, &c[1]);
-    if !entries.contains_key(&c[1]) {
-        return Err(nogroup(&c[1], &c[2], false));
-    }
-    let stream = stream_mut(&mut entries, &c[1])?;
-    let group = stream
-        .groups
-        .get_mut(&c[2])
-        .ok_or_else(|| nogroup(&c[1], &c[2], false))?;
     let mut changed = !group.consumers.contains_key(&c[3]);
     touch_consumer(group, &c[3], now, false);
     if let Some(last) = lastid {

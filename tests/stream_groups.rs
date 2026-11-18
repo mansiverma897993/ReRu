@@ -1454,3 +1454,93 @@ fn xclaim_negative_options_keep_redis_pending_state() {
         Reply::Error(b"ERR value is not an integer or out of range".to_vec())
     );
 }
+
+#[test]
+fn xclaim_resolves_key_and_group_before_parsing() {
+    let server = Server::start();
+    let mut c = Client::new(&server);
+    assert!(matches!(
+        c.call(&[b"XADD", b"s", b"1-0", b"f", b"v"]),
+        Reply::Bulk(Some(_))
+    ));
+    assert_eq!(c.call(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]), ok());
+    assert!(matches!(
+        c.call(&[b"XREADGROUP", b"GROUP", b"g", b"r", b"STREAMS", b"s", b">"]),
+        Reply::Array(Some(_))
+    ));
+    assert_eq!(c.call(&[b"SET", b"str", b"v"]), ok());
+
+    let nogroup = || Reply::Error(b"NOGROUP No such key 's' or consumer group 'nogroup'".to_vec());
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"nokey", b"g", b"c", b"0", b"bad"]),
+        Reply::Error(b"NOGROUP No such key 'nokey' or consumer group 'g'".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"nogroup", b"c", b"abc", b"1-0"]),
+        nogroup()
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"nogroup", b"c", b"0", b"1-0", b"IDLE", b"abc"]),
+        nogroup()
+    );
+
+    let wrong_type = || {
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    };
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"str", b"g", b"c", b"0", b"bad"]),
+        wrong_type()
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"str", b"g", b"c", b"abc", b"1-0"]),
+        wrong_type()
+    );
+
+    let unrecognized = |token: &str| {
+        Reply::Error(format!("ERR Unrecognized XCLAIM option '{token}'").into_bytes())
+    };
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"bad"]),
+        unrecognized("bad")
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"BOGUS"]),
+        unrecognized("BOGUS")
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"IDLE"]),
+        unrecognized("IDLE")
+    );
+    // Control characters are sanitized and NUL truncates, so one command can
+    // never inject a second reply frame.
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"BAD\r\n+X"]),
+        unrecognized("BAD  +X")
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"BAD\0MORE"]),
+        unrecognized("BAD")
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"LASTID", b"bad"]),
+        Reply::Error(b"ERR Invalid stream ID specified as stream command argument".to_vec())
+    );
+
+    // With no IDs, XCLAIM claims nothing but still validates its options.
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"FORCE"]),
+        array(vec![])
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"IDLE", b"5"]),
+        array(vec![])
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"IDLE", b"abc"]),
+        Reply::Error(b"ERR Invalid IDLE option argument for XCLAIM".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"c", b"0", b"1-0", b"FORCE"]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+}
