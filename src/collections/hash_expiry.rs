@@ -629,7 +629,8 @@ fn execute_inner(kind: Kind, command: &[Vec<u8>], store: &Store) -> Result<Vec<u
                 Kind::Expiretime | Kind::Pexpiretime => old.map(|at| {
                     let millis = at.unix_ms;
                     if matches!(kind, Kind::Expiretime) {
-                        millis / 1000
+                        // Redis rounds the absolute second up.
+                        millis.saturating_add(999) / 1000
                     } else {
                         millis
                     }

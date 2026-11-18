@@ -1178,6 +1178,28 @@ fn hash_expiry_deadline_range_and_ttl_rounding() {
         invalid("hgetex")
     );
 
+    // HEXPIRETIME rounds the absolute second up; HPEXPIRETIME keeps the millis.
+    assert_eq!(
+        c.call(&[b"HPEXPIREAT", b"h", b"1800000000500", b"FIELDS", b"1", b"f"]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(
+        c.call(&[b"HPEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
+        array(vec![integer(1_800_000_000_500)])
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
+        array(vec![integer(1_800_000_001)])
+    );
+    assert_eq!(
+        c.call(&[b"HPEXPIREAT", b"h", b"1800000000000", b"FIELDS", b"1", b"f"]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRETIME", b"h", b"FIELDS", b"1", b"f"]),
+        array(vec![integer(1_800_000_000)])
+    );
+
     // A rejected value leaves the existing TTL and field untouched.
     assert_eq!(
         c.call(&[b"HPEXPIRE", b"h", b"100000", b"FIELDS", b"1", b"f"]),
