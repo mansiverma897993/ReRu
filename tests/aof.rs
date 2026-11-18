@@ -201,3 +201,27 @@ fn empty_aof_frames_are_skipped_during_replay() {
     drop(server);
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn hgetex_options_after_fields_survive_a_restart() {
+    let path = path();
+    let filename = path.to_str().unwrap();
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut client = Client::new(&server);
+        assert_eq!(client.call(&[b"HSET", b"h", b"f", b"v"]), integer(1));
+        assert_eq!(
+            client.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"EX", b"100"]),
+            array(vec![bulk(b"v")])
+        );
+    }
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut client = Client::new(&server);
+        assert!(matches!(
+            client.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"f"]),
+            Reply::Array(Some(rows)) if matches!(rows[0], Reply::Integer(ttl) if ttl > 0)
+        ));
+    }
+    let _ = std::fs::remove_file(path);
+}

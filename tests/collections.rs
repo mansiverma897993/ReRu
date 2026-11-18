@@ -825,3 +825,186 @@ fn negative_hash_field_expiry_is_rejected_without_changes() {
     );
     assert_eq!(c.call(&[b"HGET", b"h", b"new"]), Reply::Bulk(None));
 }
+
+#[test]
+fn hash_field_count_and_arity_errors_match_redis() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    assert_eq!(c.call(&[b"HSET", b"h", b"f", b"v"]), integer(1));
+    let syntax = |message: &str| Reply::Error(format!("ERR {message}").into_bytes());
+
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FOO", b"f"]),
+        syntax("wrong number of arguments for 'hexpire' command")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"f"]),
+        syntax("wrong number of arguments for 'hexpire' command")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"2", b"f"]),
+        syntax("wrong number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"1", b"f", b"g"]),
+        syntax("unknown argument: g")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FOO"]),
+        syntax("wrong number of arguments for 'hgetex' command")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"2", b"f"]),
+        syntax("wrong number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"g"]),
+        syntax("unknown argument: g")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FOO", b"f", b"v"]),
+        syntax("unknown argument: FOO")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"2", b"f", b"v"]),
+        syntax("wrong number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"1", b"f", b"v", b"g", b"w"]),
+        syntax("unknown argument: g")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"1", b"f"]),
+        syntax("wrong number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"1", b"f", b"v"]),
+        integer(1)
+    );
+}
+
+#[test]
+fn hash_expiry_options_are_accepted_around_fields() {
+    let server = common::Server::start();
+    let mut c = Client::new(&server);
+    let error = |message: &str| Reply::Error(format!("ERR {message}").into_bytes());
+    assert_eq!(c.call(&[b"HSET", b"h", b"f", b"v"]), integer(1));
+
+    // Options are accepted before or after the field list.
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"1", b"f", b"NX"]),
+        array(vec![integer(1)])
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"NX", b"FIELDS", b"1", b"f"]),
+        array(vec![integer(0)])
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"EX", b"10"]),
+        array(vec![bulk(b"v")])
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"FIELDS", b"1", b"f", b"v", b"EX", b"10"]),
+        integer(1)
+    );
+    assert!(matches!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"f"]),
+        Reply::Array(Some(rows)) if matches!(rows[0], Reply::Integer(ttl) if (9..=10).contains(&ttl))
+    ));
+
+    // Duplicate keywords and conflicting flags.
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"1", b"f", b"NX", b"XX"]),
+        error("Multiple condition flags specified")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"1", b"f", b"FIELDS", b"1", b"g"]),
+        error("FIELDS keyword specified multiple times")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"EX", b"10", b"FIELDS", b"1", b"f", b"v", b"EX", b"20"]),
+        error("Only one of EX, PX, EXAT, PXAT or KEEPTTL arguments can be specified")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"PERSIST", b"EX", b"10"]),
+        error("Only one of EX, PX, EXAT, PXAT or PERSIST arguments can be specified")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"FIELDS", b"1", b"f", b"v", b"FNX", b"FXX"]),
+        error("Only one of FXX or FNX arguments can be specified")
+    );
+
+    // Unknown tokens keep their position-specific text, including raw bytes.
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"1", b"f", b"FOO"]),
+        error("unknown argument: FOO")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"EX", b"10", b"f"]),
+        error("unknown argument: f")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"FOO", b"FIELDS", b"1", b"f", b"v"]),
+        error("unknown argument: FOO")
+    );
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"h", b"10", b"FIELDS", b"1", b"f", b"\xff"]),
+        Reply::Error(b"ERR unknown argument: \xff".to_vec())
+    );
+
+    // The TTL family uses its own field-count texts.
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"f", b"g"]),
+        error("The `numfields` parameter must match the number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"0", b"f"]),
+        error("Number of fields must be a positive integer")
+    );
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"2147483648", b"f"]),
+        error("The `numfields` parameter must match the number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FIELDS", b"1", b"f", b"FIELDS", b"1", b"f"]),
+        error("The `numfields` parameter must match the number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HTTL", b"h", b"FOO", b"FIELDS", b"1", b"f"]),
+        error("Mandatory argument FIELDS is missing or not at the right position")
+    );
+
+    // HGETEX uses the HSETEX count text, and a missing expiry value is named.
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"0", b"f"]),
+        error("invalid number of fields")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"EX"]),
+        error("missing expire time")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"h", b"FIELDS", b"1", b"f", b"v", b"PXAT"]),
+        error("missing expire time")
+    );
+    assert_eq!(
+        c.call(&[b"HGETEX", b"h", b"FIELDS", b"1", b"f", b"\x00"]),
+        error("unknown argument: ")
+    );
+
+    // A wrong type wins before field-list validation for HEXPIRE/HGETEX, but
+    // HSETEX validates its arguments first.
+    assert_eq!(c.call(&[b"RPUSH", b"list", b"x"]), integer(1));
+    assert_eq!(
+        c.call(&[b"HEXPIRE", b"list", b"10", b"FIELDS", b"2", b"f"]),
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"list", b"EX", b"10", b"FIELDS", b"2", b"f", b"v"]),
+        error("wrong number of arguments")
+    );
+    assert_eq!(
+        c.call(&[b"HSETEX", b"list", b"EX", b"10", b"FIELDS", b"1", b"f", b"v"]),
+        Reply::Error(b"WRONGTYPE Operation against a key holding the wrong kind of value".to_vec())
+    );
+}
