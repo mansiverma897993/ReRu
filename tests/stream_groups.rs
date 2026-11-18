@@ -1567,6 +1567,15 @@ fn stream_arity_and_xgroup_precedence_match_redis() {
         c.call(&[b"XINFO", b"BOGUS", b"x"]),
         Reply::Error(b"ERR unknown subcommand 'BOGUS'. Try XINFO HELP.".to_vec())
     );
+    // The echoed token stops at a NUL, while the match itself stays exact.
+    assert_eq!(
+        c.call(&[b"XINFO", b"STREAM\x00x", b"s"]),
+        Reply::Error(b"ERR unknown subcommand 'STREAM'. Try XINFO HELP.".to_vec())
+    );
+    assert_eq!(
+        c.call(&[b"XGROUP", b"BOGUS\x00x", b"y"]),
+        Reply::Error(b"ERR unknown subcommand 'BOGUS'. Try XGROUP HELP.".to_vec())
+    );
 
     let requires_key = || {
         Reply::Error(b"ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.".to_vec())

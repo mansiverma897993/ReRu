@@ -171,7 +171,11 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
         b"XACK" => n >= 4,
         b"XPENDING" => n == 3 || n >= 6,
         b"XCLAIM" | b"XAUTOCLAIM" => n >= 6,
-        b"XINFO" => match command.get(1).map(|s| s.to_ascii_uppercase()).as_deref() {
+        b"XINFO" => match command
+            .get(1)
+            .map(|sub| sub.to_ascii_uppercase())
+            .as_deref()
+        {
             Some(b"GROUPS") => n == 3,
             Some(b"CONSUMERS") => n == 4,
             Some(b"STREAM") => n >= 3,
@@ -186,14 +190,30 @@ pub fn is_mutating(command: &[Vec<u8>]) -> bool {
         && !command[0].eq_ignore_ascii_case(b"XPENDING")
         && !command[0].eq_ignore_ascii_case(b"XINFO")
 }
+/// XINFO subcommands compare as C strings; XGROUP requires an exact token.
+fn sub_token(command: &[Vec<u8>]) -> Option<&[u8]> {
+    command
+        .get(1)
+        .map(|token| token.split(|byte| *byte == 0).next().unwrap_or(b""))
+}
+
 fn known_subcommand(command: &[Vec<u8>]) -> bool {
-    let sub = command.get(1).map(|token| token.to_ascii_uppercase());
-    match command[0].to_ascii_uppercase().as_slice() {
+    let parent = command[0].to_ascii_uppercase();
+    match parent.as_slice() {
         b"XGROUP" => matches!(
-            sub.as_deref(),
+            command
+                .get(1)
+                .map(|sub| sub.to_ascii_uppercase())
+                .as_deref(),
             Some(b"CREATE" | b"SETID" | b"DESTROY" | b"CREATECONSUMER" | b"DELCONSUMER")
         ),
-        b"XINFO" => matches!(sub.as_deref(), Some(b"STREAM" | b"GROUPS" | b"CONSUMERS")),
+        b"XINFO" => matches!(
+            command
+                .get(1)
+                .map(|sub| sub.to_ascii_uppercase())
+                .as_deref(),
+            Some(b"STREAM" | b"GROUPS" | b"CONSUMERS")
+        ),
         _ => true,
     }
 }
@@ -217,7 +237,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
     let valid = valid_arity(command)?;
     if !valid {
         if command.len() > 1 && !known_subcommand(command) {
-            let sub = String::from_utf8_lossy(&command[1]);
+            let sub = String::from_utf8_lossy(sub_token(command).unwrap_or(b""));
             let parent = String::from_utf8_lossy(&command[0]).to_ascii_uppercase();
             return Some(protocol::error(&format!(
                 "unknown subcommand '{sub}'. Try {parent} HELP."
@@ -737,12 +757,13 @@ fn estimate_read(
 }
 
 fn info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
-    if c[1].eq_ignore_ascii_case(b"STREAM") {
+    let sub = &c[1];
+    if sub.eq_ignore_ascii_case(b"STREAM") {
         return stream_info(c, store);
     }
     let mut entries = store.entries.lock().unwrap();
     let stream = stream_mut(&mut entries, &c[2])?;
-    if c[1].eq_ignore_ascii_case(b"GROUPS") {
+    if sub.eq_ignore_ascii_case(b"GROUPS") {
         Ok(array(
             stream
                 .groups

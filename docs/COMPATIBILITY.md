@@ -386,7 +386,11 @@ not allocate a deleted-ID buffer, so it returns the bounded reply instead.
 Stream IDs are parsed as C strings: leading whitespace, a leading `+`, leading
 zeros, and a NUL terminator are accepted, while trailing bytes are not. Stream
 subcommand arity errors name the command or `parent|subcommand`, and unknown
-subcommands are reported. `XAUTOCLAIM` implements bounded scanning (10 x COUNT), a COUNT shared by claims
+subcommands are reported. A few stream keyword comparisons remain exact rather
+than C-string (`XADD`/`XTRIM`/`XGROUP`/`XAUTOCLAIM` options with a NUL suffix),
+`XAUTOCLAIM`'s start ID and `XGROUP SETID` do not accept `+`/`-`, `XGROUP
+DESTROY` on a missing key replies 0, and `ENTRIESREAD` uses the generic integer
+error. `XAUTOCLAIM` implements bounded scanning (10 x COUNT), a COUNT shared by claims
 and deleted pending entries, JUSTID, the Redis 7 deleted-ID reply, and registers
 its consumer even when it claims nothing. These provide at-least-once processing
 primitives, not exactly-once application execution.

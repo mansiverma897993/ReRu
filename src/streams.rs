@@ -22,9 +22,10 @@ fn nul_terminated(raw: &[u8]) -> &[u8] {
     &raw[..raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len())]
 }
 
-/// Parse an integer the way C `strtoll` does: leading whitespace and an
-/// optional sign are accepted, and parsing stops at the first non-digit.
-fn parse_c_int(raw: &[u8]) -> Option<(i64, &[u8])> {
+/// Parse an unsigned integer the way C `strtoull` does: leading whitespace and
+/// an optional `+` are accepted, parsing stops at the first non-digit, and any
+/// explicit `-` is rejected (so `-0` is invalid). Values may exceed `i64`.
+fn parse_c_uint(raw: &[u8]) -> Option<(u64, &[u8])> {
     let mut at = 0;
     while raw
         .get(at)
@@ -32,52 +33,50 @@ fn parse_c_int(raw: &[u8]) -> Option<(i64, &[u8])> {
     {
         at += 1;
     }
-    let negative = match raw.get(at) {
-        Some(b'-') => {
-            at += 1;
-            true
-        }
-        Some(b'+') => {
-            at += 1;
-            false
-        }
-        _ => false,
-    };
+    match raw.get(at) {
+        Some(b'+') => at += 1,
+        Some(b'-') => return None,
+        _ => {}
+    }
     let start = at;
-    let mut magnitude: i128 = 0;
+    let mut magnitude: u128 = 0;
     while let Some(byte) = raw.get(at).filter(|byte| byte.is_ascii_digit()) {
         magnitude = magnitude
             .checked_mul(10)?
-            .checked_add(i128::from(byte - b'0'))?;
+            .checked_add(u128::from(byte - b'0'))?;
         at += 1;
     }
     if at == start {
         return None;
     }
-    let value = i64::try_from(if negative { -magnitude } else { magnitude }).ok()?;
-    Some((value, &raw[at..]))
+    Some((u64::try_from(magnitude).ok()?, &raw[at..]))
 }
 
 impl StreamId {
     pub fn parse_query(raw: &[u8]) -> Result<Self, &'static str> {
         let bytes = nul_terminated(raw);
-        let (milliseconds, rest) = parse_c_int(bytes).ok_or(INVALID_ID)?;
-        if milliseconds < 0 || rest.first().is_some_and(|byte| *byte != b'-') {
+        let (milliseconds, rest) = parse_c_uint(bytes).ok_or(INVALID_ID)?;
+        if rest.first().is_some_and(|byte| *byte != b'-') {
             return Err(INVALID_ID);
         }
         if rest.is_empty() {
             return Ok(Self {
-                milliseconds: milliseconds as u64,
+                milliseconds,
                 sequence: 0,
             });
         }
-        let (sequence, tail) = parse_c_int(&rest[1..]).ok_or(INVALID_ID)?;
-        if sequence < 0 || !tail.is_empty() {
+        // Redis accepts a `-0` sequence (but not other negative sequences).
+        let (sequence, tail) = if &rest[1..] == b"-0" {
+            (0, b"".as_slice())
+        } else {
+            parse_c_uint(&rest[1..]).ok_or(INVALID_ID)?
+        };
+        if !tail.is_empty() {
             return Err(INVALID_ID);
         }
         Ok(Self {
-            milliseconds: milliseconds as u64,
-            sequence: sequence as u64,
+            milliseconds,
+            sequence,
         })
     }
 }
@@ -121,9 +120,9 @@ impl IdInput {
         if raw == b"*" {
             return Ok(Self::Automatic);
         }
-        if let Some((milliseconds, rest)) = parse_c_int(nul_terminated(raw)) {
-            if milliseconds >= 0 && rest == b"-*" {
-                return Ok(Self::Partial(milliseconds as u64));
+        if let Some((milliseconds, rest)) = parse_c_uint(nul_terminated(raw)) {
+            if rest == b"-*" {
+                return Ok(Self::Partial(milliseconds));
             }
         }
         StreamId::parse_query(raw).map(Self::Explicit)
@@ -414,21 +413,23 @@ pub(crate) fn parse_bound(raw: &[u8], upper: bool) -> Result<(StreamId, bool), &
         (raw, false)
     };
     let bytes = nul_terminated(raw);
-    let (milliseconds, rest) = parse_c_int(bytes).ok_or(INVALID_ID)?;
-    if milliseconds < 0 || rest.first().is_some_and(|byte| *byte != b'-') {
+    let (milliseconds, rest) = parse_c_uint(bytes).ok_or(INVALID_ID)?;
+    if rest.first().is_some_and(|byte| *byte != b'-') {
         return Err(INVALID_ID);
     }
     let (sequence, tail, present) = if rest.is_empty() {
         (0, b"".as_slice(), false)
+    } else if &rest[1..] == b"-0" {
+        (0, b"".as_slice(), true)
     } else {
-        let (sequence, tail) = parse_c_int(&rest[1..]).ok_or(INVALID_ID)?;
+        let (sequence, tail) = parse_c_uint(&rest[1..]).ok_or(INVALID_ID)?;
         (sequence, tail, true)
     };
-    if sequence < 0 || !tail.is_empty() {
+    if !tail.is_empty() {
         return Err(INVALID_ID);
     }
     let sequence = if present {
-        sequence as u64
+        sequence
     } else if upper {
         u64::MAX
     } else {
@@ -436,7 +437,7 @@ pub(crate) fn parse_bound(raw: &[u8], upper: bool) -> Result<(StreamId, bool), &
     };
     Ok((
         StreamId {
-            milliseconds: milliseconds as u64,
+            milliseconds,
             sequence,
         },
         exclusive,
