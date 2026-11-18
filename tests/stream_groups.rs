@@ -1102,6 +1102,9 @@ fn xautoclaim_signed_min_idle_and_count_validation() {
         b"010",
         b"9223372036854775807",
         b"922337203685477580",
+        b"922337203685477579",
+        b"576460752303423488",
+        b"\xff",
     ] {
         assert_eq!(
             c.call(&[
@@ -1145,6 +1148,14 @@ fn xautoclaim_signed_min_idle_and_count_validation() {
         c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"+1", b"0-0"]),
         min_idle_error()
     );
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"-0", b"0-0"]),
+        min_idle_error()
+    );
+    assert_eq!(
+        c.call(&[b"XAUTOCLAIM", b"s", b"g", b"c", b"\xff", b"0-0"]),
+        min_idle_error()
+    );
 
     // A negative minimum idle claims like zero.
     assert!(matches!(
@@ -1186,6 +1197,10 @@ fn xautoclaim_signed_min_idle_and_count_validation() {
     // XCLAIM accepts the same signed minimum idle but rejects non-canonical text.
     assert_eq!(
         c.call(&[b"XCLAIM", b"s", b"g", b"e", b"-1", b"1-0"]),
+        array(vec![entry(b"1-0", b"v")])
+    );
+    assert_eq!(
+        c.call(&[b"XCLAIM", b"s", b"g", b"e", b"-9223372036854775808", b"1-0"]),
         array(vec![entry(b"1-0", b"v")])
     );
     assert_eq!(

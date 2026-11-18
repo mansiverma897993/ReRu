@@ -63,8 +63,9 @@ fn min_idle_time(raw: &[u8], command: &str) -> Result<u64> {
 }
 
 fn autoclaim_count(raw: &[u8]) -> Result<usize> {
+    // Redis bounds the count by the deleted-ID buffer: count * sizeof(streamID).
     match protocol::parse_int(raw) {
-        Some(value) if value > 0 && value < i64::MAX / 10 => {
+        Some(value) if value > 0 && value <= i64::MAX / 16 => {
             usize::try_from(value).map_err(|_| protocol::error("COUNT must be > 0"))
         }
         _ => Err(protocol::error("COUNT must be > 0")),
