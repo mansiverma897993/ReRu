@@ -221,7 +221,19 @@ where
 
 fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<()> {
     match &entry.value {
-        Value::String(value) => command(output, &[b"SET", key, value]),
+        Value::String(value) => {
+            if value.len() <= MAX_REPLAY_COMMAND_BYTES {
+                command(output, &[b"SET", key, value]);
+            } else {
+                // A grown string can exceed the protocol bulk limit; emit it in
+                // replay-sized chunks so the AOF still loads.
+                let (first, rest) = value.split_at(MAX_REPLAY_COMMAND_BYTES);
+                command(output, &[b"SET", key, first]);
+                for chunk in rest.chunks(MAX_REPLAY_COMMAND_BYTES) {
+                    command(output, &[b"APPEND", key, chunk]);
+                }
+            }
+        }
         Value::List(items) => {
             chunk_items(items.iter().map(Vec::as_slice), |chunk| {
                 let mut args: Vec<&[u8]> = vec![b"RPUSH", key];
@@ -568,6 +580,30 @@ mod tests {
         // One 72 MiB command would exceed the 64 MiB replay limit.
         assert_eq!(commands, 3);
         assert_eq!(members, 8);
+
+        // Strings above the replay budget become SET plus APPEND chunks.
+        let entry = Entry {
+            value: Value::String(vec![b'y'; 70 * 1024 * 1024]),
+            expires_at: None,
+        };
+        let mut output = Vec::new();
+        append_value(&mut output, b"grown", &entry).unwrap();
+        let mut cursor = std::io::Cursor::new(output.as_slice());
+        let mut commands = 0;
+        let mut total = 0;
+        while let Some(command) = protocol::read_command(&mut cursor).unwrap() {
+            let bytes: usize = command.iter().map(Vec::len).sum();
+            assert!(bytes <= MAX_REPLAY_COMMAND_BYTES + 1024, "{bytes} bytes");
+            if commands == 0 {
+                assert_eq!(command[0], b"SET");
+            } else {
+                assert_eq!(command[0], b"APPEND");
+            }
+            total += command[2].len();
+            commands += 1;
+        }
+        assert_eq!(commands, 3);
+        assert_eq!(total, 70 * 1024 * 1024);
     }
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);

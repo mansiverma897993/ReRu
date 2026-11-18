@@ -261,3 +261,28 @@ fn aof_clamps_legacy_out_of_range_field_deadlines() {
     }
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn grown_strings_above_the_bulk_limit_survive_restart() {
+    let path = path();
+    let filename = path.to_str().unwrap();
+    let chunk = vec![b'x'; 130 * 1024 * 1024];
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut client = Client::new(&server);
+        assert_eq!(
+            client.call(&[b"APPEND", b"gk", &chunk]),
+            integer(130 * 1024 * 1024)
+        );
+        assert_eq!(
+            client.call(&[b"APPEND", b"gk", &chunk]),
+            integer(260 * 1024 * 1024)
+        );
+    }
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut client = Client::new(&server);
+        assert_eq!(client.call(&[b"STRLEN", b"gk"]), integer(260 * 1024 * 1024));
+    }
+    let _ = std::fs::remove_file(path);
+}

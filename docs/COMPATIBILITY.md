@@ -159,8 +159,9 @@ returns to `listpack` when the last deadline is cleared, deleted, or expires.
 keys. `OBJECT FREQ`, `OBJECT IDLETIME`, and `OBJECT HELP` are not implemented.
 
 AOF replay rewrites one key per batch. Collection keys are split by argument
-count and a 32 MiB payload budget. String values are written as one SET, so a
-string grown past the 256 MiB command cap by APPEND or SETRANGE cannot replay.
+count and a 32 MiB payload budget. String values larger than that budget are
+written as a SET followed by APPEND chunks, so a string grown past the 256 MiB
+command cap by APPEND or SETRANGE still replays.
 A dataset larger than 512 MiB cannot be snapshotted and returns MISCONF. A failed AOF write leaves the in-memory value in place, returns
 `-MISCONF`, and keeps the connection open. Snapshot key counts are bounded by
 the payload size instead of a fixed 1,000,000-key cap.
