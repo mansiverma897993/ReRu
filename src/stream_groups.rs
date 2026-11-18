@@ -883,11 +883,19 @@ fn group_lag(stream: &Stream, group: &Group) -> Option<u64> {
 fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
     let mut entries = store.entries.lock().unwrap();
     let stream = stream_mut(&mut entries, &c[2])?;
-    let full = c.get(3).is_some_and(|v| v.eq_ignore_ascii_case(b"FULL"));
+    let full = c.get(3).is_some_and(|v| cstr_eq(v, b"FULL"));
     let count = match c.len() {
         3 => 10,
         4 if full => 10,
-        6 if full && c[4].eq_ignore_ascii_case(b"COUNT") => number(&c[5])? as usize,
+        6 if full && cstr_eq(&c[4], b"COUNT") => {
+            let value = protocol::parse_int(&c[5])
+                .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
+            if value <= 0 {
+                usize::MAX
+            } else {
+                usize::try_from(value).unwrap_or(usize::MAX)
+            }
+        }
         _ => {
             return Err(protocol::error(&format!(
                 "unknown subcommand or wrong number of arguments for '{}'. Try XINFO HELP.",
@@ -895,7 +903,7 @@ fn stream_info(c: &[Vec<u8>], store: &Store) -> Result<Vec<u8>> {
             )))
         }
     };
-    let limit = if count == 0 { usize::MAX } else { count };
+    let limit = count;
     let mut fields = vec![
         protocol::bulk(b"length"),
         integer(stream.entries.len() as u64),

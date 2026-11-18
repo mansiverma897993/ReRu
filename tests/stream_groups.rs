@@ -506,9 +506,14 @@ fn stream_diagnostics_include_pending_owners_limits_and_deleted_metadata() {
         c.call(&[b"XINFO", b"STREAM", b"s", b"COUNT", b"1"]),
         Reply::Error(_)
     ));
+    // A zero or negative count means unlimited, and the keywords are C strings.
     assert!(matches!(
         c.call(&[b"XINFO", b"STREAM", b"s", b"FULL", b"COUNT", b"-1"]),
-        Reply::Error(_)
+        Reply::Array(Some(ref rows)) if !rows.is_empty()
+    ));
+    assert!(matches!(
+        c.call(&[b"XINFO", b"STREAM", b"s", b"FULL\x00junk", b"COUNT\x00junk", b"1"]),
+        Reply::Array(Some(ref rows)) if !rows.is_empty()
     ));
     c.call(&[b"MULTI"]);
     c.call(&[b"XLEN", b"s"]);
