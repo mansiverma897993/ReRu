@@ -6,7 +6,7 @@ use std::io::{self, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 static REWRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -104,7 +104,7 @@ fn rewrite_file(
         file.write_all(&output)?;
         let now = Instant::now();
         for (key, entry) in entries {
-            if entry.expires_at.is_some_and(|deadline| deadline <= now) {
+            if entry.expires_at.is_some_and(|deadline| deadline.at <= now) {
                 continue;
             }
             output.clear();
@@ -178,19 +178,6 @@ fn command(output: &mut Vec<u8>, args: &[&[u8]]) {
     for arg in args {
         output.extend(protocol::bulk(arg));
     }
-}
-
-fn deadline_millis(deadline: Instant) -> io::Result<String> {
-    let absolute = SystemTime::now()
-        .checked_add(deadline.saturating_duration_since(Instant::now()))
-        .ok_or_else(|| invalid("AOF expiry out of range"))?;
-    let millis = absolute
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| invalid("AOF expiry before epoch"))?
-        .as_millis();
-    Ok(i64::try_from(millis)
-        .map_err(|_| invalid("AOF expiry out of range"))?
-        .to_string())
 }
 
 // Keep every replayed command under the protocol bulk limit. Values can be
@@ -335,7 +322,7 @@ fn append_value(output: &mut Vec<u8>, key: &[u8], entry: &Entry) -> io::Result<(
         }
     }
     if let Some(deadline) = entry.expires_at {
-        let time = deadline_millis(deadline)?;
+        let time = deadline.unix_ms.to_string();
         command(output, &[b"PEXPIREAT", key, time.as_bytes()]);
     }
     Ok(())
@@ -457,7 +444,7 @@ pub fn append(
         command(&mut output, &[b"DEL", &key]);
         if let Some(entry) = entries
             .get(&key)
-            .filter(|entry| entry.expires_at.is_none_or(|deadline| deadline > now))
+            .filter(|entry| entry.expires_at.is_none_or(|deadline| deadline.at > now))
         {
             append_value(&mut output, &key, entry)?;
         }
@@ -635,8 +622,8 @@ mod tests {
         // Include a sequence number so parallel test threads never share a
         // timestamp, which would make one test read another test's file.
         let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let base = std::env::temp_dir().join(format!(

@@ -300,10 +300,10 @@ fn optional_bulk(value: Option<&[u8]>) -> Vec<u8> {
 enum Expiration {
     Reset,
     Keep,
-    At(Instant),
+    At(crate::Deadline),
 }
 
-fn deadline(option: &[u8], bytes: &[u8], command: &str) -> Result<Instant, Vec<u8>> {
+fn deadline(option: &[u8], bytes: &[u8], command: &str) -> Result<crate::Deadline, Vec<u8>> {
     let invalid = || protocol::error(&format!("invalid expire time in '{command}' command"));
     let amount = protocol::parse_int(bytes)
         .ok_or_else(|| protocol::error("value is not an integer or out of range"))?;
@@ -317,18 +317,27 @@ fn deadline(option: &[u8], bytes: &[u8], command: &str) -> Result<Instant, Vec<u
         amount
     };
     let milliseconds = u64::try_from(milliseconds).map_err(|_| invalid())?;
+    let now = Instant::now();
+    let now_unix = crate::unix_millis();
     if option.eq_ignore_ascii_case(b"EX") || option.eq_ignore_ascii_case(b"PX") {
-        return Instant::now()
+        let at = now
             .checked_add(Duration::from_millis(milliseconds))
-            .ok_or_else(invalid);
+            .ok_or_else(invalid)?;
+        let unix_ms = now_unix
+            .checked_add(i64::try_from(milliseconds).map_err(|_| invalid())?)
+            .ok_or_else(invalid)?;
+        return Ok(crate::Deadline { at, unix_ms });
     }
+    // Absolute deadlines keep the requested wall-clock millisecond exactly.
+    let unix_ms = i64::try_from(milliseconds).map_err(|_| invalid())?;
     let absolute = UNIX_EPOCH
         .checked_add(Duration::from_millis(milliseconds))
         .ok_or_else(invalid)?;
     let remaining = absolute
         .duration_since(SystemTime::now())
         .unwrap_or(Duration::ZERO);
-    Instant::now().checked_add(remaining).ok_or_else(invalid)
+    let at = now.checked_add(remaining).ok_or_else(invalid)?;
+    Ok(crate::Deadline { at, unix_ms })
 }
 
 struct SetOptions {
@@ -438,7 +447,7 @@ fn set(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
             expires_at,
         },
     );
-    if expires_at.is_some_and(|deadline| deadline <= Instant::now()) {
+    if expires_at.is_some_and(|deadline| deadline.at <= Instant::now()) {
         entries.remove(key);
     }
     mark_modified(store, key);
@@ -514,7 +523,7 @@ fn getex(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         entry.expires_at.take().is_some()
     } else if let Expiration::At(deadline) = expiration {
         entry.expires_at = Some(deadline);
-        if deadline <= Instant::now() {
+        if deadline.at <= Instant::now() {
             entries.remove(key);
         }
         true

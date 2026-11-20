@@ -16,23 +16,6 @@ fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid ReRu snapshot")
 }
 
-fn absolute_millis(
-    deadline: Instant,
-    now_instant: Instant,
-    now_system: SystemTime,
-) -> io::Result<u64> {
-    let absolute = now_system
-        .checked_add(deadline.saturating_duration_since(now_instant))
-        .ok_or_else(invalid)?;
-    u64::try_from(
-        absolute
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| invalid())?
-            .as_millis(),
-    )
-    .map_err(|_| invalid())
-}
-
 pub(crate) fn put_u64(output: &mut Vec<u8>, value: u64) {
     output.extend(value.to_be_bytes());
 }
@@ -86,15 +69,12 @@ pub fn encode(entries: &HashMap<Vec<u8>, Entry>) -> io::Result<Vec<u8>> {
         &mut output,
         u64::try_from(entries.len()).map_err(|_| invalid())?,
     );
-    let now_instant = Instant::now();
-    let now_system = SystemTime::now();
     for (key, entry) in entries {
         put_bytes(&mut output, key)?;
-        let expiry = entry
-            .expires_at
-            .map(|at| absolute_millis(at, now_instant, now_system))
-            .transpose()?
-            .unwrap_or(u64::MAX);
+        let expiry = match entry.expires_at {
+            Some(deadline) => u64::try_from(deadline.unix_ms).map_err(|_| invalid())?,
+            None => u64::MAX,
+        };
         put_u64(&mut output, expiry);
         match &entry.value {
             Value::String(value) => {
@@ -378,8 +358,12 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
             let deadline = UNIX_EPOCH
                 .checked_add(Duration::from_millis(expiry))
                 .ok_or_else(invalid)?;
+            let unix_ms = i64::try_from(expiry).map_err(|_| invalid())?;
             match deadline.duration_since(now_system) {
-                Ok(remaining) => Some(now_instant.checked_add(remaining).ok_or_else(invalid)?),
+                Ok(remaining) => Some(crate::Deadline {
+                    at: now_instant.checked_add(remaining).ok_or_else(invalid)?,
+                    unix_ms,
+                }),
                 Err(_) => continue,
             }
         };

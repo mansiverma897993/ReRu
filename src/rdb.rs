@@ -7,7 +7,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 const VERSION: u16 = 10;
 const MAX_BYTES: usize = 512 * 1024 * 1024;
@@ -19,10 +19,7 @@ fn invalid(message: &str) -> io::Error {
 }
 
 fn epoch_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    u64::try_from(crate::unix_millis()).unwrap_or(0)
 }
 
 pub struct Persistence {
@@ -489,18 +486,15 @@ pub fn encode(entries: &HashMap<Vec<u8>, Entry>) -> io::Result<Vec<u8>> {
     let mut out = format!("REDIS{VERSION:04}").into_bytes();
     out.extend([254, 0]);
     let now = Instant::now();
-    let epoch = epoch_millis();
     let mut items: Vec<_> = entries.iter().collect();
     items.sort_by_key(|(k, _)| *k);
     for (key, entry) in items {
         if let Some(deadline) = entry.expires_at {
-            if deadline <= now {
+            if deadline.at <= now {
                 continue;
             }
-            let millis = u64::try_from(deadline.duration_since(now).as_millis())
-                .ok()
-                .and_then(|n| epoch.checked_add(n))
-                .ok_or_else(|| invalid("RDB expiry overflow"))?;
+            let millis =
+                u64::try_from(deadline.unix_ms).map_err(|_| invalid("RDB expiry overflow"))?;
             out.push(252);
             out.extend(millis.to_le_bytes());
         }
@@ -589,10 +583,12 @@ pub fn decode(bytes: &[u8]) -> io::Result<HashMap<Vec<u8>, Entry>> {
                 }
                 let expires_at = match expiry.take() {
                     Some(time) if time <= epoch => continue,
-                    Some(time) => Some(
-                        now.checked_add(Duration::from_millis(time - epoch))
+                    Some(time) => Some(crate::Deadline {
+                        at: now
+                            .checked_add(Duration::from_millis(time - epoch))
                             .ok_or_else(|| invalid("RDB expiry overflow"))?,
-                    ),
+                        unix_ms: i64::try_from(time).map_err(|_| invalid("RDB expiry overflow"))?,
+                    }),
                     None => None,
                 };
                 entries.insert(key, Entry { value, expires_at });
@@ -734,8 +730,9 @@ fn restore(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         Ok(value) => value,
         Err(_) => return protocol::error("DUMP payload version or checksum are wrong"),
     };
+    let now_unix = crate::unix_millis();
     let remaining = if absolute && ttl != 0 {
-        (ttl as u64).saturating_sub(epoch_millis())
+        (ttl as u64).saturating_sub(u64::try_from(now_unix).unwrap_or(0))
     } else {
         ttl as u64
     };
@@ -748,8 +745,13 @@ fn restore(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     let expires_at = if ttl == 0 {
         None
     } else {
+        let unix_ms = if absolute {
+            ttl
+        } else {
+            now_unix.saturating_add(ttl)
+        };
         match Instant::now().checked_add(Duration::from_millis(remaining)) {
-            Some(time) => Some(time),
+            Some(at) => Some(crate::Deadline { at, unix_ms }),
             None => return protocol::error("Invalid TTL value, must be >= 0"),
         }
     };

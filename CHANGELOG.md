@@ -83,8 +83,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   time up to the next second, and `HEXPIRETIME` rounds the absolute second up.
   A legacy AOF with a larger stored deadline is clamped during replay so the
   server still starts.
-- `EXPIRETIME` rounds the absolute second half up, matching Redis and the
-  existing `TTL` rule.
+- Key expiry now stores the wall-clock millisecond alongside the monotonic
+  deadline, so `PEXPIRETIME` returns the exact requested absolute value for
+  `PEXPIREAT`/`EXPIREAT`/`SET EXAT|PXAT`/`GETEX EXAT|PXAT` and across snapshots,
+  AOF replay, and replicas. `EXPIRETIME` rounds the absolute second half up.
 - AOF string values larger than the replay budget are written as a `SET` plus
   `APPEND` chunks, so a string grown past the protocol bulk limit replays.
 - `PUBSUB NUMPAT` reads a reference-counted pattern map instead of rebuilding a
