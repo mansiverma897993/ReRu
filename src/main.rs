@@ -58,7 +58,8 @@ pub(crate) struct Deadline {
 pub(crate) fn unix_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
         .unwrap_or(0)
 }
 

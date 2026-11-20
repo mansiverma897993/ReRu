@@ -132,6 +132,44 @@ fn writes_transactions_flush_and_expiry_survive_rewrite_and_restart() {
 }
 
 #[test]
+fn absolute_expiry_milliseconds_survive_rewrite_exactly() {
+    let path = path();
+    let filename = path.to_str().unwrap();
+    let deadline = ((std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        / 1000)
+        + 300)
+        * 1000
+        + 321;
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut c = Client::new(&server);
+        assert_eq!(
+            c.call(&[
+                b"SET",
+                b"key",
+                b"v",
+                b"PXAT",
+                deadline.to_string().as_bytes()
+            ]),
+            ok()
+        );
+        start(&mut c);
+        wait(&mut c, 1);
+        assert_eq!(c.call(&[b"PEXPIRETIME", b"key"]), integer(deadline));
+    }
+    {
+        let server = Server::start_with(&["--appendonly", filename]);
+        let mut c = Client::new(&server);
+        assert_eq!(c.call(&[b"PEXPIRETIME", b"key"]), integer(deadline));
+        assert_eq!(c.call(&[b"EXPIRETIME", b"key"]), integer(deadline / 1000));
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn list_chunks_survive_aof_rewrite_and_restart() {
     // The rewrite emits RPUSH in chunks of 1022 elements, so a list longer than
     // one chunk must survive the boundary without losing or repeating members.

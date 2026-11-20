@@ -7,7 +7,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 const VERSION: u16 = 10;
 const MAX_BYTES: usize = 512 * 1024 * 1024;
@@ -19,10 +19,7 @@ fn invalid(message: &str) -> io::Error {
 }
 
 fn epoch_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    u64::try_from(crate::unix_millis()).unwrap_or(0)
 }
 
 pub struct Persistence {
@@ -733,8 +730,9 @@ fn restore(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         Ok(value) => value,
         Err(_) => return protocol::error("DUMP payload version or checksum are wrong"),
     };
+    let now_unix = crate::unix_millis();
     let remaining = if absolute && ttl != 0 {
-        (ttl as u64).saturating_sub(epoch_millis())
+        (ttl as u64).saturating_sub(u64::try_from(now_unix).unwrap_or(0))
     } else {
         ttl as u64
     };
@@ -750,9 +748,7 @@ fn restore(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         let unix_ms = if absolute {
             ttl
         } else {
-            i64::try_from(epoch_millis())
-                .unwrap_or(i64::MAX)
-                .saturating_add(ttl)
+            now_unix.saturating_add(ttl)
         };
         match Instant::now().checked_add(Duration::from_millis(remaining)) {
             Some(at) => Some(crate::Deadline { at, unix_ms }),

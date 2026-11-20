@@ -3,7 +3,7 @@ use crate::{mark_modified, protocol, pubsub::glob_matches, remove_expired, Store
 use std::collections::hash_map::RandomState;
 use std::collections::VecDeque;
 use std::hash::BuildHasher;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
     let name = &command[0];
@@ -339,11 +339,10 @@ fn expiry_arguments(command: &[Vec<u8>]) -> Result<(i64, i64, ExpiryConditions),
     } else {
         number
     };
-    let epoch_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
-        .ok_or_else(invalid_expiry)?;
+    let epoch_ms = match crate::unix_millis() {
+        value if value > 0 => value,
+        _ => return Err(invalid_expiry()),
+    };
     if command[0].eq_ignore_ascii_case(b"EXPIREAT") || command[0].eq_ignore_ascii_case(b"PEXPIREAT")
     {
         Ok((

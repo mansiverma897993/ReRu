@@ -130,6 +130,37 @@ fn idle_expiry_is_persisted_and_startup_rebuilds_deadlines() {
 }
 
 #[test]
+fn replica_preserves_absolute_expiry_milliseconds() {
+    let primary = Server::start();
+    let mut writer = Client::new(&primary);
+    let deadline = ((std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        / 1000)
+        + 300)
+        * 1000
+        + 321;
+    assert_eq!(
+        writer.call(&[
+            b"SET",
+            b"key",
+            b"v",
+            b"PXAT",
+            deadline.to_string().as_bytes()
+        ]),
+        ok()
+    );
+    let replica = Server::start_with(&["--replicaof", "127.0.0.1", &primary.port.to_string()]);
+    let mut reader = Client::new(&replica);
+    eventually(|| reader.call(&[b"PEXPIRETIME", b"key"]) == integer(deadline));
+    assert_eq!(
+        reader.call(&[b"EXPIRETIME", b"key"]),
+        integer(deadline / 1000)
+    );
+}
+
+#[test]
 fn primary_propagates_idle_expiry_to_replica() {
     let primary = Server::start();
     let mut writer = Client::new(&primary);

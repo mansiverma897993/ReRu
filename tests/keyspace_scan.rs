@@ -108,6 +108,8 @@ fn expiretime_rounds_the_absolute_second_half_up() {
             integer(1)
         );
         // Absolute deadlines are stored exactly, so both replies are exact.
+        // The restart test in cache_lifecycle.rs is the regression guard: the
+        // old code's drift was usually hidden by integer truncation here.
         assert_eq!(
             client.call(&[b"PEXPIRETIME", b"k"]),
             integer(deadline),

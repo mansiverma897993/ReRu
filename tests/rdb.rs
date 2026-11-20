@@ -144,6 +144,10 @@ fn restore_expiry_watch_transactions_and_memory_rejection() {
         ok()
     );
     assert!(matches!(c.call(&[b"PTTL", b"new"]), Reply::Integer(n) if n > 0 && n <= 60000));
+    assert_eq!(
+        c.call(&[b"PEXPIRETIME", b"new"]),
+        integer(deadline.parse::<i64>().unwrap())
+    );
     let bounded = Server::start_with(&["--maxmemory", "1"]);
     let mut limited = Client::new(&bounded);
     assert!(
