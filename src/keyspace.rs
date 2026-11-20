@@ -339,10 +339,10 @@ fn expiry_arguments(command: &[Vec<u8>]) -> Result<(i64, i64, ExpiryConditions),
     } else {
         number
     };
-    let epoch_ms = match crate::unix_millis() {
-        value if value > 0 => value,
-        _ => return Err(invalid_expiry()),
-    };
+    let epoch_ms = crate::unix_millis();
+    if epoch_ms <= 0 {
+        return Err(invalid_expiry());
+    }
     if command[0].eq_ignore_ascii_case(b"EXPIREAT") || command[0].eq_ignore_ascii_case(b"PEXPIREAT")
     {
         Ok((
