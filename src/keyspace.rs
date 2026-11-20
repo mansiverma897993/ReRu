@@ -261,7 +261,7 @@ fn scan(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
     let entries = store.entries.lock().unwrap();
     let mut keys: Vec<_> = entries
         .iter()
-        .filter(|(_, entry)| entry.expires_at.is_none_or(|deadline| deadline > now))
+        .filter(|(_, entry)| entry.expires_at.is_none_or(|deadline| deadline.at > now))
         .map(|(key, _)| key.clone())
         .collect();
     keys.sort();
@@ -292,7 +292,7 @@ struct ExpiryConditions {
     shorter: bool,
 }
 
-fn expiry_arguments(command: &[Vec<u8>]) -> Result<(i64, ExpiryConditions), Vec<u8>> {
+fn expiry_arguments(command: &[Vec<u8>]) -> Result<(i64, i64, ExpiryConditions), Vec<u8>> {
     let mut conditions = ExpiryConditions::default();
     for option in &command[3..] {
         if option.eq_ignore_ascii_case(b"NX") {
@@ -346,12 +346,16 @@ fn expiry_arguments(command: &[Vec<u8>]) -> Result<(i64, ExpiryConditions), Vec<
         .ok_or_else(invalid_expiry)?;
     if command[0].eq_ignore_ascii_case(b"EXPIREAT") || command[0].eq_ignore_ascii_case(b"PEXPIREAT")
     {
-        Ok((milliseconds.saturating_sub(epoch_ms), conditions))
+        Ok((
+            milliseconds.saturating_sub(epoch_ms),
+            milliseconds,
+            conditions,
+        ))
     } else {
-        epoch_ms
+        let absolute = epoch_ms
             .checked_add(milliseconds)
             .ok_or_else(invalid_expiry)?;
-        Ok((milliseconds, conditions))
+        Ok((milliseconds, absolute, conditions))
     }
 }
 
@@ -372,7 +376,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         let now = Instant::now();
         let count = entries
             .values()
-            .filter(|entry| entry.expires_at.is_none_or(|deadline| deadline > now))
+            .filter(|entry| entry.expires_at.is_none_or(|deadline| deadline.at > now))
             .count();
         return Some(format!(":{count}\r\n").into_bytes());
     }
@@ -382,7 +386,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         let mut keys: Vec<_> = entries
             .iter()
             .filter(|(key, entry)| {
-                entry.expires_at.is_none_or(|deadline| deadline > now)
+                entry.expires_at.is_none_or(|deadline| deadline.at > now)
                     && glob_matches(&command[1], key)
             })
             .map(|(key, _)| key.clone())
@@ -399,7 +403,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
         let entries = store.entries.lock().unwrap();
         let key = entries
             .iter()
-            .filter(|(_, entry)| entry.expires_at.is_none_or(|deadline| deadline > now))
+            .filter(|(_, entry)| entry.expires_at.is_none_or(|deadline| deadline.at > now))
             .min_by_key(|(key, _)| random.hash_one(key))
             .map(|(key, _)| key);
         return Some(key.map_or_else(|| b"$-1\r\n".to_vec(), |key| protocol::bulk(key)));
@@ -491,30 +495,20 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
             Some(entry) => match entry.expires_at {
                 None => -1,
                 Some(deadline) => {
-                    let milliseconds = deadline
-                        .saturating_duration_since(Instant::now())
-                        .as_millis();
-                    if name.eq_ignore_ascii_case(b"EXPIRETIME")
-                        || name.eq_ignore_ascii_case(b"PEXPIRETIME")
-                    {
-                        let absolute = SystemTime::now()
-                            .checked_add(deadline.saturating_duration_since(Instant::now()));
-                        let absolute = absolute
-                            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                            .and_then(|duration| i64::try_from(duration.as_millis()).ok());
-                        match absolute {
-                            Some(milliseconds) if name.eq_ignore_ascii_case(b"PEXPIRETIME") => {
-                                milliseconds
-                            }
-                            Some(milliseconds) => {
-                                milliseconds / 1000 + i64::from(milliseconds % 1000 >= 500)
-                            }
-                            None => return Some(protocol::error("expire time out of range")),
-                        }
-                    } else if name.eq_ignore_ascii_case(b"PTTL") {
-                        milliseconds as i64
+                    if name.eq_ignore_ascii_case(b"PEXPIRETIME") {
+                        deadline.unix_ms
+                    } else if name.eq_ignore_ascii_case(b"EXPIRETIME") {
+                        deadline.unix_ms / 1000 + i64::from(deadline.unix_ms % 1000 >= 500)
                     } else {
-                        ((milliseconds + 500) / 1000) as i64
+                        let milliseconds = deadline
+                            .at
+                            .saturating_duration_since(Instant::now())
+                            .as_millis();
+                        if name.eq_ignore_ascii_case(b"PTTL") {
+                            milliseconds as i64
+                        } else {
+                            ((milliseconds + 500) / 1000) as i64
+                        }
                     }
                 }
             },
@@ -533,7 +527,7 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
             b":0\r\n".to_vec()
         });
     }
-    let (milliseconds, conditions) = match expiry_arguments(command) {
+    let (milliseconds, absolute_unix, conditions) = match expiry_arguments(command) {
         Ok(arguments) => arguments,
         Err(error) => return Some(error),
     };
@@ -554,15 +548,18 @@ pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
     let old = entry.expires_at;
     let skipped = (conditions.absent && old.is_some())
         || (conditions.present && old.is_none())
-        || (conditions.longer && old.is_none_or(|previous| deadline <= previous))
-        || (conditions.shorter && old.is_some_and(|previous| deadline >= previous));
+        || (conditions.longer && old.is_none_or(|previous| deadline <= previous.at))
+        || (conditions.shorter && old.is_some_and(|previous| deadline >= previous.at));
     if skipped {
         return Some(b":0\r\n".to_vec());
     }
     if milliseconds <= 0 {
         entries.remove(&command[1]);
     } else {
-        entry.expires_at = Some(deadline);
+        entry.expires_at = Some(crate::Deadline {
+            at: deadline,
+            unix_ms: absolute_unix,
+        });
     }
     Some(b":1\r\n".to_vec())
 }

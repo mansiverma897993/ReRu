@@ -46,10 +46,26 @@ enum Value {
     VectorSet(vector_sets::VectorSet),
 }
 
+/// A key deadline: the monotonic instant used for expiry decisions and the
+/// wall-clock millisecond Redis reports from EXPIRETIME/PEXPIRETIME.
+#[derive(Clone, Copy)]
+pub(crate) struct Deadline {
+    pub(crate) at: Instant,
+    pub(crate) unix_ms: i64,
+}
+
+/// Current wall-clock milliseconds since the Unix epoch.
+pub(crate) fn unix_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
 #[derive(Clone)]
 struct Entry {
     value: Value,
-    expires_at: Option<Instant>,
+    expires_at: Option<Deadline>,
 }
 
 struct SharedStore {
@@ -82,7 +98,7 @@ struct WatchRegistration {
 
 struct ClientWatches {
     store: Store,
-    keys: HashMap<Vec<u8>, (u64, Option<Instant>)>,
+    keys: HashMap<Vec<u8>, (u64, Option<Deadline>)>,
 }
 
 impl ClientWatches {
@@ -122,7 +138,7 @@ impl ClientWatches {
             registry
                 .get(key)
                 .is_none_or(|item| item.revision != *revision)
-                || expiry.is_some_and(|deadline| Instant::now() >= deadline)
+                || expiry.is_some_and(|deadline| Instant::now() >= deadline.at)
         })
     }
 
@@ -506,7 +522,7 @@ fn remove_expired(store: &mut HashMap<Vec<u8>, Entry>, key: &[u8]) {
     if store.get(key).is_some_and(|entry| {
         entry
             .expires_at
-            .is_some_and(|expiry| Instant::now() >= expiry)
+            .is_some_and(|expiry| Instant::now() >= expiry.at)
     }) {
         store.remove(key);
     } else if let Some(Entry {

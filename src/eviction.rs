@@ -478,7 +478,7 @@ impl Eviction {
         for key in keys {
             if entries
                 .get(key)
-                .is_some_and(|entry| entry.expires_at.is_none_or(|at| at > now))
+                .is_some_and(|entry| entry.expires_at.is_none_or(|at| at.at > now))
             {
                 let tick = self.clock.fetch_add(1, Ordering::Relaxed) + 1;
                 let access = accesses.entry(key.clone()).or_insert(Access {
@@ -511,7 +511,7 @@ impl Eviction {
         let mut candidates: Vec<_> = entries
             .iter()
             .filter(|(_, entry)| {
-                entry.expires_at.is_none_or(|at| at > now)
+                entry.expires_at.is_none_or(|at| at.at > now)
                     && (!settings.policy.is_volatile() || entry.expires_at.is_some())
             })
             .map(|(key, entry)| {
@@ -530,6 +530,7 @@ impl Eviction {
                     Policy::VolatileTtl => entry
                         .expires_at
                         .unwrap()
+                        .at
                         .saturating_duration_since(now)
                         .as_millis()
                         .min(u128::from(u64::MAX))
@@ -607,7 +608,7 @@ pub fn dataset_bytes(entries: &HashMap<Vec<u8>, Entry>) -> usize {
     let now = Instant::now();
     entries
         .iter()
-        .filter(|(_, entry)| entry.expires_at.is_none_or(|at| at > now))
+        .filter(|(_, entry)| entry.expires_at.is_none_or(|at| at.at > now))
         .fold(0usize, |sum, (key, entry)| {
             sum.saturating_add(entry_bytes(key, entry))
         })

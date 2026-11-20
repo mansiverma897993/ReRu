@@ -141,3 +141,44 @@ fn primary_propagates_idle_expiry_to_replica() {
     assert_eq!(metric(&mut writer, b"stats", "reru_active_expired_keys"), 1);
     assert_eq!(metric(&mut reader, b"stats", "reru_active_expired_keys"), 0);
 }
+
+#[test]
+fn absolute_expiry_milliseconds_survive_restart_exactly() {
+    let deadline = ((std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        / 1000)
+        + 300)
+        * 1000
+        + 321;
+    for mode in ["--appendonly", "--snapshot"] {
+        let path = common::temp_path("reru-expiry-exact", "");
+        let filename = path.to_str().unwrap();
+        {
+            let server = Server::start_with(&[mode, filename]);
+            let mut c = Client::new(&server);
+            assert_eq!(
+                c.call(&[
+                    b"SET",
+                    b"key",
+                    b"v",
+                    b"PXAT",
+                    deadline.to_string().as_bytes()
+                ]),
+                client::ok()
+            );
+            assert_eq!(c.call(&[b"PEXPIRETIME", b"key"]), client::integer(deadline));
+        }
+        {
+            let server = Server::start_with(&[mode, filename]);
+            let mut c = Client::new(&server);
+            assert_eq!(c.call(&[b"PEXPIRETIME", b"key"]), client::integer(deadline));
+            assert_eq!(
+                c.call(&[b"EXPIRETIME", b"key"]),
+                client::integer(deadline / 1000)
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+}

@@ -71,7 +71,7 @@ fn next_deadline(entry: &Entry) -> Option<Instant> {
         Value::Hash(hash) => hash.next_deadline(),
         _ => None,
     };
-    match (entry.expires_at, field_deadline) {
+    match (entry.expires_at.map(|deadline| deadline.at), field_deadline) {
         (Some(key), Some(field)) => Some(key.min(field)),
         (key, field) => key.or(field),
     }
@@ -96,7 +96,7 @@ fn expire_cycle(store: &Store) {
             index.by_key.remove(&key);
             let missing = !entries.contains_key(&key);
             let delete_key = match entries.get_mut(&key) {
-                Some(entry) if entry.expires_at.is_some_and(|at| at <= started) => true,
+                Some(entry) if entry.expires_at.is_some_and(|at| at.at <= started) => true,
                 Some(entry) => match &mut entry.value {
                     Value::Hash(hash) => {
                         hash.prune(started);
