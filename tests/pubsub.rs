@@ -677,7 +677,19 @@ fn a_large_subscription_batch_survives_a_pause() {
         let length: usize = std::str::from_utf8(&length[1..]).unwrap().parse().unwrap();
         let mut received = vec![0u8; length + 2];
         reader.read_exact(&mut received).unwrap();
-        assert_eq!(&received[..length], channel, "ack {index}");
+        if &received[..length] != channel.as_slice() {
+            panic!(
+                "ack {index}: length {length} vs {}, prefix {:?} vs {:?}, sum {} vs {}",
+                channel.len(),
+                &received[..12.min(length)],
+                &channel[..12.min(channel.len())],
+                received[..length]
+                    .iter()
+                    .map(|b| u64::from(*b))
+                    .sum::<u64>(),
+                channel.iter().map(|b| u64::from(*b)).sum::<u64>()
+            );
+        }
         assert_eq!(&received[length..], b"\r\n", "ack {index}");
         assert_eq!(
             line(&mut reader),
