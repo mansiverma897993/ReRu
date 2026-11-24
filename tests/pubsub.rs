@@ -655,14 +655,18 @@ fn a_large_subscription_batch_survives_a_pause() {
     let channels: Vec<Vec<u8>> = (0..40)
         .map(|index| format!("{index:02}-{}", "c".repeat(300 * 1024)).into_bytes())
         .collect();
-    let mut args: Vec<&[u8]> = vec![b"SUBSCRIBE"];
-    args.extend(channels.iter().map(Vec::as_slice));
 
+    // Send every subscription without reading, then pause: the whole batch of
+    // acknowledgements (>8 MiB) must be buffered instead of truncated.
     let mut subscriber = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
     subscriber
         .set_read_timeout(Some(Duration::from_secs(15)))
         .unwrap();
-    subscriber.write_all(&command(&args)).unwrap();
+    for channel in &channels {
+        subscriber
+            .write_all(&command(&[b"SUBSCRIBE", channel]))
+            .unwrap();
+    }
     std::thread::sleep(Duration::from_millis(1500));
 
     let mut reader = BufReader::new(subscriber);
