@@ -7,7 +7,7 @@ tests; it does not certify complete compatibility with Redis.
 
 | Area | Commands | Current scope |
 | --- | --- | --- |
-| Connection | `PING`, `ECHO`, `HELLO`, `SELECT`, `RESET`, `CLIENT ID`, `CLIENT SETNAME`, `CLIENT GETNAME`, `CLIENT SETINFO`, `CLIENT INFO` | RESP2 handshake, optional inline authentication/name, database 0 selection, socket metadata and context reset |
+| Connection | `PING`, `ECHO`, `HELLO`, `SELECT`, `RESET`, `CLIENT ID`, `CLIENT SETNAME`, `CLIENT GETNAME`, `CLIENT SETINFO`, `CLIENT INFO`, `CLIENT REPLY` | RESP2 handshake, optional inline authentication/name, database 0 selection, socket metadata, reply suppression and context reset |
 | Strings/cache | `SET`, `GET`, `INCR`, `GETEX`, `GETDEL`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `STRLEN`, `SETNX`, `SETEX`, `PSETEX`, `GETSET`, `INCRBY`, `INCRBYFLOAT`, `DECR`, `DECRBY`, `GETRANGE`, `SUBSTR`, `SETRANGE`, `LCS` | Binary values; SET NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL; GETEX expiry/PERSIST; multi-key access, numeric arithmetic and byte ranges; longest common subsequence with LEN/IDX/MINMATCHLEN/WITHMATCHLEN |
 | Lists | `RPUSH`, `LPUSH`, `LPUSHX`, `RPUSHX`, `LRANGE`, `LLEN`, `LINDEX`, `LSET`, `LINSERT`, `LTRIM`, `LREM`, `LPOS`, `LPOP`, `RPOP`, `RPOPLPUSH`, `LMOVE`, `BLPOP`, `BRPOP`, `BLMOVE`, `BRPOPLPUSH`, `LMPOP`, `BLMPOP` | Multiple elements, negative indexes, edits, moves, position search, single/multi-key blocking pops and moves with timeout |
 | Streams | `XADD`, `XRANGE`, `XREVRANGE`, `XREAD`, `XLEN`, `XDEL`, `XTRIM`, `XGROUP CREATE`, `XGROUP SETID`, `XGROUP DESTROY`, `XGROUP CREATECONSUMER`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`, `XAUTOCLAIM`, `XINFO GROUPS`, `XINFO CONSUMERS`, `XINFO STREAM`, `XSETID` | IDs, ranges, deletion, exact trimming, blocking reads, consumer groups, pending entries, acknowledgement, claiming and diagnostics; XADD NOMKSTREAM/MAXLEN/MINID. XRANGE with COUNT 0 or a negative count returns a null array for an existing stream and an empty array for a missing key; XREAD/XREADGROUP treat COUNT 0 or a negative count as unlimited |
@@ -551,6 +551,15 @@ name, age, database, default user, RESP version and library metadata. CLIENT LIS
 KILL, UNBLOCK, TRACKING, detailed buffer metrics and other client operations
 remain pending. Metadata is local to the connection and is never persisted.
 
+`CLIENT REPLY ON|OFF|SKIP` controls command replies per connection. `OFF` and
+`SKIP` produce no reply themselves; `ON` replies `+OK`. `SKIP` suppresses the
+next command reply, including an error; `ON` can restore replies immediately.
+`RESET` restores reply mode while respecting a pending `SKIP`. Subscription
+acknowledgements and published messages remain visible in subscribed mode,
+matching Redis even when ordinary command replies are disabled.
+Within `EXEC`, an embedded reply-mode change can suppress later element bytes
+while the declared array length remains unchanged, as observed in Redis 8.10.2.
+
 `SELECT 0` supports clients that explicitly select the default database. Nonzero
 databases fail explicitly; multiple logical databases remain unimplemented.
 With static Cluster enabled, `SELECT 0` is accepted, other valid database indexes
@@ -572,7 +581,8 @@ specified behavior; its reference-server comparison remains pending.
 
 References: [HELLO](https://redis.io/docs/latest/commands/hello/),
 [RESET](https://redis.io/docs/latest/commands/reset/),
-[CLIENT SETINFO](https://redis.io/docs/latest/commands/client-setinfo/).
+[CLIENT SETINFO](https://redis.io/docs/latest/commands/client-setinfo/),
+[CLIENT REPLY](https://redis.io/docs/latest/commands/client-reply/).
 
 ## Authentication
 
