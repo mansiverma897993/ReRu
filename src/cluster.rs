@@ -80,12 +80,11 @@ impl Cluster {
                 {
                     return Err(invalid("invalid cluster state file"));
                 }
-                let chunks = bytes[STATE_MAGIC.len()..]
-                    .chunks_exact(SLOT_COUNT as usize)
-                    .collect::<Vec<_>>();
-                state.owner.copy_from_slice(chunks[0]);
-                state.migrating.copy_from_slice(chunks[1]);
-                state.importing.copy_from_slice(chunks[2]);
+                let (owner, rest) = bytes[STATE_MAGIC.len()..].split_at(SLOT_COUNT as usize);
+                let (migrating, importing) = rest.split_at(SLOT_COUNT as usize);
+                state.owner.copy_from_slice(owner);
+                state.migrating.copy_from_slice(migrating);
+                state.importing.copy_from_slice(importing);
                 if state.owner.iter().any(|v| *v > 1)
                     || state.migrating.iter().any(|v| *v > NONE)
                     || state.importing.iter().any(|v| *v > NONE)
