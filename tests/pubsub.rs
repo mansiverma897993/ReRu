@@ -670,35 +670,36 @@ fn a_large_subscription_batch_survives_a_pause() {
     std::thread::sleep(Duration::from_millis(1500));
 
     let mut reader = BufReader::new(subscriber);
-    for (index, channel) in channels.iter().enumerate() {
-        assert_eq!(line(&mut reader), b"*3", "ack {index}");
-        assert_eq!(line(&mut reader), b"$9", "ack {index}");
+    let mut received: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    for _ in 0..channels.len() {
+        assert_eq!(line(&mut reader), b"*3");
+        assert_eq!(line(&mut reader), b"$9");
         let mut kind = [0u8; 9];
         reader.read_exact(&mut kind).unwrap();
-        assert_eq!(&kind, b"subscribe", "ack {index}");
-        assert_eq!(line(&mut reader), b"", "ack {index}");
+        assert_eq!(&kind, b"subscribe");
+        assert_eq!(line(&mut reader), b"");
         let length = line(&mut reader);
         let length: usize = std::str::from_utf8(&length[1..]).unwrap().parse().unwrap();
-        let mut received = vec![0u8; length + 2];
-        reader.read_exact(&mut received).unwrap();
-        if &received[..length] != channel.as_slice() {
-            panic!(
-                "ack {index}: length {length} vs {}, prefix {:?} vs {:?}, sum {} vs {}",
-                channel.len(),
-                &received[..12.min(length)],
-                &channel[..12.min(channel.len())],
-                received[..length]
-                    .iter()
-                    .map(|b| u64::from(*b))
-                    .sum::<u64>(),
-                channel.iter().map(|b| u64::from(*b)).sum::<u64>()
-            );
-        }
-        assert_eq!(&received[length..], b"\r\n", "ack {index}");
+        let mut channel = vec![0u8; length];
+        reader.read_exact(&mut channel).unwrap();
+        let mut suffix = [0u8; 2];
+        reader.read_exact(&mut suffix).unwrap();
+        assert_eq!(&suffix, b"\r\n");
+        received.push((channel, line(&mut reader)));
+    }
+    let got: Vec<&[u8]> = received.iter().map(|(channel, _)| &channel[..3]).collect();
+    let want: Vec<&[u8]> = channels.iter().map(|channel| &channel[..3]).collect();
+    if received
+        .iter()
+        .zip(&channels)
+        .any(|((channel, _), expected)| channel != expected)
+    {
+        panic!("channels {:?} != {:?}", got, want);
+    }
+    for (index, (_, count)) in received.iter().enumerate() {
         assert_eq!(
-            line(&mut reader),
-            format!(":{}", index + 1).into_bytes(),
-            "ack {index}"
+            std::str::from_utf8(count).unwrap(),
+            format!(":{}", index + 1)
         );
     }
 
