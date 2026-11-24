@@ -640,8 +640,16 @@ fn a_paused_subscriber_receives_the_whole_message() {
 
 #[test]
 fn a_large_subscription_batch_survives_a_pause() {
-    use std::io::Write;
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpStream;
+
+    fn line(reader: &mut BufReader<TcpStream>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        reader.read_until(b'\n', &mut bytes).unwrap();
+        assert!(bytes.ends_with(b"\r\n"), "invalid line: {bytes:?}");
+        bytes.truncate(bytes.len() - 2);
+        bytes
+    }
 
     let server = Server::start();
     let channels: Vec<Vec<u8>> = (0..40)
@@ -657,39 +665,27 @@ fn a_large_subscription_batch_survives_a_pause() {
     subscriber.write_all(&command(&args)).unwrap();
     std::thread::sleep(Duration::from_millis(1500));
 
-    let mut expected = Vec::new();
+    let mut reader = BufReader::new(subscriber);
     for (index, channel) in channels.iter().enumerate() {
-        expected.extend_from_slice(
-            format!("*3\r\n$9\r\nsubscribe\r\n${}\r\n", channel.len()).as_bytes(),
+        assert_eq!(line(&mut reader), b"*3", "ack {index}");
+        assert_eq!(line(&mut reader), b"$9", "ack {index}");
+        let mut kind = [0u8; 9];
+        reader.read_exact(&mut kind).unwrap();
+        assert_eq!(&kind, b"subscribe", "ack {index}");
+        assert_eq!(line(&mut reader), b"", "ack {index}");
+        let length = line(&mut reader);
+        let length: usize = std::str::from_utf8(&length[1..]).unwrap().parse().unwrap();
+        let mut received = vec![0u8; length + 2];
+        reader.read_exact(&mut received).unwrap();
+        assert_eq!(&received[..length], channel, "ack {index}");
+        assert_eq!(&received[length..], b"\r\n", "ack {index}");
+        assert_eq!(
+            line(&mut reader),
+            format!(":{}", index + 1).into_bytes(),
+            "ack {index}"
         );
-        expected.extend_from_slice(channel);
-        expected.extend_from_slice(format!("\r\n:{}\r\n", index + 1).as_bytes());
     }
-    let frames = read_exact_bytes(&mut subscriber, expected.len());
-    let mut offset = 0;
-    for (index, channel) in channels.iter().enumerate() {
-        let frame = format!("*3\r\n$9\r\nsubscribe\r\n${}\r\n", channel.len());
-        let frame = {
-            let mut bytes = frame.into_bytes();
-            bytes.extend_from_slice(channel);
-            bytes.extend_from_slice(format!("\r\n:{}\r\n", index + 1).as_bytes());
-            bytes
-        };
-        let got = &frames[offset..offset + frame.len()];
-        if got != frame.as_slice() {
-            let mismatch = got
-                .iter()
-                .zip(frame.iter())
-                .position(|(left, right)| left != right)
-                .unwrap_or(got.len().min(frame.len()));
-            panic!(
-                "ack {index} differs at byte {mismatch}: {:?} != {:?}",
-                &got[mismatch.saturating_sub(8)..(mismatch + 8).min(got.len())],
-                &frame[mismatch.saturating_sub(8)..(mismatch + 8).min(frame.len())]
-            );
-        }
-        offset += frame.len();
-    }
+
     let mut observer = Client::new(&server);
     assert_eq!(
         observer.call(&[b"PUBSUB", b"NUMSUB", channels[0].as_slice()]),
