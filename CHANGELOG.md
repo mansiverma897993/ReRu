@@ -10,6 +10,9 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Added
 
+- Added connection-local `CLIENT REPLY ON|OFF|SKIP` with raw RESP reply
+  suppression, pipeline and transaction handling, and RESET recovery.
+
 - Added manual two-node Cluster slot migration with persistent ownership,
   `CLUSTER SETSLOT`, connection-local `ASKING`, `ASK`/`TRYAGAIN` routing and
   acknowledged ReRu-to-ReRu `MIGRATE` with binary values and TTLs.

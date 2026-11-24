@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "client|getname",
     "client|id",
     "client|info",
+    "client|reply",
     "client|setinfo",
     "client|setname",
     "cluster|keyslot",
@@ -270,9 +271,10 @@ fn metadata(name: &str) -> Metadata {
         "vemb" => -3,
         "vadd" => -5,
         "vsim" => -4,
-        "client|setname" | "append" | "setnx" | "getset" | "decrby" | "incrby" | "incrbyfloat"
-        | "latency|history" | "hget" | "hstrlen" | "sismember" | "zscore" | "rpoplpush"
-        | "rename" | "renamenx" | "lindex" | "hexists" | "object|encoding" | "object|refcount" => 3,
+        "client|reply" | "client|setname" | "append" | "setnx" | "getset" | "decrby" | "incrby"
+        | "incrbyfloat" | "latency|history" | "hget" | "hstrlen" | "sismember" | "zscore"
+        | "rpoplpush" | "rename" | "renamenx" | "lindex" | "hexists" | "object|encoding"
+        | "object|refcount" => 3,
         "httl" | "hpttl" | "hexpiretime" | "hpexpiretime" | "hpersist" | "hgetex" => -5,
         "config|resetstat" => 2,
         "client|setinfo" | "hincrby" | "hincrbyfloat" | "hsetnx" | "smove" | "lset" | "lrem"
@@ -337,12 +339,12 @@ fn metadata(name: &str) -> Metadata {
         "command" | "command|count" | "command|info" | "acl" | "acl|whoami" | "auth" | "asking"
         | "migrate" | "cluster|setslot" | "cluster" | "cluster|keyslot" | "cluster|shards"
         | "cluster|slots" | "bgrewriteaof" | "bgsave" | "client" | "client|getname"
-        | "client|id" | "client|info" | "client|setinfo" | "client|setname" | "config"
-        | "config|get" | "config|resetstat" | "config|set" | "discard" | "dbsize" | "echo"
-        | "exec" | "flushall" | "flushdb" | "hello" | "info" | "keys" | "lastsave" | "multi"
-        | "object" | "ping" | "pubsub" | "punsubscribe" | "psubscribe" | "publish" | "quit"
-        | "randomkey" | "reset" | "save" | "scan" | "select" | "subscribe" | "time" | "unwatch"
-        | "unsubscribe" | "xread" | "xreadgroup" | "latency" | "latency|history"
+        | "client|id" | "client|info" | "client|reply" | "client|setinfo" | "client|setname"
+        | "config" | "config|get" | "config|resetstat" | "config|set" | "discard" | "dbsize"
+        | "echo" | "exec" | "flushall" | "flushdb" | "hello" | "info" | "keys" | "lastsave"
+        | "multi" | "object" | "ping" | "pubsub" | "punsubscribe" | "psubscribe" | "publish"
+        | "quit" | "randomkey" | "reset" | "save" | "scan" | "select" | "subscribe" | "time"
+        | "unwatch" | "unsubscribe" | "xread" | "xreadgroup" | "latency" | "latency|history"
         | "latency|latest" | "latency|reset" | "xgroup" | "xinfo" | "lmpop" | "blmpop"
         | "zmpop" | "bzmpop" | "sintercard" | "zintercard" | "zdiff" | "zinter" | "zunion" => {
             (0, 0, 0)

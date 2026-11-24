@@ -1795,7 +1795,15 @@ fn validate_queued(command: &[Vec<u8>]) -> Result<(), Vec<u8>> {
     if valid {
         Ok(())
     } else {
-        let lower = String::from_utf8_lossy(name).to_ascii_lowercase();
+        let lower = if name.eq_ignore_ascii_case(b"CLIENT")
+            && command
+                .get(1)
+                .is_some_and(|sub| sub.eq_ignore_ascii_case(b"REPLY"))
+        {
+            "client|reply".to_string()
+        } else {
+            String::from_utf8_lossy(name).to_ascii_lowercase()
+        };
         Err(protocol::error(&format!(
             "wrong number of arguments for '{lower}' command"
         )))
@@ -1829,6 +1837,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         if command.is_empty() {
             continue;
         }
+        let replies_were_off = session.replies_off();
+        let reply_enabled = session.begin_command();
+        let is_reply_action = connection::Session::is_reply_action(&command);
         let allow_asking = asking;
         let ends_transaction =
             command[0].eq_ignore_ascii_case(b"EXEC") || command[0].eq_ignore_ascii_case(b"DISCARD");
@@ -1843,15 +1854,19 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             && !command[0].eq_ignore_ascii_case(b"HELLO")
             && !command[0].eq_ignore_ascii_case(b"RESET")
         {
-            subscription.write(b"-NOAUTH Authentication required.\r\n")?;
+            if reply_enabled {
+                subscription.write(b"-NOAUTH Authentication required.\r\n")?;
+            }
             continue;
         }
         if command[0].eq_ignore_ascii_case(b"RESET") {
             if command.len() != 1 {
                 transaction_error |= transaction.is_some();
-                subscription.write(&protocol::error(
-                    "wrong number of arguments for 'reset' command",
-                ))?;
+                if reply_enabled {
+                    subscription.write(&protocol::error(
+                        "wrong number of arguments for 'reset' command",
+                    ))?;
+                }
                 continue;
             }
             let _gate = store.command_gate.lock().unwrap();
@@ -1862,7 +1877,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             subscription.reset();
             session.reset();
             authenticated = !store.auth.required();
-            subscription.write(b"+RESET\r\n")?;
+            if reply_enabled || replies_were_off {
+                subscription.write(b"+RESET\r\n")?;
+            }
             continue;
         }
         if command[0].eq_ignore_ascii_case(b"REPLSYNC") && !store.read_only {
@@ -1876,7 +1893,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         }
         if command[0].eq_ignore_ascii_case(b"QUIT") {
             // QUIT has arity -1 in Redis: extra arguments are ignored.
-            subscription.write(b"+OK\r\n")?;
+            if reply_enabled {
+                subscription.write(b"+OK\r\n")?;
+            }
             return Ok(());
         }
         if pubsub::is_subscription_command(&command) && transaction.is_none() {
@@ -1896,19 +1915,33 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                     reply
                 };
                 let _gate = store.command_gate.lock().unwrap();
-                subscription.write(&reply)?;
+                if reply_enabled {
+                    subscription.write(&reply)?;
+                }
             } else {
-                let name = String::from_utf8_lossy(&command[0]).to_ascii_lowercase();
+                let name = if command[0].eq_ignore_ascii_case(b"CLIENT")
+                    && command
+                        .get(1)
+                        .is_some_and(|sub| sub.eq_ignore_ascii_case(b"REPLY"))
+                {
+                    "client|reply".to_string()
+                } else {
+                    String::from_utf8_lossy(&command[0]).to_ascii_lowercase()
+                };
                 let reason = format!(
                     "Can't execute '{name}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
                 );
                 if name == "exec" {
-                    subscription.write(
-                        format!("-EXECABORT Transaction discarded because of: {reason}\r\n")
-                            .as_bytes(),
-                    )?;
+                    if reply_enabled {
+                        subscription.write(
+                            format!("-EXECABORT Transaction discarded because of: {reason}\r\n")
+                                .as_bytes(),
+                        )?;
+                    }
                 } else {
-                    subscription.write(&protocol::error(&reason))?;
+                    if reply_enabled {
+                        subscription.write(&protocol::error(&reason))?;
+                    }
                 }
             }
             continue;
@@ -1929,6 +1962,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             store.latency.start(&command)
         };
         let mut replied_early = false;
+        let mut transaction_reply = false;
         let mut release_subscriptions = false;
         let response = if command[0].eq_ignore_ascii_case(b"AUTH") && transaction.is_none() {
             store.auth.authenticate(&command, &mut authenticated)
@@ -2021,7 +2055,12 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                     } else if changed {
                         b"*-1\r\n".to_vec()
                     } else {
-                        let mut response = format!("*{}\r\n", queued.len()).into_bytes();
+                        let mut response = if reply_enabled {
+                            format!("*{}\r\n", queued.len()).into_bytes()
+                        } else {
+                            Vec::new()
+                        };
+                        transaction_reply = true;
                         let writes = queued.iter().any(|command| {
                             is_mutating(command) || hyperloglog::may_update_cache(command)
                         });
@@ -2057,7 +2096,12 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                             } else {
                                 execute_checked(&queued_command, &store, false)
                             };
-                            response.extend(result);
+                            if session.reply_for(
+                                connection::Session::is_reply_action(&queued_command),
+                                !session.replies_off(),
+                            ) {
+                                response.extend(result);
+                            }
                         }
                         if writes {
                             if let Err(error) = save_and_publish(&store) {
@@ -2068,7 +2112,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                             // Write the reply while the gate is held so a
                             // delivery cannot overtake it; the budget drops a
                             // stalled client instead of freezing the server.
-                            subscription.write_transaction(&response)?;
+                            if !response.is_empty() {
+                                subscription.write_transaction(&response)?;
+                            }
                             replied_early = true;
                         }
                         release_subscriptions = holds;
@@ -2144,7 +2190,10 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             asking = false;
         }
         store.latency.record(latency_started);
-        if !replied_early {
+        if !replied_early
+            && !response.is_empty()
+            && (transaction_reply || session.reply_for(is_reply_action, reply_enabled))
+        {
             subscription.write(&response)?;
         }
         if release_subscriptions {

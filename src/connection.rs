@@ -16,6 +16,14 @@ pub struct Session {
     peer: SocketAddr,
     local: SocketAddr,
     created: Instant,
+    reply_mode: ReplyMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReplyMode {
+    On,
+    Off,
+    Skip,
 }
 
 pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
@@ -27,6 +35,7 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
             Some(b"ID" | b"GETNAME" | b"INFO") => command.len() == 2,
             Some(b"SETNAME") => command.len() == 3,
             Some(b"SETINFO") => command.len() == 4,
+            Some(b"REPLY") => command.len() == 3,
             _ => false,
         },
         _ => return None,
@@ -50,12 +59,49 @@ impl Session {
             peer: stream.peer_addr()?,
             local: stream.local_addr()?,
             created: Instant::now(),
+            reply_mode: ReplyMode::On,
         })
     }
 
     pub fn reset(&mut self) {
         // The socket ID and library identity survive RESET, as in Redis.
         self.name.clear();
+        self.reply_mode = ReplyMode::On;
+    }
+
+    /// Consume a pending SKIP before dispatch. A valid CLIENT REPLY action can
+    /// override this decision for its own reply (notably SKIP followed by ON).
+    pub fn begin_command(&mut self) -> bool {
+        match self.reply_mode {
+            ReplyMode::On => true,
+            ReplyMode::Off => false,
+            ReplyMode::Skip => {
+                self.reply_mode = ReplyMode::On;
+                false
+            }
+        }
+    }
+
+    pub fn replies_off(&self) -> bool {
+        self.reply_mode == ReplyMode::Off
+    }
+
+    pub fn is_reply_action(command: &[Vec<u8>]) -> bool {
+        command.len() == 3
+            && command[0].eq_ignore_ascii_case(b"CLIENT")
+            && command[1].eq_ignore_ascii_case(b"REPLY")
+            && matches!(
+                command[2].to_ascii_uppercase().as_slice(),
+                b"ON" | b"OFF" | b"SKIP"
+            )
+    }
+
+    pub fn reply_for(&self, is_reply_action: bool, initially_enabled: bool) -> bool {
+        if is_reply_action {
+            self.reply_mode == ReplyMode::On
+        } else {
+            initially_enabled
+        }
     }
 
     pub fn execute(
@@ -66,6 +112,14 @@ impl Session {
     ) -> Option<Vec<u8>> {
         let valid = valid_arity(c)?;
         if !valid {
+            if c[0].eq_ignore_ascii_case(b"CLIENT")
+                && c.get(1)
+                    .is_some_and(|sub| sub.eq_ignore_ascii_case(b"REPLY"))
+            {
+                return Some(protocol::error(
+                    "wrong number of arguments for 'client|reply' command",
+                ));
+            }
             return Some(protocol::error(
                 "wrong number of arguments or unsupported connection subcommand",
             ));
@@ -98,6 +152,16 @@ impl Session {
                         Some(field) => { field.clone_from(&c[3]); b"+OK\r\n".to_vec() }
                     }
                 }
+                b"REPLY" => match c[2].to_ascii_uppercase().as_slice() {
+                    b"ON" => { self.reply_mode = ReplyMode::On; b"+OK\r\n".to_vec() }
+                    b"OFF" => { self.reply_mode = ReplyMode::Off; b"+OK\r\n".to_vec() }
+                    b"SKIP" => {
+                        // Redis ignores SKIP while replies are OFF.
+                        if self.reply_mode != ReplyMode::Off { self.reply_mode = ReplyMode::Skip; }
+                        b"+OK\r\n".to_vec()
+                    }
+                    _ => protocol::error("syntax error"),
+                },
                 b"INFO" => protocol::bulk(format!(
                     "id={} addr={} laddr={} name={} age={} db=0 user=default resp=2 lib-name={} lib-ver={}\n",
                     self.id, self.peer, self.local, String::from_utf8_lossy(&self.name),

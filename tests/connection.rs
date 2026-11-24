@@ -94,6 +94,7 @@ fn command_introspection_reports_dispatch_metadata_and_unknown_names_in_place() 
                 command_entry(b"client|getname", 2, (0, 0, 0), vec![]),
                 command_entry(b"client|id", 2, (0, 0, 0), vec![]),
                 command_entry(b"client|info", 2, (0, 0, 0), vec![]),
+                command_entry(b"client|reply", 3, (0, 0, 0), vec![]),
                 command_entry(b"client|setinfo", 4, (0, 0, 0), vec![]),
                 command_entry(b"client|setname", 3, (0, 0, 0), vec![]),
             ],
