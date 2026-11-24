@@ -700,7 +700,15 @@ fn a_large_subscription_batch_survives_a_pause() {
         .zip(&channels)
         .any(|((channel, _), expected)| channel != expected)
     {
-        panic!("channels {:?} != {:?}", got, want);
+        let counts: Vec<String> = received
+            .iter()
+            .map(|(_, count)| String::from_utf8_lossy(count).into_owned())
+            .collect();
+        let subscribed = Client::new(&server).call(&[b"PUBSUB", b"CHANNELS"]);
+        panic!(
+            "channels {:?} != {:?}, counts {:?}, channels-reply {:?}",
+            got, want, counts, subscribed
+        );
     }
     for (index, (_, count)) in received.iter().enumerate() {
         assert_eq!(
