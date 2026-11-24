@@ -28,7 +28,7 @@ tests; it does not certify complete compatibility with Redis.
 | Server time | `TIME` | Epoch seconds and microseconds as RESP2 bulk strings |
 | Persistence | `SAVE`, `BGSAVE`, `LASTSAVE`, `DUMP`, `RESTORE`, `BGREWRITEAOF` | Initial Redis RDB interoperability; supported values, key expiry, checksums, REPLACE/ABSTTL; manual single-file AOF compaction |
 | Command introspection | [`COMMAND`](https://redis.io/docs/latest/commands/command/), `COMMAND COUNT`, `COMMAND INFO` | Lists ReRu's implemented command metadata, counts entries, or looks up names |
-| Static Cluster | `CLUSTER KEYSLOT`, `CLUSTER SHARDS`, `CLUSTER SLOTS` | Explicit two-node slot map, hash tags, RESP2 topology, local routing, MOVED/CROSSSLOT; no discovery or failover |
+| Two-node Cluster | `CLUSTER KEYSLOT`, `CLUSTER SHARDS`, `CLUSTER SLOTS`, `CLUSTER SETSLOT`, `ASKING`, `MIGRATE` | Manual slot migration and binary-safe ReRu-to-ReRu key transfer, ASK/MOVED/TRYAGAIN, persistent ownership with `--cluster-state`; no gossip or failover |
 
 `COMMAND` entries use the ten-field Redis 8 reply shape: name, arity, flags,
 first/last/step key positions, ACL categories, tips, key specifications, and
@@ -44,7 +44,7 @@ entries, and `COMMAND COUNT` counts those entries. Redis documents
 [`COMMAND COUNT`](https://redis.io/docs/latest/commands/command-count/), and
 [`COMMAND INFO`](https://redis.io/docs/latest/commands/command-info/).
 
-Total: **234 Redis command metadata entries**, or **51.0% name presence**
+Total: **237 Redis command metadata entries**, or **51.6% name presence**
 against 459 entries in the pinned Redis 8.10.2 metadata. This is neither a
 behavior pass rate nor a percentage of Redis completed. Run
 `powershell -File scripts/command_coverage.ps1 -RedisSource PATH_TO_REDIS_8_10_2`
@@ -686,25 +686,43 @@ that variable, this reference-dependent test also skips comparisons.
 exchanges complete RDB files in both directions, and runs `redis-check-rdb`.
 Run instructions are in [interoperability testing](INTEROP_TESTING.md).
 
-## Static Cluster milestone
+## Two-node Cluster milestone
 
-Two `--cluster-node ID@IP:PORT@START-END` flags opt in to a fixed two-primary
+Two `--cluster-node ID@IP:PORT@START-END` flags opt in to an initial two-primary
 slot map. IDs are 40 hexadecimal characters; the ranges must partition all
 16,384 slots and one endpoint must match the local listener. `CLUSTER KEYSLOT`
 uses CRC16/XMODEM and Redis hash tags. `CLUSTER SHARDS` and `CLUSTER SLOTS`
 report both configured owners as RESP2 arrays. Keyed commands are served only
 by their slot owner; a request to the other node receives `MOVED`. Multi-key
 commands and queued transactions spanning slots receive `CROSSSLOT` before
-mutating data. Existing persisted keys outside the node's slots cause startup
+mutating data. Persisted keys outside owned or importing slots cause startup
 to fail. The two-node integration tests cover these replies, binary keys,
 topology, transaction atomicity, malformed maps, and standalone behavior.
 
-This is **not full Redis Cluster**: nodes do not exchange topology, migrate
-slots or data, detect failures, elect a new primary, or implement `ASK` and
-`ASKING`. Cluster replicas and multiple logical databases are unsupported.
+`--cluster-state FILE` is required for `CLUSTER SETSLOT`; each node must use
+its own path. It atomically stores 16,384 owners and local `MIGRATING`/
+`IMPORTING` states. On a migrating source, present keys remain available and
+missing keys return `ASK`. The target accepts one redirected command after
+connection-local `ASKING` (through `EXEC` when followed by `MULTI`); other
+clients receive `MOVED`. Mixed-location
+multi-key commands return `TRYAGAIN`. `MIGRATE HOST PORT KEY 0 TIMEOUT` supports
+only the configured peer and database 0. It sends a ReRu snapshot value,
+including binary contents and absolute expiry. The source deletes only after
+the target has acknowledged its persisted write. Target memory eviction never
+evicts an imported key before acknowledgment; if it cannot fit, migration fails
+with `OOM` and the source keeps its key. A failed connection or timeout leaves
+the source key intact; an existing target key returns `BUSYKEY`
+and requires operator resolution before retry. `COPY`, `REPLACE`, `KEYS`,
+authentication to the peer, arbitrary hosts, and Redis wire-compatible
+`MIGRATE` are outside this milestone. Ownership changes must be applied on both
+nodes after transferring all keys in the slot.
+
+This is **not full Redis Cluster**: nodes do not exchange topology, detect
+failures, elect a new primary, or perform automatic resharding. Cluster
+replicas and multiple logical databases are unsupported.
 `CLUSTER SLOTS` includes an empty metadata field for each node; detailed
 endpoint metadata and dynamic replication offsets are not yet available.
-Only explicit, contiguous ranges are accepted. A two-node Redis 8.10.2
+Only explicit, contiguous initial ranges are accepted. A two-node Redis 8.10.2
 comparison checked four slot vectors, the RESP2 topology shape, `MOVED`,
 `CROSSSLOT`, `WATCH`, `SELECT`, and transaction replies; broader Cluster
 interoperability remains untested.
@@ -712,7 +730,9 @@ interoperability remains untested.
 Behavior references: [cluster specification](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/),
 [CLUSTER KEYSLOT](https://redis.io/docs/latest/commands/cluster-keyslot/),
 [CLUSTER SHARDS](https://redis.io/docs/latest/commands/cluster-shards/), and
-[CLUSTER SLOTS](https://redis.io/docs/latest/commands/cluster-slots/).
+[CLUSTER SLOTS](https://redis.io/docs/latest/commands/cluster-slots/),
+[CLUSTER SETSLOT](https://redis.io/docs/latest/commands/cluster-setslot/), and
+[MIGRATE](https://redis.io/docs/latest/commands/migrate/).
 
 ## Remaining major work
 

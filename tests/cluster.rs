@@ -47,6 +47,401 @@ fn pair() -> (common::Server, common::Server) {
 }
 
 #[test]
+fn live_slot_migration_preserves_binary_keys_ttl_and_restart_topology() {
+    let first_port = free_port();
+    let second_port = free_port();
+    let first = format!("{FIRST_ID}@127.0.0.1:{first_port}@0-8191");
+    let second = format!("{SECOND_ID}@127.0.0.1:{second_port}@8192-16383");
+    let first_state = common::temp_path("reru-cluster-first", ".state");
+    let second_state = common::temp_path("reru-cluster-second", ".state");
+    let first_data = common::temp_path("reru-cluster-first", ".snap");
+    let second_data = common::temp_path("reru-cluster-second", ".snap");
+    let first_args = [
+        "--port",
+        &first_port.to_string(),
+        "--cluster-node",
+        &first,
+        "--cluster-node",
+        &second,
+        "--cluster-state",
+        first_state.to_str().unwrap(),
+        "--snapshot",
+        first_data.to_str().unwrap(),
+    ];
+    let second_args = [
+        "--port",
+        &second_port.to_string(),
+        "--cluster-node",
+        &first,
+        "--cluster-node",
+        &second,
+        "--cluster-state",
+        second_state.to_str().unwrap(),
+        "--snapshot",
+        second_data.to_str().unwrap(),
+    ];
+    let key = b"{bar}:binary\0";
+    let target = format!("127.0.0.1:{second_port}");
+    {
+        let a = common::Server::start_with(&first_args);
+        let b = common::Server::start_with(&second_args);
+        let mut source = Client::new(&a);
+        let mut dest = Client::new(&b);
+        assert_eq!(source.call(&[b"SET", key, b"\0\xff\r\n"]), ok());
+        assert_eq!(source.call(&[b"PEXPIRE", key, b"30000"]), integer(1));
+        assert_eq!(
+            source.call(&[b"RPUSH", b"{bar}:list", b"a", b"b"]),
+            integer(2)
+        );
+        assert_eq!(
+            source.call(&[b"HSET", b"{bar}:hash", b"f", b"v"]),
+            integer(1)
+        );
+        assert_eq!(
+            source.call(&[b"ZADD", b"{bar}:zset", b"1", b"m"]),
+            integer(1)
+        );
+        assert_eq!(
+            source.call(&[b"VADD", b"{bar}:vector", b"VALUES", b"2", b"1", b"0", b"m"]),
+            integer(1)
+        );
+        assert!(matches!(
+            source.call(&[b"XADD", b"{bar}:stream", b"*", b"f", b"v"]),
+            Reply::Bulk(Some(_))
+        ));
+        assert_eq!(source.call(&[b"SET", b"{bar}:race", b"0"]), ok());
+        assert_eq!(source.call(&[b"SET", b"{bar}:conflict", b"source"]), ok());
+        assert_eq!(
+            source.call(&[b"CLUSTER", b"SETSLOT", b"16384", b"STABLE"]),
+            Reply::Error(b"ERR Invalid or out of range slot".to_vec())
+        );
+        assert_eq!(
+            source.call(&[b"CLUSTER", b"SETSLOT", b"5061", b"BAD"]),
+            Reply::Error(
+                b"ERR Invalid CLUSTER SETSLOT action or number of arguments. Try CLUSTER HELP"
+                    .to_vec()
+            )
+        );
+        assert_eq!(
+            source.call(&[b"CLUSTER", b"SETSLOT", b"5061", b"MIGRATING", b"not-a-node"]),
+            Reply::Error(b"ERR I don't know about node not-a-node".to_vec())
+        );
+        assert_eq!(
+            dest.call(&[
+                b"CLUSTER",
+                b"SETSLOT",
+                b"5061",
+                b"IMPORTING",
+                FIRST_ID.as_bytes()
+            ]),
+            ok()
+        );
+        assert_eq!(
+            source.call(&[
+                b"CLUSTER",
+                b"SETSLOT",
+                b"5061",
+                b"MIGRATING",
+                SECOND_ID.as_bytes()
+            ]),
+            ok()
+        );
+        let writer = std::thread::spawn(move || {
+            let mut client = Client::on_port(first_port);
+            let mut last = b"0".to_vec();
+            for number in 1..=100 {
+                let value = number.to_string().into_bytes();
+                match client.call(&[b"SET", b"{bar}:race", &value]) {
+                    reply if reply == ok() => last = value,
+                    Reply::Error(error) if error.starts_with(b"ASK 5061 ") => break,
+                    reply => panic!("unexpected concurrent write reply: {reply:?}"),
+                }
+            }
+            last
+        });
+        assert_eq!(
+            source.call(&[
+                b"MIGRATE",
+                b"127.0.0.1",
+                second_port.to_string().as_bytes(),
+                b"{bar}:race",
+                b"0",
+                b"1000"
+            ]),
+            ok()
+        );
+        let last_write = writer.join().unwrap();
+        assert_eq!(dest.call(&[b"ASKING"]), ok());
+        assert_eq!(
+            dest.call(&[b"GET", b"{bar}:race"]),
+            Reply::Bulk(Some(last_write))
+        );
+        assert_eq!(dest.call(&[b"ASKING"]), ok());
+        assert_eq!(dest.call(&[b"SET", b"{bar}:conflict", b"target"]), ok());
+        assert_eq!(
+            source.call(&[
+                b"MIGRATE",
+                b"127.0.0.1",
+                second_port.to_string().as_bytes(),
+                b"{bar}:conflict",
+                b"0",
+                b"1000"
+            ]),
+            Reply::Error(b"BUSYKEY Target key name already exists.".to_vec())
+        );
+        assert_eq!(
+            source.call(&[b"GET", b"{bar}:conflict"]),
+            Reply::Bulk(Some(b"source".to_vec()))
+        );
+        assert_eq!(dest.call(&[b"ASKING"]), ok());
+        assert_eq!(dest.call(&[b"DEL", b"{bar}:conflict"]), integer(1));
+        assert_eq!(
+            source.call(&[
+                b"MIGRATE",
+                b"127.0.0.1",
+                second_port.to_string().as_bytes(),
+                b"{bar}:conflict",
+                b"0",
+                b"1000"
+            ]),
+            ok()
+        );
+        assert_eq!(
+            source.call(&[b"GET", b"{bar}:absent"]),
+            Reply::Error(format!("ASK 5061 {target}").into_bytes())
+        );
+        assert_eq!(
+            dest.call(&[b"GET", key]),
+            Reply::Error(format!("MOVED 5061 127.0.0.1:{first_port}").into_bytes())
+        );
+        assert_eq!(dest.call(&[b"ASKING"]), ok());
+        assert_eq!(dest.call(&[b"MULTI"]), ok());
+        assert_eq!(dest.call(&[b"GET", key]), queued());
+        assert_eq!(dest.call(&[b"EXEC"]), array(vec![Reply::Bulk(None)]));
+        assert_eq!(
+            dest.call(&[b"GET", key]),
+            Reply::Error(format!("MOVED 5061 127.0.0.1:{first_port}").into_bytes())
+        );
+        assert_eq!(dest.call(&[b"ASKING"]), ok());
+        assert_eq!(dest.call(&[b"GET", key]), Reply::Bulk(None));
+        assert_eq!(
+            dest.call(&[b"GET", key]),
+            Reply::Error(format!("MOVED 5061 127.0.0.1:{first_port}").into_bytes())
+        );
+        assert_eq!(
+            source.call(&[b"MGET", key, b"{bar}:absent"]),
+            Reply::Error(b"TRYAGAIN Multiple keys request during rehashing of slot".to_vec())
+        );
+        assert_eq!(
+            source.call(&[
+                b"MIGRATE",
+                b"127.0.0.1",
+                second_port.to_string().as_bytes(),
+                b"{bar}:missing",
+                b"0",
+                b"1000"
+            ]),
+            Reply::Simple(b"NOKEY".to_vec())
+        );
+        assert_eq!(
+            source.call(&[b"MIGRATE", b"127.0.0.1", b"bad", key, b"0", b"1000"]),
+            Reply::Error(b"ERR invalid target port".to_vec())
+        );
+        assert_eq!(
+            source.call(&[b"MIGRATE", b"127.0.0.1", b"1234", key, b"1", b"1000"]),
+            Reply::Error(b"ERR MIGRATE only supports database 0".to_vec())
+        );
+        assert_eq!(source.call(&[b"MULTI"]), ok());
+        assert_eq!(
+            source.call(&[b"GET", b"{bar}:absent"]),
+            Reply::Error(format!("ASK 5061 {target}").into_bytes())
+        );
+        assert_eq!(
+            source.call(&[b"EXEC"]),
+            Reply::Error(b"EXECABORT Transaction discarded because of previous errors.".to_vec())
+        );
+        drop(dest);
+        drop(b);
+        assert_eq!(
+            source.call(&[
+                b"MIGRATE",
+                b"127.0.0.1",
+                second_port.to_string().as_bytes(),
+                key,
+                b"0",
+                b"100"
+            ]),
+            Reply::Error(b"IOERR error or timeout writing to target instance".to_vec())
+        );
+        assert_eq!(
+            source.call(&[b"GET", key]),
+            Reply::Bulk(Some(b"\0\xff\r\n".to_vec()))
+        );
+        let b = common::Server::start_with(&second_args);
+        let mut dest = Client::new(&b);
+        assert_eq!(
+            dest.call(&[
+                b"CONFIG",
+                b"SET",
+                b"maxmemory",
+                b"1",
+                b"maxmemory-policy",
+                b"allkeys-random"
+            ]),
+            ok()
+        );
+        assert_eq!(
+            source.call(&[
+                b"MIGRATE",
+                b"127.0.0.1",
+                second_port.to_string().as_bytes(),
+                key,
+                b"0",
+                b"1000"
+            ]),
+            Reply::Error(b"OOM command not allowed when used memory > 'maxmemory'.".to_vec())
+        );
+        assert_eq!(
+            source.call(&[b"GET", key]),
+            Reply::Bulk(Some(b"\0\xff\r\n".to_vec()))
+        );
+        assert_eq!(dest.call(&[b"CONFIG", b"SET", b"maxmemory", b"0"]), ok());
+        drop(dest);
+        assert_eq!(
+            source.call(&[
+                b"MIGRATE",
+                b"127.0.0.1",
+                second_port.to_string().as_bytes(),
+                key,
+                b"0",
+                b"1000"
+            ]),
+            ok()
+        );
+        assert_eq!(
+            source.call(&[b"GET", key]),
+            Reply::Error(format!("ASK 5061 {target}").into_bytes())
+        );
+        drop(b);
+        let b = common::Server::start_with(&second_args);
+        let mut dest = Client::new(&b);
+        for other in [
+            b"{bar}:list".as_slice(),
+            b"{bar}:hash",
+            b"{bar}:zset",
+            b"{bar}:vector",
+            b"{bar}:stream",
+        ] {
+            assert_eq!(
+                source.call(&[
+                    b"MIGRATE",
+                    b"127.0.0.1",
+                    second_port.to_string().as_bytes(),
+                    other,
+                    b"0",
+                    b"1000"
+                ]),
+                ok()
+            );
+        }
+        assert_eq!(dest.call(&[b"ASKING"]), ok());
+        assert_eq!(
+            dest.call(&[b"GET", key]),
+            Reply::Bulk(Some(b"\0\xff\r\n".to_vec()))
+        );
+        assert_eq!(
+            dest.call(&[
+                b"CLUSTER",
+                b"SETSLOT",
+                b"5061",
+                b"NODE",
+                SECOND_ID.as_bytes()
+            ]),
+            ok()
+        );
+        assert_eq!(
+            source.call(&[
+                b"CLUSTER",
+                b"SETSLOT",
+                b"5061",
+                b"NODE",
+                SECOND_ID.as_bytes()
+            ]),
+            ok()
+        );
+        assert_eq!(
+            source.call(&[b"GET", key]),
+            Reply::Error(format!("MOVED 5061 {target}").into_bytes())
+        );
+        for c in [&mut source, &mut dest] {
+            let Reply::Array(Some(ranges)) = c.call(&[b"CLUSTER", b"SLOTS"]) else {
+                panic!("expected SLOTS array")
+            };
+            assert_eq!(ranges.len(), 4);
+            let Reply::Array(Some(moved)) = &ranges[1] else {
+                panic!("expected migrated slot")
+            };
+            assert_eq!(moved[0], integer(5061));
+            assert_eq!(moved[1], integer(5061));
+            let Reply::Array(Some(node)) = &moved[2] else {
+                panic!("expected node")
+            };
+            assert_eq!(node[2], Reply::Bulk(Some(SECOND_ID.as_bytes().to_vec())));
+        }
+        let Reply::Integer(ttl) = dest.call(&[b"PTTL", key]) else {
+            panic!("expected TTL")
+        };
+        assert!((1..=30000).contains(&ttl));
+        assert_eq!(
+            dest.call(&[b"LRANGE", b"{bar}:list", b"0", b"-1"]),
+            array(vec![
+                Reply::Bulk(Some(b"a".to_vec())),
+                Reply::Bulk(Some(b"b".to_vec()))
+            ])
+        );
+        assert_eq!(
+            dest.call(&[b"HGET", b"{bar}:hash", b"f"]),
+            Reply::Bulk(Some(b"v".to_vec()))
+        );
+        assert_eq!(
+            dest.call(&[b"ZSCORE", b"{bar}:zset", b"m"]),
+            Reply::Bulk(Some(b"1".to_vec()))
+        );
+        assert_eq!(
+            dest.call(&[b"TYPE", b"{bar}:vector"]),
+            Reply::Simple(b"vectorset".to_vec())
+        );
+        assert_eq!(dest.call(&[b"XLEN", b"{bar}:stream"]), integer(1));
+    }
+    {
+        let a = common::Server::start_with(&first_args);
+        let b = common::Server::start_with(&second_args);
+        let mut source = Client::new(&a);
+        let mut dest = Client::new(&b);
+        assert_eq!(
+            source.call(&[b"GET", key]),
+            Reply::Error(format!("MOVED 5061 {target}").into_bytes())
+        );
+        assert_eq!(
+            dest.call(&[b"GET", key]),
+            Reply::Bulk(Some(b"\0\xff\r\n".to_vec()))
+        );
+        assert_eq!(
+            dest.call(&[b"HGET", b"{bar}:hash", b"f"]),
+            Reply::Bulk(Some(b"v".to_vec()))
+        );
+        assert_eq!(
+            dest.call(&[b"TYPE", b"{bar}:vector"]),
+            Reply::Simple(b"vectorset".to_vec())
+        );
+        assert_eq!(dest.call(&[b"XLEN", b"{bar}:stream"]), integer(1));
+    }
+    for path in [first_state, second_state, first_data, second_data] {
+        let _ = fs::remove_file(path);
+    }
+}
+
+#[test]
 fn standalone_mode_is_unchanged() {
     let server = common::Server::start();
     let mut client = Client::new(&server);

@@ -231,10 +231,12 @@ fn wait_for_change<'a>(
 }
 
 fn is_mutating(command: &[Vec<u8>]) -> bool {
-    (command[0].eq_ignore_ascii_case(b"CONFIG")
-        && command
-            .get(1)
-            .is_some_and(|name| name.eq_ignore_ascii_case(b"SET")))
+    command[0].eq_ignore_ascii_case(b"MIGRATE")
+        || command[0].eq_ignore_ascii_case(b"__RERU_IMPORT")
+        || (command[0].eq_ignore_ascii_case(b"CONFIG")
+            && command
+                .get(1)
+                .is_some_and(|name| name.eq_ignore_ascii_case(b"SET")))
         || cache::is_mutating(command)
         || geo::is_mutating(command)
         || list_ops::is_mutating(command)
@@ -284,6 +286,8 @@ fn is_mutating(command: &[Vec<u8>]) -> bool {
 fn record_write(store: &Store, command: &[Vec<u8>], response: &[u8]) {
     // Collection handlers record real changes themselves, including no-op checks.
     if cache::valid_arity(command).is_some()
+        || command[0].eq_ignore_ascii_case(b"MIGRATE")
+        || command[0].eq_ignore_ascii_case(b"__RERU_IMPORT")
         || stream_groups::valid_arity(command).is_some()
         || rdb::valid_arity(command).is_some()
         || geo::valid_arity(command).is_some()
@@ -352,7 +356,8 @@ fn execute_checked(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
         record_write(store, command, &response);
         return response;
     }
-    if settings.policy.is_allkeys() {
+    let importing = command[0].eq_ignore_ascii_case(b"__RERU_IMPORT");
+    if settings.policy.is_allkeys() && !importing {
         let response = execute_command(command, store, allow_blocking, None);
         record_write(store, command, &response);
         if !response.starts_with(b"-") {
@@ -369,9 +374,13 @@ fn execute_checked(command: &[Vec<u8>], store: &Store, allow_blocking: bool) -> 
     let after_bytes = eviction::dataset_bytes(&store.entries.lock().unwrap());
     let failed = response.starts_with(b"-");
     let overflow = !failed
-        && after_bytes > settings.maxmemory
-        && after_bytes > before_bytes
-        && (settings.policy == eviction::Policy::NoEviction || !store.eviction.evict(store));
+        && if importing && settings.policy.is_allkeys() {
+            !store.eviction.evict_excluding(store, Some(&command[1]))
+        } else {
+            after_bytes > settings.maxmemory
+                && after_bytes > before_bytes
+                && (settings.policy == eviction::Policy::NoEviction || !store.eviction.evict(store))
+        };
     let changed = store.staged_keys.lock().unwrap().take().unwrap();
     if overflow || failed {
         *store.entries.lock().unwrap() = before;
@@ -1131,10 +1140,22 @@ fn execute_command(
     allow_blocking: bool,
     probe: Option<&clients::DisconnectProbe>,
 ) -> Vec<u8> {
+    if command[0].eq_ignore_ascii_case(b"MIGRATE") {
+        return store.cluster.as_ref().map_or_else(
+            || protocol::error("MIGRATE requires cluster mode"),
+            |cluster| cluster.migrate(command, store),
+        );
+    }
+    if command[0].eq_ignore_ascii_case(b"__RERU_IMPORT") {
+        return store.cluster.as_ref().map_or_else(
+            || protocol::error("cluster import requires cluster mode"),
+            |cluster| cluster.import(command, store),
+        );
+    }
     if command[0].eq_ignore_ascii_case(b"CLUSTER") {
         return store.cluster.as_ref().map_or_else(
             || protocol::error("This instance has cluster support disabled"),
-            |cluster| cluster.execute(command),
+            |cluster| cluster.execute(command, store),
         );
     }
     if command[0].eq_ignore_ascii_case(b"COMMAND") {
@@ -1790,6 +1811,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         .connect(Arc::new(Mutex::new(stream.try_clone()?)));
     let mut transaction: Option<Vec<Vec<Vec<u8>>>> = None;
     let mut transaction_error = false;
+    let mut asking = false;
     let mut authenticated = !store.auth.required();
     let mut watches = ClientWatches::new(Arc::clone(&store));
     loop {
@@ -1806,6 +1828,14 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         };
         if command.is_empty() {
             continue;
+        }
+        let allow_asking = asking;
+        let ends_transaction =
+            command[0].eq_ignore_ascii_case(b"EXEC") || command[0].eq_ignore_ascii_case(b"DISCARD");
+        if !command[0].eq_ignore_ascii_case(b"ASKING")
+            && !(asking && (command[0].eq_ignore_ascii_case(b"MULTI") || transaction.is_some()))
+        {
+            asking = false;
         }
         if !authenticated
             && !command[0].eq_ignore_ascii_case(b"AUTH")
@@ -1827,6 +1857,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             let _gate = store.command_gate.lock().unwrap();
             transaction = None;
             transaction_error = false;
+            asking = false;
             watches.clear();
             subscription.reset();
             session.reset();
@@ -1883,10 +1914,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             continue;
         }
         let route_error = if transaction.is_none() {
-            store
-                .cluster
-                .as_ref()
-                .and_then(|cluster| cluster.route(&command))
+            store.cluster.as_ref().and_then(|cluster| {
+                cluster.route(&command, &store.entries.lock().unwrap(), allow_asking)
+            })
         } else {
             None
         };
@@ -1902,6 +1932,15 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         let mut release_subscriptions = false;
         let response = if command[0].eq_ignore_ascii_case(b"AUTH") && transaction.is_none() {
             store.auth.authenticate(&command, &mut authenticated)
+        } else if command[0].eq_ignore_ascii_case(b"ASKING") && transaction.is_none() {
+            if command.len() != 1 {
+                protocol::error("wrong number of arguments for 'asking' command")
+            } else if store.cluster.is_none() {
+                protocol::error("This instance has cluster support disabled")
+            } else {
+                asking = true;
+                b"+OK\r\n".to_vec()
+            }
         } else if let Some(error) = route_error {
             error
         } else if store.read_only
@@ -1969,7 +2008,11 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                 } else {
                     let _gate = store.command_gate.lock().unwrap();
                     let route_error = store.cluster.as_ref().and_then(|cluster| {
-                        cluster.route_commands(queued.iter().map(Vec::as_slice))
+                        cluster.route_commands(
+                            queued.iter().map(Vec::as_slice),
+                            &store.entries.lock().unwrap(),
+                            allow_asking,
+                        )
                     });
                     let changed = watches.changed();
                     watches.clear();
@@ -2038,10 +2081,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
         } else if let Some(queued) = transaction.as_mut() {
             match validate_queued(&command) {
                 Ok(()) => {
-                    let route_error = store
-                        .cluster
-                        .as_ref()
-                        .and_then(|cluster| cluster.route(&command));
+                    let route_error = store.cluster.as_ref().and_then(|cluster| {
+                        cluster.route(&command, &store.entries.lock().unwrap(), allow_asking)
+                    });
                     if let Some(error) = route_error {
                         transaction_error = true;
                         error
@@ -2082,7 +2124,15 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             let _gate = store.command_gate.lock().unwrap();
             let mut response = session
                 .execute(&command, &store, &mut authenticated)
-                .unwrap_or_else(|| execute_checked(&command, &store, true));
+                .unwrap_or_else(|| {
+                    if let Some(error) = store.cluster.as_ref().and_then(|cluster| {
+                        cluster.route(&command, &store.entries.lock().unwrap(), allow_asking)
+                    }) {
+                        error
+                    } else {
+                        execute_checked(&command, &store, true)
+                    }
+                });
             if is_mutating(&command) || hyperloglog::may_update_cache(&command) {
                 if let Err(error) = save_and_publish(&store) {
                     response = misconf(&error);
@@ -2090,6 +2140,9 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
             }
             response
         };
+        if ends_transaction {
+            asking = false;
+        }
         store.latency.record(latency_started);
         if !replied_early {
             subscription.write(&response)?;
@@ -2103,7 +2156,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    const USAGE: &str = "usage: reru [--port PORT] [--bind ADDRESS] [--snapshot FILE] [--appendonly FILE] [--dir DIR] [--dbfilename FILE] [--replicaof HOST PORT] [--requirepass PASSWORD | --requirepass-file FILE] [--masterauth PASSWORD | --masterauth-file FILE] [--maxmemory SIZE] [--maxmemory-policy POLICY] [--maxclients COUNT] [--cluster-node ID@IP:PORT@START-END]...";
+    const USAGE: &str = "usage: reru [--port PORT] [--bind ADDRESS] [--snapshot FILE] [--appendonly FILE] [--dir DIR] [--dbfilename FILE] [--replicaof HOST PORT] [--requirepass PASSWORD | --requirepass-file FILE] [--masterauth PASSWORD | --masterauth-file FILE] [--maxmemory SIZE] [--maxmemory-policy POLICY] [--maxclients COUNT] [--cluster-node ID@IP:PORT@START-END]... [--cluster-state FILE]";
     if args.len() == 2 && matches!(args[1].as_str(), "--version" | "-V") {
         println!("ReRu {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
@@ -2125,6 +2178,7 @@ fn main() -> io::Result<()> {
     let mut maxclients = clients::DEFAULT_MAX_CLIENTS;
     let mut maxmemory_policy = eviction::Policy::NoEviction;
     let mut cluster_nodes = Vec::new();
+    let mut cluster_state = None;
     let mut index = 1;
     while index < args.len() {
         let value = args
@@ -2189,6 +2243,7 @@ fn main() -> io::Result<()> {
                 })?
             }
             "--cluster-node" => cluster_nodes.push(value.to_string()),
+            "--cluster-state" => cluster_state = Some(PathBuf::from(value)),
             "--replicaof" => {
                 let upstream_port = args
                     .get(index + 2)
@@ -2243,7 +2298,7 @@ fn main() -> io::Result<()> {
 
     let listener = TcpListener::bind((bind_address.as_str(), port))?;
     let bound = listener.local_addr()?;
-    let cluster = cluster::Cluster::configure(&cluster_nodes, bound)?;
+    let cluster = cluster::Cluster::configure(&cluster_nodes, bound, cluster_state)?;
     let entries = if let Some(path) = &snapshot_path {
         persistence::load(path)?
     } else if let Some(path) = &rdb_path {

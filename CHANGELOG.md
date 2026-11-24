@@ -10,6 +10,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Added
 
+- Added manual two-node Cluster slot migration with persistent ownership,
+  `CLUSTER SETSLOT`, connection-local `ASKING`, `ASK`/`TRYAGAIN` routing and
+  acknowledged ReRu-to-ReRu `MIGRATE` with binary values and TTLs.
+
 - Added bounded Q8/FP32 vector sets with `VADD`, `VCARD`, `VDIM`, `VEMB`,
   `VREM`, and exact `VSIM ... TRUTH`, including key expiry, transactions,
   maxmemory rollback, ReRu snapshot/AOF persistence and replication.
