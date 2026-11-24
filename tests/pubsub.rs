@@ -666,7 +666,30 @@ fn a_large_subscription_batch_survives_a_pause() {
         expected.extend_from_slice(format!("\r\n:{}\r\n", index + 1).as_bytes());
     }
     let frames = read_exact_bytes(&mut subscriber, expected.len());
-    assert_eq!(frames, expected);
+    let mut offset = 0;
+    for (index, channel) in channels.iter().enumerate() {
+        let frame = format!("*3\r\n$9\r\nsubscribe\r\n${}\r\n", channel.len());
+        let frame = {
+            let mut bytes = frame.into_bytes();
+            bytes.extend_from_slice(channel);
+            bytes.extend_from_slice(format!("\r\n:{}\r\n", index + 1).as_bytes());
+            bytes
+        };
+        let got = &frames[offset..offset + frame.len()];
+        if got != frame.as_slice() {
+            let mismatch = got
+                .iter()
+                .zip(frame.iter())
+                .position(|(left, right)| left != right)
+                .unwrap_or(got.len().min(frame.len()));
+            panic!(
+                "ack {index} differs at byte {mismatch}: {:?} != {:?}",
+                &got[mismatch.saturating_sub(8)..(mismatch + 8).min(got.len())],
+                &frame[mismatch.saturating_sub(8)..(mismatch + 8).min(frame.len())]
+            );
+        }
+        offset += frame.len();
+    }
     let mut observer = Client::new(&server);
     assert_eq!(
         observer.call(&[b"PUBSUB", b"NUMSUB", channels[0].as_slice()]),
