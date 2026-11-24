@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 const COMMANDS: &[&str] = &[
     "acl|whoami",
     "append",
+    "asking",
     "auth",
     "bgrewriteaof",
     "bgsave",
@@ -30,6 +31,7 @@ const COMMANDS: &[&str] = &[
     "client|setinfo",
     "client|setname",
     "cluster|keyslot",
+    "cluster|setslot",
     "cluster|shards",
     "cluster|slots",
     "config|get",
@@ -114,6 +116,7 @@ const COMMANDS: &[&str] = &[
     "ltrim",
     "lmpop",
     "mget",
+    "migrate",
     "mset",
     "msetnx",
     "multi",
@@ -255,6 +258,9 @@ fn metadata(name: &str) -> Metadata {
         | "unwatch" | "save" | "time" | "reset" => 1,
         "cluster|shards" | "cluster|slots" => 2,
         "cluster|keyslot" => 3,
+        "cluster|setslot" => -4,
+        "asking" => 1,
+        "migrate" => -6,
         "command|count" | "client|getname" | "client|id" | "client|info" | "echo" | "select"
         | "latency|latest" | "get" | "getdel" | "incr" | "decr" | "strlen" | "hgetall" | "hlen"
         | "hkeys" | "hvals" | "scard" | "smembers" | "type" | "ttl" | "pttl" | "persist"
@@ -328,17 +334,19 @@ fn metadata(name: &str) -> Metadata {
     };
 
     let (first_key, last_key, key_step) = match name {
-        "command" | "command|count" | "command|info" | "acl" | "acl|whoami" | "auth"
-        | "cluster" | "cluster|keyslot" | "cluster|shards" | "cluster|slots" | "bgrewriteaof"
-        | "bgsave" | "client" | "client|getname" | "client|id" | "client|info"
-        | "client|setinfo" | "client|setname" | "config" | "config|get" | "config|resetstat"
-        | "config|set" | "discard" | "dbsize" | "echo" | "exec" | "flushall" | "flushdb"
-        | "hello" | "info" | "keys" | "lastsave" | "multi" | "object" | "ping" | "pubsub"
-        | "punsubscribe" | "psubscribe" | "publish" | "quit" | "randomkey" | "reset" | "save"
-        | "scan" | "select" | "subscribe" | "time" | "unwatch" | "unsubscribe" | "xread"
-        | "xreadgroup" | "latency" | "latency|history" | "latency|latest" | "latency|reset"
-        | "xgroup" | "xinfo" | "lmpop" | "blmpop" | "zmpop" | "bzmpop" | "sintercard"
-        | "zintercard" | "zdiff" | "zinter" | "zunion" => (0, 0, 0),
+        "command" | "command|count" | "command|info" | "acl" | "acl|whoami" | "auth" | "asking"
+        | "migrate" | "cluster|setslot" | "cluster" | "cluster|keyslot" | "cluster|shards"
+        | "cluster|slots" | "bgrewriteaof" | "bgsave" | "client" | "client|getname"
+        | "client|id" | "client|info" | "client|setinfo" | "client|setname" | "config"
+        | "config|get" | "config|resetstat" | "config|set" | "discard" | "dbsize" | "echo"
+        | "exec" | "flushall" | "flushdb" | "hello" | "info" | "keys" | "lastsave" | "multi"
+        | "object" | "ping" | "pubsub" | "punsubscribe" | "psubscribe" | "publish" | "quit"
+        | "randomkey" | "reset" | "save" | "scan" | "select" | "subscribe" | "time" | "unwatch"
+        | "unsubscribe" | "xread" | "xreadgroup" | "latency" | "latency|history"
+        | "latency|latest" | "latency|reset" | "xgroup" | "xinfo" | "lmpop" | "blmpop"
+        | "zmpop" | "bzmpop" | "sintercard" | "zintercard" | "zdiff" | "zinter" | "zunion" => {
+            (0, 0, 0)
+        }
         "copy" | "rename" | "renamenx" | "smove" | "lmove" | "blmove" | "rpoplpush"
         | "brpoplpush" | "zrangestore" | "lcs" => (1, 2, 1),
         "geosearchstore" => (1, 2, 1),

@@ -495,6 +495,10 @@ impl Eviction {
     }
 
     pub fn evict(&self, store: &Store) -> bool {
+        self.evict_excluding(store, None)
+    }
+
+    pub fn evict_excluding(&self, store: &Store, protected: Option<&[u8]>) -> bool {
         let settings = self.settings();
         if store.read_only || settings.maxmemory == 0 || settings.policy == Policy::NoEviction {
             return true;
@@ -510,8 +514,9 @@ impl Eviction {
         let random = RandomState::new();
         let mut candidates: Vec<_> = entries
             .iter()
-            .filter(|(_, entry)| {
-                entry.expires_at.is_none_or(|at| at.at > now)
+            .filter(|(key, entry)| {
+                protected.is_none_or(|value| key.as_slice() != value)
+                    && entry.expires_at.is_none_or(|at| at.at > now)
                     && (!settings.policy.is_volatile() || entry.expires_at.is_some())
             })
             .map(|(key, entry)| {

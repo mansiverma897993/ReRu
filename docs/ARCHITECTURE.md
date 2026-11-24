@@ -62,7 +62,7 @@ authentication settings, and the pub/sub hub.
 | --- | --- |
 | `main.rs` | Core types, command dispatch, blocking helpers, client loop, startup |
 | `command_table.rs` | Metadata for `COMMAND`, `COMMAND COUNT`, and `COMMAND INFO` |
-| `cluster.rs` | Static slot map, CRC16/hash tags, routing, and topology replies |
+| `cluster.rs` | Two-node slot ownership, migration states, routing, transfer, and topology replies |
 | `lib.rs` | Library root; exports `protocol` for out-of-tree tooling such as `fuzz/` |
 | `protocol.rs` | RESP2 reader and reply writers; size and argument limits |
 | `connection.rs` | `HELLO`, `SELECT`, `CLIENT`, `RESET`, per-socket metadata |
@@ -106,6 +106,11 @@ parsed command and the store, and return raw RESP bytes.
 6. After a mutating command, `record_write` updates watch registrations,
    `is_mutating` decides whether persistence runs, and `save_and_publish`
    writes the snapshot/AOF and forwards the change to replicas.
+
+Cluster mode stores per-slot ownership and local migration state in a separate
+atomic `--cluster-state` file. A client connection carries one-command `ASKING`
+state. `MIGRATE` sends one ReRu snapshot value to the configured peer; the
+target commits it before replying, and the source deletes only after `+OK`.
 
 ## Persistence and replication pipeline
 
