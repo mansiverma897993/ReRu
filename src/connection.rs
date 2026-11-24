@@ -155,7 +155,11 @@ impl Session {
                 b"REPLY" => match c[2].to_ascii_uppercase().as_slice() {
                     b"ON" => { self.reply_mode = ReplyMode::On; b"+OK\r\n".to_vec() }
                     b"OFF" => { self.reply_mode = ReplyMode::Off; b"+OK\r\n".to_vec() }
-                    b"SKIP" => { self.reply_mode = ReplyMode::Skip; b"+OK\r\n".to_vec() }
+                    b"SKIP" => {
+                        // Redis ignores SKIP while replies are OFF.
+                        if self.reply_mode != ReplyMode::Off { self.reply_mode = ReplyMode::Skip; }
+                        b"+OK\r\n".to_vec()
+                    }
                     _ => protocol::error("syntax error"),
                 },
                 b"INFO" => protocol::bulk(format!(

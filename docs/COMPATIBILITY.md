@@ -554,6 +554,7 @@ remain pending. Metadata is local to the connection and is never persisted.
 `CLIENT REPLY ON|OFF|SKIP` controls command replies per connection. `OFF` and
 `SKIP` produce no reply themselves; `ON` replies `+OK`. `SKIP` suppresses the
 next command reply, including an error; `ON` can restore replies immediately.
+`SKIP` has no effect while replies are `OFF`.
 `RESET` restores reply mode while respecting a pending `SKIP`. Subscription
 acknowledgements and published messages remain visible in subscribed mode,
 matching Redis even when ordinary command replies are disabled.

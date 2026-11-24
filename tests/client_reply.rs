@@ -270,3 +270,60 @@ fn subscribed_acknowledgements_and_messages_bypass_reply_off() {
         b"*3\r\n$7\r\nmessage\r\n$13\r\nreply:channel\r\n$7\r\nmessage\r\n"
     );
 }
+
+#[test]
+fn skip_is_ignored_while_replies_are_off() {
+    let server = Server::start();
+    assert_eq!(
+        exchange(
+            &server,
+            &[
+                &["CLIENT", "REPLY", "OFF"],
+                &["CLIENT", "REPLY", "SKIP"],
+                &["SET", "reply:skip-off", "v"],
+                &["GET", "reply:skip-off"]
+            ]
+        ),
+        b""
+    );
+    assert_eq!(
+        exchange(
+            &server,
+            &[
+                &["CLIENT", "REPLY", "OFF"],
+                &["CLIENT", "REPLY", "SKIP"],
+                &["PING"],
+                &["PING"],
+                &["CLIENT", "REPLY", "ON"],
+                &["PING"]
+            ]
+        ),
+        b"+OK\r\n+PONG\r\n"
+    );
+    assert_eq!(
+        exchange(
+            &server,
+            &[
+                &["CLIENT", "REPLY", "OFF"],
+                &["CLIENT", "REPLY", "SKIP"],
+                &["RESET"],
+                &["PING"]
+            ]
+        ),
+        b"+RESET\r\n+PONG\r\n"
+    );
+    assert_eq!(
+        exchange(
+            &server,
+            &[
+                &["MULTI"],
+                &["CLIENT", "REPLY", "OFF"],
+                &["CLIENT", "REPLY", "SKIP"],
+                &["PING"],
+                &["EXEC"],
+                &["PING"]
+            ]
+        ),
+        b"+OK\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n*3\r\n"
+    );
+}
