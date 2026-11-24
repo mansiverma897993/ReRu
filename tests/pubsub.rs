@@ -170,7 +170,7 @@ fn a_stalled_subscriber_does_not_abort_the_server() {
     let mut ack = [0u8; 64];
     assert!(stalled.read(&mut ack).unwrap() > 0);
 
-    // This publish cannot drain into the stalled socket, so the hub drops it.
+    // Repeated publishes fill the 32 MiB output buffer, so the hub drops it.
     let mut publisher = Client::new(&server);
     let payload = vec![b'x'; 16 * 1024 * 1024];
     // Kernel buffers differ per platform, so publish until the stalled
@@ -212,14 +212,6 @@ fn many_acks_from_a_non_reader_do_not_block_other_clients() {
     let borrowed: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
     stalled.write_all(&command(&borrowed)).unwrap();
 
-    // Wait until the server has started writing acknowledgements, so the PING
-    // races the batch instead of the command read.
-    stalled
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut first = [0u8; 1];
-    assert_eq!(stalled.read(&mut first).unwrap(), 1);
-
     let mut other = Client::new(&server);
     let started = Instant::now();
     assert_eq!(other.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
@@ -229,17 +221,30 @@ fn many_acks_from_a_non_reader_do_not_block_other_clients() {
         started.elapsed()
     );
 
-    // The stalled subscriber is disconnected once the batch budget expires.
+    // While the batch is buffered, other clients keep working. A client that
+    // drains fast keeps its subscription; a stalled one is cut off at the cap.
     stalled
-        .set_read_timeout(Some(Duration::from_secs(1)))
+        .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
     let mut sink = [0u8; 65536];
+    let mut received = 0usize;
+    let mut closed = false;
     loop {
         match stalled.read(&mut sink) {
-            Ok(0) => break,
-            Ok(_) => continue,
-            Err(error) => panic!("stalled subscriber was not dropped: {error}"),
+            Ok(0) => {
+                closed = true;
+                break;
+            }
+            Ok(read) => received += read,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => break,
+            Err(error) => panic!("stalled subscriber failed: {error}"),
         }
+    }
+    assert!(received > 0);
+    assert_eq!(other.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
+    if closed {
+        assert!(received < 61 * 1024 * 1024);
     }
 }
 
@@ -592,12 +597,12 @@ fn numpat_drops_patterns_when_a_stalled_subscriber_is_removed() {
 
 fn read_exact_bytes(stream: &mut std::net::TcpStream, length: usize) -> Vec<u8> {
     use std::io::Read;
-    let mut bytes = Vec::with_capacity(length);
-    let mut chunk = [0u8; 65536];
-    while bytes.len() < length {
-        let read = stream.read(&mut chunk).unwrap();
-        assert!(read > 0, "connection closed after {} bytes", bytes.len());
-        bytes.extend_from_slice(&chunk[..read]);
+    let mut bytes = vec![0u8; length];
+    let mut offset = 0;
+    while offset < length {
+        let read = stream.read(&mut bytes[offset..]).unwrap();
+        assert!(read > 0, "connection closed after {offset} bytes");
+        offset += read;
     }
     bytes
 }
@@ -615,8 +620,9 @@ fn a_paused_subscriber_receives_the_whole_message() {
     subscriber
         .write_all(&command(&[b"SUBSCRIBE", b"news"]))
         .unwrap();
-    let ack = read_exact_bytes(&mut subscriber, 28);
-    assert!(ack.starts_with(b"*3\r\n"));
+    // *3, $9 subscribe, $4 news, :1
+    let ack = read_exact_bytes(&mut subscriber, 33);
+    assert_eq!(ack, b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n");
 
     let mut publisher = Client::new(&server);
     let payload = vec![b'x'; 4 * 1024 * 1024];

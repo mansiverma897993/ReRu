@@ -14,9 +14,8 @@ const REPLY_IDLE: Duration = Duration::from_secs(30);
 const OUTPUT_HARD_LIMIT: usize = 32 * 1024 * 1024;
 const OUTPUT_SOFT_LIMIT: usize = 8 * 1024 * 1024;
 const OUTPUT_SOFT_DURATION: Duration = Duration::from_secs(60);
-// One frame may wait for a paused reader, but not forever.
-const OUTPUT_WRITE_IDLE: Duration = Duration::from_secs(5);
-const OUTPUT_WRITE_TOTAL: Duration = Duration::from_secs(60);
+// How often an idle or blocked writer re-checks the soft limit.
+const OUTPUT_TICK: Duration = Duration::from_secs(1);
 
 // A socket write timeout reports WouldBlock after a partial write. Retry the
 // remaining bytes while writes make progress, but give up after `idle` without
@@ -65,12 +64,17 @@ type Writer = Arc<Mutex<TcpStream>>;
 
 #[derive(Default)]
 struct OutputQueue {
-    frames: VecDeque<Vec<u8>>,
+    frames: VecDeque<Arc<[u8]>>,
     // Queued plus in-flight bytes.
     bytes: usize,
-    in_flight: usize,
     closed: bool,
     soft_since: Option<Instant>,
+}
+
+enum Next {
+    Frame(Arc<[u8]>),
+    Expired,
+    Closed,
 }
 
 /// Per-subscriber output buffer. Frames are queued whole and written by the
@@ -84,21 +88,18 @@ struct Output {
 
 impl Output {
     /// Queue one frame. Returns false when the client must be evicted.
-    fn push(&self, frame: &[u8]) -> bool {
+    fn push(&self, frame: Arc<[u8]>) -> bool {
         let mut queue = self.queue.lock().unwrap();
         if queue.closed {
             return false;
         }
         queue.bytes = queue.bytes.saturating_add(frame.len());
-        queue.frames.push_back(frame.to_vec());
+        queue.frames.push_back(frame);
         if queue.bytes > OUTPUT_HARD_LIMIT {
             return false;
         }
         if queue.bytes > OUTPUT_SOFT_LIMIT {
-            let since = *queue.soft_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= OUTPUT_SOFT_DURATION {
-                return false;
-            }
+            queue.soft_since.get_or_insert_with(Instant::now);
         } else {
             queue.soft_since = None;
         }
@@ -106,26 +107,43 @@ impl Output {
         true
     }
 
-    /// Block until a frame is available. Returns None once the buffer is closed
-    /// and drained.
-    fn next_frame(&self) -> Option<Vec<u8>> {
+    /// True when the client stayed above the soft limit for too long.
+    fn soft_expired(&self) -> bool {
+        let queue = self.queue.lock().unwrap();
+        queue.bytes > OUTPUT_SOFT_LIMIT
+            && queue
+                .soft_since
+                .is_some_and(|since| since.elapsed() >= OUTPUT_SOFT_DURATION)
+    }
+
+    /// Wait for a frame, waking at least once per tick to enforce the limits.
+    fn next(&self) -> Next {
         let mut queue = self.queue.lock().unwrap();
         loop {
             if let Some(frame) = queue.frames.pop_front() {
-                queue.in_flight = queue.in_flight.saturating_add(frame.len());
-                return Some(frame);
+                return Next::Frame(frame);
             }
             if queue.closed {
-                return None;
+                return Next::Closed;
             }
-            queue = self.available.wait(queue).unwrap();
+            if queue.bytes > OUTPUT_SOFT_LIMIT
+                && queue
+                    .soft_since
+                    .is_some_and(|since| since.elapsed() >= OUTPUT_SOFT_DURATION)
+            {
+                return Next::Expired;
+            }
+            let (next, _) = self.available.wait_timeout(queue, OUTPUT_TICK).unwrap();
+            queue = next;
         }
     }
 
     fn completed(&self, len: usize) {
         let mut queue = self.queue.lock().unwrap();
-        queue.in_flight = queue.in_flight.saturating_sub(len);
         queue.bytes = queue.bytes.saturating_sub(len);
+        if queue.bytes <= OUTPUT_SOFT_LIMIT {
+            queue.soft_since = None;
+        }
         self.available.notify_all();
     }
 
@@ -152,16 +170,63 @@ impl Output {
     }
 }
 
+/// Write a queued frame, waiting as long as the peer needs. Memory stays
+/// bounded by the output limits, which the loop also enforces while blocked.
+fn write_buffered(stream: &mut TcpStream, frame: &[u8], output: &Output) -> io::Result<()> {
+    let mut offset = 0;
+    let mut backoff = Duration::from_millis(2);
+    while offset < frame.len() {
+        if output.soft_expired() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "output buffer limit exceeded",
+            ));
+        }
+        match stream.write(&frame[offset..]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "write returned zero bytes",
+                ))
+            }
+            Ok(written) => {
+                offset += written;
+                backoff = Duration::from_millis(2);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) =>
+            {
+                std::thread::sleep(backoff);
+                backoff = (backoff * 2).min(Duration::from_millis(50));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 fn writer_loop(mut stream: TcpStream, output: Arc<Output>) {
-    while let Some(frame) = output.next_frame() {
-        let deadline = Instant::now() + OUTPUT_WRITE_TOTAL;
-        match write_frame(&mut stream, &frame, OUTPUT_WRITE_IDLE, deadline) {
-            Ok(()) => output.completed(frame.len()),
-            Err(_) => {
+    loop {
+        match output.next() {
+            Next::Frame(frame) => match write_buffered(&mut stream, &frame, &output) {
+                Ok(()) => output.completed(frame.len()),
+                Err(_) => {
+                    output.close();
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return;
+                }
+            },
+            Next::Expired => {
                 output.close();
                 let _ = stream.shutdown(Shutdown::Both);
                 return;
             }
+            Next::Closed => return,
         }
     }
 }
@@ -218,15 +283,21 @@ impl Drop for ClientSubscription<'_> {
     fn drop(&mut self) {
         // A peer dropped by a failed publish may already have removed this
         // entry, and a poisoned lock must not panic during unwinding.
-        if let Ok(mut listeners) = self.hub.listeners.lock() {
-            if let Some(listener) = listeners.remove(&self.id) {
-                self.hub.remove_patterns(&listener.patterns);
-                if let Some(output) = &listener.output {
-                    output.finish(Duration::from_secs(2));
-                }
-                if let Ok(writer) = listener.writer.lock() {
-                    let _ = writer.shutdown(Shutdown::Both);
-                }
+        let removed = self
+            .hub
+            .listeners
+            .lock()
+            .ok()
+            .and_then(|mut listeners| listeners.remove(&self.id));
+        // Flush and shut down outside the listeners lock so one slow client
+        // cannot stall publishers.
+        if let Some(listener) = removed {
+            self.hub.remove_patterns(&listener.patterns);
+            if let Some(output) = &listener.output {
+                output.finish(Duration::from_millis(250));
+            }
+            if let Ok(writer) = listener.writer.lock() {
+                let _ = writer.shutdown(Shutdown::Both);
             }
         }
     }
@@ -262,14 +333,8 @@ impl ClientSubscription<'_> {
         let frames = Self::apply_change(self.hub, listener, command)?;
         let output = ensure_output(listener)?;
         for frame in frames {
-            if !output.push(&frame) {
-                let listener = listeners.get_mut(&self.id);
-                if let Some(listener) = listener {
-                    if let Some(output) = &listener.output {
-                        output.close();
-                    }
-                    let _ = listener.writer.lock().map(|w| w.shutdown(Shutdown::Both));
-                }
+            if !output.push(Arc::from(frame.into_boxed_slice())) {
+                self.hub.evict(&mut listeners, self.id);
                 return Err(disconnected());
             }
         }
@@ -380,9 +445,8 @@ impl ClientSubscription<'_> {
             return Ok(());
         }
         let output = ensure_output(listener)?;
-        if !output.push(&deferred) {
-            output.close();
-            let _ = listener.writer.lock().map(|w| w.shutdown(Shutdown::Both));
+        if !output.push(Arc::from(deferred.into_boxed_slice())) {
+            self.hub.evict(&mut listeners, self.id);
             return Err(disconnected());
         }
         Ok(())
@@ -395,11 +459,10 @@ impl ClientSubscription<'_> {
             return Err(disconnected());
         };
         let output = ensure_output(listener)?;
-        if output.push(reply) {
+        if output.push(Arc::from(reply)) {
             Ok(())
         } else {
-            output.close();
-            let _ = listener.writer.lock().map(|w| w.shutdown(Shutdown::Both));
+            self.hub.evict(&mut listeners, self.id);
             Err(disconnected())
         }
     }
@@ -410,16 +473,8 @@ impl ClientSubscription<'_> {
             return Err(disconnected());
         };
         if let Some(output) = &listener.output {
-            let queued = output.push(reply);
-            let writer = Arc::clone(&listener.writer);
-            drop(listeners);
-            if !queued {
-                if let Some(listener) = self.hub.listeners.lock().unwrap().get(&self.id) {
-                    if let Some(output) = &listener.output {
-                        output.close();
-                    }
-                }
-                let _ = writer.lock().map(|w| w.shutdown(Shutdown::Both));
+            if !output.push(Arc::from(reply)) {
+                self.hub.evict(&mut listeners, self.id);
                 return Err(disconnected());
             }
             return Ok(());
@@ -450,18 +505,21 @@ impl Hub {
     }
 
     pub fn publish(&self, channel: &[u8], message: &[u8]) -> usize {
-        let direct = message_reply(b"message", &[channel, message]);
+        let direct: Arc<[u8]> = Arc::from(message_reply(b"message", &[channel, message]));
         let mut listeners = self.listeners.lock().unwrap();
         let mut count = 0;
         let mut evicted = Vec::new();
         for (id, listener) in listeners.iter_mut() {
-            let mut frames: Vec<Vec<u8>> = Vec::new();
+            let mut frames: Vec<Arc<[u8]>> = Vec::new();
             if listener.channels.contains(channel) {
-                frames.push(direct.clone());
+                frames.push(Arc::clone(&direct));
             }
             for pattern in &listener.patterns {
                 if glob_matches(pattern, channel) {
-                    frames.push(message_reply(b"pmessage", &[pattern, channel, message]));
+                    frames.push(Arc::from(message_reply(
+                        b"pmessage",
+                        &[pattern, channel, message],
+                    )));
                 }
             }
             if frames.is_empty() {
@@ -471,6 +529,9 @@ impl Hub {
             if listener.held {
                 for frame in &frames {
                     listener.deferred.extend_from_slice(frame);
+                }
+                if listener.deferred.len() > OUTPUT_HARD_LIMIT {
+                    evicted.push(*id);
                 }
                 continue;
             }
@@ -484,7 +545,7 @@ impl Hub {
                     }
                 },
             };
-            for frame in &frames {
+            for frame in frames {
                 if !output.push(frame) {
                     evicted.push(*id);
                     break;

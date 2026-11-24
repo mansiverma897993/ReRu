@@ -20,7 +20,7 @@ tests; it does not certify complete compatibility with Redis.
 | Geospatial | `GEOADD`, `GEOPOS`, `GEOHASH`, `GEODIST`, `GEOSEARCH`, `GEOSEARCHSTORE` | Geo points use sorted-set scores; NX/XX/CH, positions and distances, radius/box search, sort/count, decorated results, and destination storing |
 | Keyspace | `TYPE`, `DEL`, `UNLINK`, `EXISTS`, `TOUCH`, `DBSIZE`, `KEYS`, `SCAN`, `RANDOMKEY`, `COPY`, `RENAME`, `RENAMENX`, `TTL`, `PTTL`, `EXPIRE`, `PEXPIRE`, `EXPIREAT`, `PEXPIREAT`, `EXPIRETIME`, `PEXPIRETIME`, `PERSIST`, `OBJECT ENCODING`, `OBJECT REFCOUNT`, `FLUSHDB`, `FLUSHALL` | Multiple keys, glob and type filtered scanning, rename/copy with TTL, relative/absolute expiry conditions with `EXPIRETIME` rounding half up and `PEXPIRETIME` exact for absolute deadlines, advisory encoding labels with Redis 8 thresholds, constant reference counts, whole-database flush |
 | Transactions | `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` | Queuing, atomic execution relative to other commands, runtime errors, optimistic locking |
-| Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `PUBSUB` | Binary channels/messages, glob patterns, RESP2 subscribed mode, CHANNELS/NUMSUB/NUMPAT; local process only. Each subscriber has its own output buffer and writer thread; frames are queued whole, a publish never waits for a slow reader or skips a live listener, and a subscriber is dropped only above 32 MiB of buffered output or after staying above 8 MiB for 60 seconds |
+| Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `PUBSUB` | Binary channels/messages, glob patterns, RESP2 subscribed mode, CHANNELS/NUMSUB/NUMPAT; local process only. Each subscriber has its own output buffer and writer thread; frames are queued whole, a publish never waits for a slow reader or skips a live listener, and a subscriber is dropped only above 32 MiB of buffered output or after staying above 8 MiB for 60 seconds. `UNSUBSCRIBE`/`PUNSUBSCRIBE` without names replies in sorted order where Redis uses hash order |
 | Connection close | `QUIT` | Ignores extra arguments, replies OK, and closes the connection |
 | Authentication | `AUTH`, `ACL WHOAMI` | Startup-configured password for the default user, connection-local authentication and authenticated ReRu replication |
 | Configuration | `CONFIG GET`, `CONFIG SET`, [`CONFIG RESETSTAT`](https://redis.io/docs/latest/commands/config-resetstat/) | Runtime `maxmemory`, `maxmemory-policy`, `maxclients`, and `latency-monitor-threshold`; GET also reports AOF enabled/fsync mode and configured RDB dir/dbfilename; RESETSTAT clears counters exposed by INFO |
@@ -618,17 +618,18 @@ subscriptions. Delivery is at-most-once; messages are not persisted or
 replicated, and clients on other ReRu servers do not receive them. Each
 subscriber's output is buffered per connection and written by its own thread, so
 acknowledgements and messages are queued whole and never interleave; a publish
-does not wait for a slow reader and does not skip a live listener. A subscriber
-is disconnected when its buffered output exceeds 32 MiB, or when it stays above
-8 MiB for 60 seconds. A message published to the client's own channels during
+does not wait for a slow reader and does not skip a live listener. The writer
+waits for a paused reader as long as the buffer stays within limits; a
+subscriber is disconnected when its buffered output exceeds 32 MiB, or when it
+stays above 8 MiB for 60 seconds (checked by the writer once per second). A message published to the client's own channels during
 `EXEC` is held and delivered after the transaction reply. Sharded Pub/Sub,
 keyspace notifications, and Pub/Sub ACLs remain pending. RESET clears subscriptions and
 returns the connection to ordinary RESP2 command mode.
 
 ## Verification for this increment
 
-The local suite has **264 tests**: 28 unit tests in `src/main.rs`, 3 in
-`src/lib.rs`, and 233 server integration tests.
+The local suite has **359 tests**: 34 unit tests in `src/main.rs`, 5 in
+`src/lib.rs`, and 320 server integration tests.
 Sorted-set tests compare `ZRANGESTORE` output with the matching `ZRANGE` for rank,
 score and lex ranges, and cover destination replacement, cleared TTL, deletion on
 an empty result, and rejected arity, syntax and wrong types.
