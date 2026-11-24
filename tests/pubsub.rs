@@ -704,10 +704,13 @@ fn a_large_subscription_batch_survives_a_pause() {
             .iter()
             .map(|(_, count)| String::from_utf8_lossy(count).into_owned())
             .collect();
-        let subscribed = Client::new(&server).call(&[b"PUBSUB", b"CHANNELS"]);
+        let subscribed = match Client::new(&server).call(&[b"PUBSUB", b"CHANNELS"]) {
+            Reply::Array(Some(rows)) => rows.len(),
+            _ => 0,
+        };
         panic!(
-            "channels {:?} != {:?}, counts {:?}, channels-reply {:?}",
-            got, want, counts, subscribed
+            "channels {:?} != {:?}, counts {:?}, subscribed {subscribed}",
+            got, want, counts
         );
     }
     for (index, (_, count)) in received.iter().enumerate() {
