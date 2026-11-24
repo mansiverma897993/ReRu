@@ -1986,7 +1986,6 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                             .iter()
                             .any(|command| pubsub::is_subscription_command(command));
                         let holds = subscribes || subscription.active();
-                        let deadline = Instant::now() + pubsub::ACK_TOTAL;
                         if holds {
                             subscription.hold();
                         }
@@ -1994,7 +1993,7 @@ fn handle_client(mut stream: TcpStream, store: Store) -> io::Result<()> {
                             let result = if queued_command[0].eq_ignore_ascii_case(b"AUTH") {
                                 store.auth.authenticate(&queued_command, &mut authenticated)
                             } else if pubsub::is_subscription_command(&queued_command) {
-                                subscription.change_frame(&queued_command, deadline)?
+                                subscription.change_frame(&queued_command)?
                             } else if queued_command[0].eq_ignore_ascii_case(b"PING")
                                 && subscription.active()
                             {

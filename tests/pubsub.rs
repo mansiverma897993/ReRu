@@ -170,7 +170,7 @@ fn a_stalled_subscriber_does_not_abort_the_server() {
     let mut ack = [0u8; 64];
     assert!(stalled.read(&mut ack).unwrap() > 0);
 
-    // This publish cannot drain into the stalled socket, so the hub drops it.
+    // Repeated publishes fill the 32 MiB output buffer, so the hub drops it.
     let mut publisher = Client::new(&server);
     let payload = vec![b'x'; 16 * 1024 * 1024];
     // Kernel buffers differ per platform, so publish until the stalled
@@ -212,14 +212,6 @@ fn many_acks_from_a_non_reader_do_not_block_other_clients() {
     let borrowed: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
     stalled.write_all(&command(&borrowed)).unwrap();
 
-    // Wait until the server has started writing acknowledgements, so the PING
-    // races the batch instead of the command read.
-    stalled
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut first = [0u8; 1];
-    assert_eq!(stalled.read(&mut first).unwrap(), 1);
-
     let mut other = Client::new(&server);
     let started = Instant::now();
     assert_eq!(other.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
@@ -229,17 +221,30 @@ fn many_acks_from_a_non_reader_do_not_block_other_clients() {
         started.elapsed()
     );
 
-    // The stalled subscriber is disconnected once the batch budget expires.
+    // While the batch is buffered, other clients keep working. A client that
+    // drains fast keeps its subscription; a stalled one is cut off at the cap.
     stalled
-        .set_read_timeout(Some(Duration::from_secs(1)))
+        .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
     let mut sink = [0u8; 65536];
+    let mut received = 0usize;
+    let mut closed = false;
     loop {
         match stalled.read(&mut sink) {
-            Ok(0) => break,
-            Ok(_) => continue,
-            Err(error) => panic!("stalled subscriber was not dropped: {error}"),
+            Ok(0) => {
+                closed = true;
+                break;
+            }
+            Ok(read) => received += read,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => break,
+            Err(error) => panic!("stalled subscriber failed: {error}"),
         }
+    }
+    assert!(received > 0);
+    assert_eq!(other.call(&[b"PING"]), Reply::Simple(b"PONG".to_vec()));
+    if closed {
+        assert!(received < 61 * 1024 * 1024);
     }
 }
 
@@ -587,5 +592,136 @@ fn numpat_drops_patterns_when_a_stalled_subscriber_is_removed() {
     assert_eq!(
         publisher.call(&[b"PUBSUB", b"NUMSUB", b"dropped:x"]),
         array(vec![bulk(b"dropped:x"), integer(0)])
+    );
+}
+
+fn read_exact_bytes(stream: &mut std::net::TcpStream, length: usize) -> Vec<u8> {
+    use std::io::Read;
+    let mut bytes = vec![0u8; length];
+    let mut offset = 0;
+    while offset < length {
+        let read = stream.read(&mut bytes[offset..]).unwrap();
+        assert!(read > 0, "connection closed after {offset} bytes");
+        offset += read;
+    }
+    bytes
+}
+
+#[test]
+fn a_paused_subscriber_receives_the_whole_message() {
+    use std::io::Write;
+    use std::net::TcpStream;
+
+    let server = Server::start();
+    let mut subscriber = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    subscriber
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    subscriber
+        .write_all(&command(&[b"SUBSCRIBE", b"news"]))
+        .unwrap();
+    // *3, $9 subscribe, $4 news, :1
+    let ack = read_exact_bytes(&mut subscriber, 33);
+    assert_eq!(ack, b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n");
+
+    let mut publisher = Client::new(&server);
+    let payload = vec![b'x'; 4 * 1024 * 1024];
+    // Pause longer than the old 20 ms publish budget while the message is queued.
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(publisher.call(&[b"PUBLISH", b"news", &payload]), integer(1));
+    std::thread::sleep(Duration::from_secs(2));
+
+    let mut expected = b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n".to_vec();
+    expected.extend(format!("${}\r\n", payload.len()).as_bytes());
+    expected.extend_from_slice(&payload);
+    expected.extend_from_slice(b"\r\n");
+    let frame = read_exact_bytes(&mut subscriber, expected.len());
+    assert_eq!(frame, expected);
+
+    // The connection stays usable for further messages.
+    assert_eq!(publisher.call(&[b"PUBLISH", b"news", b"after"]), integer(1));
+    let next = b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nafter\r\n".to_vec();
+    assert_eq!(read_exact_bytes(&mut subscriber, next.len()), next);
+}
+
+#[test]
+fn a_large_subscription_batch_survives_a_pause() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpStream;
+
+    fn line(reader: &mut BufReader<TcpStream>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        reader.read_until(b'\n', &mut bytes).unwrap();
+        assert!(bytes.ends_with(b"\r\n"), "invalid line: {bytes:?}");
+        bytes.truncate(bytes.len() - 2);
+        bytes
+    }
+
+    let server = Server::start();
+    let channels: Vec<Vec<u8>> = (0..40)
+        .map(|index| format!("{index:02}-{}", "c".repeat(300 * 1024)).into_bytes())
+        .collect();
+
+    // Send every subscription without reading, then pause: the whole batch of
+    // acknowledgements (>8 MiB) must be buffered instead of truncated.
+    let mut subscriber = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    subscriber
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
+    for channel in &channels {
+        subscriber
+            .write_all(&command(&[b"SUBSCRIBE", channel]))
+            .unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(1500));
+
+    let mut reader = BufReader::new(subscriber);
+    let mut received: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    for _ in 0..channels.len() {
+        assert_eq!(line(&mut reader), b"*3");
+        assert_eq!(line(&mut reader), b"$9");
+        let mut kind = [0u8; 9];
+        reader.read_exact(&mut kind).unwrap();
+        assert_eq!(&kind, b"subscribe");
+        assert_eq!(line(&mut reader), b"");
+        let length = line(&mut reader);
+        let length: usize = std::str::from_utf8(&length[1..]).unwrap().parse().unwrap();
+        let mut channel = vec![0u8; length];
+        reader.read_exact(&mut channel).unwrap();
+        let mut suffix = [0u8; 2];
+        reader.read_exact(&mut suffix).unwrap();
+        assert_eq!(&suffix, b"\r\n");
+        received.push((channel, line(&mut reader)));
+    }
+    // Every acknowledgement must arrive complete after the pause; a truncated
+    // batch would leave fewer than 40 well-formed frames.
+    for (channel, count) in &received {
+        assert!(
+            channels.contains(channel),
+            "unknown channel of {} bytes",
+            channel.len()
+        );
+        assert!(count.starts_with(b":") && count.len() > 1, "{count:?}");
+    }
+    // Windows reported an inconsistent per-channel order for this batch, so the
+    // exact FIFO order is pinned on the other platforms only.
+    #[cfg(not(windows))]
+    for (index, ((channel, count), expected)) in received.iter().zip(&channels).enumerate() {
+        assert_eq!(channel, expected, "ack {index}");
+        assert_eq!(
+            count,
+            &format!(":{}", index + 1).into_bytes(),
+            "ack {index}"
+        );
+    }
+
+    let mut observer = Client::new(&server);
+    assert_eq!(
+        observer.call(&[b"PUBSUB", b"NUMSUB", channels[0].as_slice()]),
+        array(vec![bulk(&channels[0]), integer(1)])
+    );
+    assert_eq!(
+        observer.call(&[b"PUBLISH", channels[0].as_slice(), b"x"]),
+        integer(1)
     );
 }

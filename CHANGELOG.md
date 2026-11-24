@@ -89,6 +89,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
   AOF replay, and replicas. `EXPIRETIME` rounds the absolute second half up.
 - AOF string values larger than the replay budget are written as a `SET` plus
   `APPEND` chunks, so a string grown past the protocol bulk limit replays.
+- Pub/Sub output is buffered per subscriber and written by its own thread, so a
+  paused reader receives the whole frame instead of a truncated one. Publish no
+  longer skips a live listener; a subscriber is dropped only above 32 MiB of
+  buffered output or after staying above 8 MiB for 60 seconds.
 - `PUBSUB NUMPAT` reads a reference-counted pattern map instead of rebuilding a
   set of every listener's patterns on each call.
 - `BZPOPMIN`, `BZPOPMAX`, and `BZMPOP` stay blocked when a watched key only
