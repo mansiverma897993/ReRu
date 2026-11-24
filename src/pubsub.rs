@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::protocol;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 const REPLY_IDLE: Duration = Duration::from_secs(30);
-const ACK_IDLE: Duration = Duration::from_millis(100);
-// Acknowledgements still run under command_gate: allow a healthy batch to make
-// progress but cap the whole batch and any single stall.
-pub(crate) const ACK_TOTAL: Duration = Duration::from_millis(750);
-// Publish deliveries run under the gate too, so one publish is capped tightly.
-const PUBLISH_IDLE: Duration = Duration::from_millis(20);
-const PUBLISH_TOTAL: Duration = Duration::from_millis(100);
+// A subscriber's output is buffered per connection, so a short pause never
+// drops it mid-frame. Redis-like limits apply: hard cap, or staying above the
+// soft cap for a minute.
+const OUTPUT_HARD_LIMIT: usize = 32 * 1024 * 1024;
+const OUTPUT_SOFT_LIMIT: usize = 8 * 1024 * 1024;
+const OUTPUT_SOFT_DURATION: Duration = Duration::from_secs(60);
+// One frame may wait for a paused reader, but not forever.
+const OUTPUT_WRITE_IDLE: Duration = Duration::from_secs(5);
+const OUTPUT_WRITE_TOTAL: Duration = Duration::from_secs(60);
 
 // A socket write timeout reports WouldBlock after a partial write. Retry the
 // remaining bytes while writes make progress, but give up after `idle` without
@@ -62,6 +64,109 @@ fn write_frame(
 type Writer = Arc<Mutex<TcpStream>>;
 
 #[derive(Default)]
+struct OutputQueue {
+    frames: VecDeque<Vec<u8>>,
+    // Queued plus in-flight bytes.
+    bytes: usize,
+    in_flight: usize,
+    closed: bool,
+    soft_since: Option<Instant>,
+}
+
+/// Per-subscriber output buffer. Frames are queued whole and written by the
+/// subscriber's own writer thread, so publishing never blocks on a slow peer
+/// and never leaves a half-written frame.
+#[derive(Default)]
+struct Output {
+    queue: Mutex<OutputQueue>,
+    available: Condvar,
+}
+
+impl Output {
+    /// Queue one frame. Returns false when the client must be evicted.
+    fn push(&self, frame: &[u8]) -> bool {
+        let mut queue = self.queue.lock().unwrap();
+        if queue.closed {
+            return false;
+        }
+        queue.bytes = queue.bytes.saturating_add(frame.len());
+        queue.frames.push_back(frame.to_vec());
+        if queue.bytes > OUTPUT_HARD_LIMIT {
+            return false;
+        }
+        if queue.bytes > OUTPUT_SOFT_LIMIT {
+            let since = *queue.soft_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= OUTPUT_SOFT_DURATION {
+                return false;
+            }
+        } else {
+            queue.soft_since = None;
+        }
+        self.available.notify_one();
+        true
+    }
+
+    /// Block until a frame is available. Returns None once the buffer is closed
+    /// and drained.
+    fn next_frame(&self) -> Option<Vec<u8>> {
+        let mut queue = self.queue.lock().unwrap();
+        loop {
+            if let Some(frame) = queue.frames.pop_front() {
+                queue.in_flight = queue.in_flight.saturating_add(frame.len());
+                return Some(frame);
+            }
+            if queue.closed {
+                return None;
+            }
+            queue = self.available.wait(queue).unwrap();
+        }
+    }
+
+    fn completed(&self, len: usize) {
+        let mut queue = self.queue.lock().unwrap();
+        queue.in_flight = queue.in_flight.saturating_sub(len);
+        queue.bytes = queue.bytes.saturating_sub(len);
+        self.available.notify_all();
+    }
+
+    fn close(&self) {
+        self.queue.lock().unwrap().closed = true;
+        self.available.notify_all();
+    }
+
+    /// Give the writer thread a bounded chance to flush the final replies
+    /// before the connection closes.
+    fn finish(&self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        let mut queue = self.queue.lock().unwrap();
+        while queue.bytes > 0 && !queue.closed {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let (next, _) = self.available.wait_timeout(queue, deadline - now).unwrap();
+            queue = next;
+        }
+        queue.closed = true;
+        self.available.notify_all();
+    }
+}
+
+fn writer_loop(mut stream: TcpStream, output: Arc<Output>) {
+    while let Some(frame) = output.next_frame() {
+        let deadline = Instant::now() + OUTPUT_WRITE_TOTAL;
+        match write_frame(&mut stream, &frame, OUTPUT_WRITE_IDLE, deadline) {
+            Ok(()) => output.completed(frame.len()),
+            Err(_) => {
+                output.close();
+                let _ = stream.shutdown(Shutdown::Both);
+                return;
+            }
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct Hub {
     next_id: AtomicU64,
     listeners: Mutex<HashMap<u64, Listener>>,
@@ -70,10 +175,25 @@ pub struct Hub {
 
 struct Listener {
     writer: Writer,
+    output: Option<Arc<Output>>,
     channels: HashSet<Vec<u8>>,
     patterns: HashSet<Vec<u8>>,
     held: bool,
     deferred: Vec<u8>,
+}
+
+/// Start the writer thread for a listener the first time it needs buffering.
+fn ensure_output(listener: &mut Listener) -> io::Result<Arc<Output>> {
+    if listener.output.is_none() {
+        let stream = listener.writer.lock().unwrap().try_clone()?;
+        let output = Arc::new(Output::default());
+        let background = Arc::clone(&output);
+        std::thread::Builder::new()
+            .name("reru-subscriber".to_string())
+            .spawn(move || writer_loop(stream, background))?;
+        listener.output = Some(output);
+    }
+    Ok(Arc::clone(listener.output.as_ref().unwrap()))
 }
 
 fn decrement_pattern(counts: &mut HashMap<Vec<u8>, usize>, pattern: &[u8]) {
@@ -101,6 +221,12 @@ impl Drop for ClientSubscription<'_> {
         if let Ok(mut listeners) = self.hub.listeners.lock() {
             if let Some(listener) = listeners.remove(&self.id) {
                 self.hub.remove_patterns(&listener.patterns);
+                if let Some(output) = &listener.output {
+                    output.finish(Duration::from_secs(2));
+                }
+                if let Ok(writer) = listener.writer.lock() {
+                    let _ = writer.shutdown(Shutdown::Both);
+                }
             }
         }
     }
@@ -126,62 +252,60 @@ impl ClientSubscription<'_> {
             .is_some_and(|listener| !listener.channels.is_empty() || !listener.patterns.is_empty())
     }
 
-    // The caller holds command_gate while writing these replies. This keeps
-    // subscription acknowledgements ahead of later PUBLISH deliveries.
+    // Apply a subscription change. The caller holds command_gate, so the
+    // acknowledgements are queued before any later publish reaches this client.
     pub fn change(&self, command: &[Vec<u8>]) -> io::Result<()> {
-        let deadline = Instant::now() + ACK_TOTAL;
         let mut listeners = self.hub.listeners.lock().unwrap();
         let Some(listener) = listeners.get_mut(&self.id) else {
             return Err(disconnected());
         };
-        Self::apply_change(
-            self.hub,
-            listener,
-            command,
-            deadline,
-            |writer, frame, deadline| {
-                let mut writer = writer.lock().unwrap();
-                write_frame(&mut writer, frame, ACK_IDLE, deadline)
-            },
-        )
+        let frames = Self::apply_change(self.hub, listener, command)?;
+        let output = ensure_output(listener)?;
+        for frame in frames {
+            if !output.push(&frame) {
+                let listener = listeners.get_mut(&self.id);
+                if let Some(listener) = listener {
+                    if let Some(output) = &listener.output {
+                        output.close();
+                    }
+                    let _ = listener.writer.lock().map(|w| w.shutdown(Shutdown::Both));
+                }
+                return Err(disconnected());
+            }
+        }
+        Ok(())
     }
 
     /// Apply a subscription change and return the acknowledgement frames
     /// without writing them, so EXEC can nest them in its own reply.
-    pub fn change_frame(&self, command: &[Vec<u8>], deadline: Instant) -> io::Result<Vec<u8>> {
+    pub fn change_frame(&self, command: &[Vec<u8>]) -> io::Result<Vec<u8>> {
         let mut listeners = self.hub.listeners.lock().unwrap();
         let Some(listener) = listeners.get_mut(&self.id) else {
             return Err(disconnected());
         };
-        let mut frames = Vec::new();
-        Self::apply_change(self.hub, listener, command, deadline, |_, frame, _| {
-            frames.extend_from_slice(frame);
-            Ok(())
-        })?;
-        Ok(frames)
+        let frames = Self::apply_change(self.hub, listener, command)?;
+        let mut bytes = Vec::new();
+        for frame in frames {
+            bytes.extend_from_slice(&frame);
+        }
+        Ok(bytes)
     }
 
     fn apply_change(
         hub: &Hub,
         listener: &mut Listener,
         command: &[Vec<u8>],
-        deadline: Instant,
-        mut emit: impl FnMut(&Writer, &[u8], Instant) -> io::Result<()>,
-    ) -> io::Result<()> {
+    ) -> io::Result<Vec<Vec<u8>>> {
         let name = command[0].as_slice();
         let adding =
             name.eq_ignore_ascii_case(b"SUBSCRIBE") || name.eq_ignore_ascii_case(b"PSUBSCRIBE");
         let pattern =
             name.eq_ignore_ascii_case(b"PSUBSCRIBE") || name.eq_ignore_ascii_case(b"PUNSUBSCRIBE");
         if adding && command.len() == 1 {
-            return emit(
-                &listener.writer,
-                &protocol::error(&format!(
-                    "wrong number of arguments for '{}' command",
-                    String::from_utf8_lossy(name).to_ascii_lowercase()
-                )),
-                deadline,
-            );
+            return Ok(vec![protocol::error(&format!(
+                "wrong number of arguments for '{}' command",
+                String::from_utf8_lossy(name).to_ascii_lowercase()
+            ))]);
         }
         let kind = if adding {
             if pattern {
@@ -210,13 +334,8 @@ impl ClientSubscription<'_> {
         } else {
             command[1..].iter().cloned().map(Some).collect()
         };
+        let mut frames = Vec::with_capacity(items.len());
         for item in items {
-            if Instant::now() >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "subscriber too slow",
-                ));
-            }
             if let Some(item) = &item {
                 let subscriptions = if pattern {
                     &mut listener.patterns
@@ -237,10 +356,9 @@ impl ClientSubscription<'_> {
                 }
             }
             let count = listener.channels.len() + listener.patterns.len();
-            let frame = acknowledgement(kind, item.as_deref(), count);
-            emit(&listener.writer, &frame, deadline)?;
+            frames.push(acknowledgement(kind, item.as_deref(), count));
         }
-        Ok(())
+        Ok(frames)
     }
 
     /// Buffer publish deliveries until `release`, so a message published during
@@ -252,52 +370,62 @@ impl ClientSubscription<'_> {
     }
 
     pub fn release(&self) -> io::Result<()> {
-        let deadline = Instant::now() + ACK_TOTAL;
-        loop {
-            let deferred = {
-                let mut listeners = self.hub.listeners.lock().unwrap();
-                let Some(listener) = listeners.get_mut(&self.id) else {
-                    return Err(disconnected());
-                };
-                let deferred = std::mem::take(&mut listener.deferred);
-                if deferred.is_empty() {
-                    // Clear the hold in the same critical section as the take,
-                    // so a publish cannot append between them and be stranded.
-                    listener.held = false;
-                }
-                deferred
-            };
-            if deferred.is_empty() {
-                return Ok(());
-            }
-            self.write_bounded(&deferred, ACK_IDLE, deadline)?;
+        let mut listeners = self.hub.listeners.lock().unwrap();
+        let Some(listener) = listeners.get_mut(&self.id) else {
+            return Err(disconnected());
+        };
+        let deferred = std::mem::take(&mut listener.deferred);
+        listener.held = false;
+        if deferred.is_empty() {
+            return Ok(());
+        }
+        let output = ensure_output(listener)?;
+        if !output.push(&deferred) {
+            output.close();
+            let _ = listener.writer.lock().map(|w| w.shutdown(Shutdown::Both));
+            return Err(disconnected());
+        }
+        Ok(())
+    }
+
+    /// Queue an EXEC reply so it precedes the deferred deliveries that follow.
+    pub fn write_transaction(&self, reply: &[u8]) -> io::Result<()> {
+        let mut listeners = self.hub.listeners.lock().unwrap();
+        let Some(listener) = listeners.get_mut(&self.id) else {
+            return Err(disconnected());
+        };
+        let output = ensure_output(listener)?;
+        if output.push(reply) {
+            Ok(())
+        } else {
+            output.close();
+            let _ = listener.writer.lock().map(|w| w.shutdown(Shutdown::Both));
+            Err(disconnected())
         }
     }
 
-    /// Write an EXEC reply under the gate with a bounded budget, so a stalled
-    /// client drops instead of freezing every other client.
-    pub fn write_transaction(&self, reply: &[u8]) -> io::Result<()> {
-        self.write_bounded(reply, ACK_IDLE, Instant::now() + ACK_TOTAL)
-    }
-
-    fn write_bounded(&self, reply: &[u8], idle: Duration, deadline: Instant) -> io::Result<()> {
-        let writer = self.writer()?;
-        let mut writer = writer.lock().unwrap();
-        write_frame(&mut writer, reply, idle, deadline)
-    }
-
-    fn writer(&self) -> io::Result<Writer> {
-        self.hub
-            .listeners
-            .lock()
-            .unwrap()
-            .get(&self.id)
-            .map(|listener| listener.writer.clone())
-            .ok_or_else(disconnected)
-    }
-
     pub fn write(&self, reply: &[u8]) -> io::Result<()> {
-        let writer = self.writer()?;
+        let mut listeners = self.hub.listeners.lock().unwrap();
+        let Some(listener) = listeners.get_mut(&self.id) else {
+            return Err(disconnected());
+        };
+        if let Some(output) = &listener.output {
+            let queued = output.push(reply);
+            let writer = Arc::clone(&listener.writer);
+            drop(listeners);
+            if !queued {
+                if let Some(listener) = self.hub.listeners.lock().unwrap().get(&self.id) {
+                    if let Some(output) = &listener.output {
+                        output.close();
+                    }
+                }
+                let _ = writer.lock().map(|w| w.shutdown(Shutdown::Both));
+                return Err(disconnected());
+            }
+            return Ok(());
+        }
+        let writer = Arc::clone(&listener.writer);
+        drop(listeners);
         let mut writer = writer.lock().unwrap();
         let deadline = Instant::now() + REPLY_IDLE;
         write_frame(&mut writer, reply, REPLY_IDLE, deadline)
@@ -311,6 +439,7 @@ impl Hub {
             id,
             Listener {
                 writer,
+                output: None,
                 channels: HashSet::new(),
                 patterns: HashSet::new(),
                 held: false,
@@ -321,62 +450,63 @@ impl Hub {
     }
 
     pub fn publish(&self, channel: &[u8], message: &[u8]) -> usize {
-        let deadline = Instant::now() + PUBLISH_TOTAL;
-        let mut listeners = self.listeners.lock().unwrap();
         let direct = message_reply(b"message", &[channel, message]);
+        let mut listeners = self.listeners.lock().unwrap();
         let mut count = 0;
-        let mut failed = Vec::new();
+        let mut evicted = Vec::new();
         for (id, listener) in listeners.iter_mut() {
-            if Instant::now() >= deadline {
-                break;
+            let mut frames: Vec<Vec<u8>> = Vec::new();
+            if listener.channels.contains(channel) {
+                frames.push(direct.clone());
             }
-            if listener.held {
-                if listener.channels.contains(channel) {
-                    listener.deferred.extend_from_slice(&direct);
-                    count += 1;
+            for pattern in &listener.patterns {
+                if glob_matches(pattern, channel) {
+                    frames.push(message_reply(b"pmessage", &[pattern, channel, message]));
                 }
-                for pattern in &listener.patterns {
-                    if glob_matches(pattern, channel) {
-                        let reply = message_reply(b"pmessage", &[pattern, channel, message]);
-                        listener.deferred.extend_from_slice(&reply);
-                        count += 1;
-                    }
+            }
+            if frames.is_empty() {
+                continue;
+            }
+            count += frames.len();
+            if listener.held {
+                for frame in &frames {
+                    listener.deferred.extend_from_slice(frame);
                 }
                 continue;
             }
-            let mut writer = listener.writer.lock().unwrap();
-            let mut delivered = true;
-            if listener.channels.contains(channel) {
-                if write_frame(&mut writer, &direct, PUBLISH_IDLE, deadline).is_err() {
-                    delivered = false;
-                } else {
-                    count += 1;
-                }
-            }
-            if delivered {
-                for pattern in &listener.patterns {
-                    if glob_matches(pattern, channel) {
-                        let reply = message_reply(b"pmessage", &[pattern, channel, message]);
-                        if write_frame(&mut writer, &reply, PUBLISH_IDLE, deadline).is_err() {
-                            delivered = false;
-                            break;
-                        }
-                        count += 1;
+            let output = match &listener.output {
+                Some(output) => Arc::clone(output),
+                None => match ensure_output(listener) {
+                    Ok(output) => output,
+                    Err(_) => {
+                        evicted.push(*id);
+                        continue;
                     }
+                },
+            };
+            for frame in &frames {
+                if !output.push(frame) {
+                    evicted.push(*id);
+                    break;
                 }
-            }
-            if !delivered {
-                failed.push((*id, Arc::clone(&listener.writer)));
             }
         }
-        for (id, writer) in failed {
-            if let Some(listener) = listeners.remove(&id) {
-                self.remove_patterns(&listener.patterns);
-            }
-            // Close the dropped subscriber instead of leaving it half-written.
-            let _ = writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
+        for id in evicted {
+            self.evict(&mut listeners, id);
         }
         count
+    }
+
+    /// Drop a subscriber that exceeded its output limits. Its writer thread sees
+    /// the closed buffer and the socket shutdown.
+    fn evict(&self, listeners: &mut HashMap<u64, Listener>, id: u64) {
+        if let Some(listener) = listeners.remove(&id) {
+            self.remove_patterns(&listener.patterns);
+            if let Some(output) = &listener.output {
+                output.close();
+            }
+            let _ = listener.writer.lock().map(|w| w.shutdown(Shutdown::Both));
+        }
     }
 
     fn channels(&self, pattern: Option<&[u8]>) -> Vec<Vec<u8>> {

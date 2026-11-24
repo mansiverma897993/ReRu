@@ -589,3 +589,91 @@ fn numpat_drops_patterns_when_a_stalled_subscriber_is_removed() {
         array(vec![bulk(b"dropped:x"), integer(0)])
     );
 }
+
+fn read_exact_bytes(stream: &mut std::net::TcpStream, length: usize) -> Vec<u8> {
+    use std::io::Read;
+    let mut bytes = Vec::with_capacity(length);
+    let mut chunk = [0u8; 65536];
+    while bytes.len() < length {
+        let read = stream.read(&mut chunk).unwrap();
+        assert!(read > 0, "connection closed after {} bytes", bytes.len());
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    bytes
+}
+
+#[test]
+fn a_paused_subscriber_receives_the_whole_message() {
+    use std::io::Write;
+    use std::net::TcpStream;
+
+    let server = Server::start();
+    let mut subscriber = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    subscriber
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    subscriber
+        .write_all(&command(&[b"SUBSCRIBE", b"news"]))
+        .unwrap();
+    let ack = read_exact_bytes(&mut subscriber, 28);
+    assert!(ack.starts_with(b"*3\r\n"));
+
+    let mut publisher = Client::new(&server);
+    let payload = vec![b'x'; 4 * 1024 * 1024];
+    // Pause longer than the old 20 ms publish budget while the message is queued.
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(publisher.call(&[b"PUBLISH", b"news", &payload]), integer(1));
+    std::thread::sleep(Duration::from_secs(2));
+
+    let mut expected = b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n".to_vec();
+    expected.extend(format!("${}\r\n", payload.len()).as_bytes());
+    expected.extend_from_slice(&payload);
+    expected.extend_from_slice(b"\r\n");
+    let frame = read_exact_bytes(&mut subscriber, expected.len());
+    assert_eq!(frame, expected);
+
+    // The connection stays usable for further messages.
+    assert_eq!(publisher.call(&[b"PUBLISH", b"news", b"after"]), integer(1));
+    let next = b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nafter\r\n".to_vec();
+    assert_eq!(read_exact_bytes(&mut subscriber, next.len()), next);
+}
+
+#[test]
+fn a_large_subscription_batch_survives_a_pause() {
+    use std::io::Write;
+    use std::net::TcpStream;
+
+    let server = Server::start();
+    let channels: Vec<Vec<u8>> = (0..40)
+        .map(|index| format!("{index:02}-{}", "c".repeat(300 * 1024)).into_bytes())
+        .collect();
+    let mut args: Vec<&[u8]> = vec![b"SUBSCRIBE"];
+    args.extend(channels.iter().map(Vec::as_slice));
+
+    let mut subscriber = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    subscriber
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
+    subscriber.write_all(&command(&args)).unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+
+    let mut expected = Vec::new();
+    for (index, channel) in channels.iter().enumerate() {
+        expected.extend_from_slice(
+            format!("*3\r\n$9\r\nsubscribe\r\n${}\r\n", channel.len()).as_bytes(),
+        );
+        expected.extend_from_slice(channel);
+        expected.extend_from_slice(format!("\r\n:{}\r\n", index + 1).as_bytes());
+    }
+    let frames = read_exact_bytes(&mut subscriber, expected.len());
+    assert_eq!(frames, expected);
+    let mut observer = Client::new(&server);
+    assert_eq!(
+        observer.call(&[b"PUBSUB", b"NUMSUB", channels[0].as_slice()]),
+        array(vec![bulk(&channels[0]), integer(1)])
+    );
+    assert_eq!(
+        observer.call(&[b"PUBLISH", channels[0].as_slice(), b"x"]),
+        integer(1)
+    );
+}

@@ -20,7 +20,7 @@ tests; it does not certify complete compatibility with Redis.
 | Geospatial | `GEOADD`, `GEOPOS`, `GEOHASH`, `GEODIST`, `GEOSEARCH`, `GEOSEARCHSTORE` | Geo points use sorted-set scores; NX/XX/CH, positions and distances, radius/box search, sort/count, decorated results, and destination storing |
 | Keyspace | `TYPE`, `DEL`, `UNLINK`, `EXISTS`, `TOUCH`, `DBSIZE`, `KEYS`, `SCAN`, `RANDOMKEY`, `COPY`, `RENAME`, `RENAMENX`, `TTL`, `PTTL`, `EXPIRE`, `PEXPIRE`, `EXPIREAT`, `PEXPIREAT`, `EXPIRETIME`, `PEXPIRETIME`, `PERSIST`, `OBJECT ENCODING`, `OBJECT REFCOUNT`, `FLUSHDB`, `FLUSHALL` | Multiple keys, glob and type filtered scanning, rename/copy with TTL, relative/absolute expiry conditions with `EXPIRETIME` rounding half up and `PEXPIRETIME` exact for absolute deadlines, advisory encoding labels with Redis 8 thresholds, constant reference counts, whole-database flush |
 | Transactions | `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` | Queuing, atomic execution relative to other commands, runtime errors, optimistic locking |
-| Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `PUBSUB` | Binary channels/messages, glob patterns, RESP2 subscribed mode, CHANNELS/NUMSUB/NUMPAT; local process only. Output is not buffered: a publish gives all subscribers 100 ms in total and a subscription batch 750 ms before a stalled subscriber is disconnected, which may leave a partial frame. A publish that exhausts its 100 ms leaves later subscribers unserved for that message |
+| Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `PUBSUB` | Binary channels/messages, glob patterns, RESP2 subscribed mode, CHANNELS/NUMSUB/NUMPAT; local process only. Each subscriber has its own output buffer and writer thread; frames are queued whole, a publish never waits for a slow reader or skips a live listener, and a subscriber is dropped only above 32 MiB of buffered output or after staying above 8 MiB for 60 seconds |
 | Connection close | `QUIT` | Ignores extra arguments, replies OK, and closes the connection |
 | Authentication | `AUTH`, `ACL WHOAMI` | Startup-configured password for the default user, connection-local authentication and authenticated ReRu replication |
 | Configuration | `CONFIG GET`, `CONFIG SET`, [`CONFIG RESETSTAT`](https://redis.io/docs/latest/commands/config-resetstat/) | Runtime `maxmemory`, `maxmemory-policy`, `maxclients`, and `latency-monitor-threshold`; GET also reports AOF enabled/fsync mode and configured RDB dir/dbfilename; RESETSTAT clears counters exposed by INFO |
@@ -615,15 +615,14 @@ inside `MULTI` are queued and executed by `EXEC`, which nests their
 acknowledgements in its reply and leaves the connection subscribed; an invalid
 subscription arity aborts the transaction. Disconnects remove their
 subscriptions. Delivery is at-most-once; messages are not persisted or
-replicated, and clients on other ReRu servers do not receive them. Writes to a
-subscriber socket are synchronous: acknowledgements get 100 ms of idle progress
-within a 750 ms batch, and an `EXEC` reply from a subscribed client uses the same
-budget so a stalled client is dropped instead of blocking the server, and
-deferred deliveries are flushed afterwards with their own bound. A message
-published to the client's own channels during `EXEC` is held and delivered after
-the transaction reply. Slow-client buffering and backpressure do not yet match
-Redis. Sharded Pub/Sub, keyspace
-notifications, and Pub/Sub ACLs remain pending. RESET clears subscriptions and
+replicated, and clients on other ReRu servers do not receive them. Each
+subscriber's output is buffered per connection and written by its own thread, so
+acknowledgements and messages are queued whole and never interleave; a publish
+does not wait for a slow reader and does not skip a live listener. A subscriber
+is disconnected when its buffered output exceeds 32 MiB, or when it stays above
+8 MiB for 60 seconds. A message published to the client's own channels during
+`EXEC` is held and delivered after the transaction reply. Sharded Pub/Sub,
+keyspace notifications, and Pub/Sub ACLs remain pending. RESET clears subscriptions and
 returns the connection to ordinary RESP2 command mode.
 
 ## Verification for this increment
