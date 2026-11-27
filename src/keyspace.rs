@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-use crate::{mark_modified, protocol, pubsub::glob_matches, remove_expired, Store, Value};
+use crate::{
+    eviction, mark_modified, protocol, pubsub::glob_matches, remove_expired, Store, Value,
+};
 use std::collections::hash_map::RandomState;
 use std::collections::VecDeque;
 use std::hash::BuildHasher;
@@ -19,8 +21,8 @@ pub fn valid_arity(command: &[Vec<u8>]) -> Option<bool> {
         Some(command.len() == 2)
     } else if name.eq_ignore_ascii_case(b"RANDOMKEY") {
         Some(command.len() == 1)
-    } else if name.eq_ignore_ascii_case(b"OBJECT") {
-        // queue_error and execute validate OBJECT subcommands in full.
+    } else if name.eq_ignore_ascii_case(b"OBJECT") || name.eq_ignore_ascii_case(b"MEMORY") {
+        // queue_error and execute validate OBJECT and MEMORY subcommands in full.
         Some(true)
     } else if name.eq_ignore_ascii_case(b"SCAN") {
         Some(command.len() >= 2 && command.len().is_multiple_of(2))
@@ -205,12 +207,33 @@ fn object_error(command: &[Vec<u8>]) -> Option<Vec<u8>> {
     None
 }
 
-/// Validate OBJECT when it is queued, so MULTI aborts like Redis does.
+fn memory_error(command: &[Vec<u8>]) -> Option<Vec<u8>> {
+    let Some(subcommand) = command.get(1) else {
+        return Some(protocol::error(
+            "wrong number of arguments for 'memory' command",
+        ));
+    };
+    if !subcommand.eq_ignore_ascii_case(b"USAGE") {
+        return Some(protocol::unknown_subcommand("MEMORY", subcommand));
+    }
+    if command.len() < 3 {
+        return Some(protocol::error(
+            "wrong number of arguments for 'memory|usage' command",
+        ));
+    }
+    None
+}
+
+/// Validate OBJECT and MEMORY when they are queued, so MULTI aborts like Redis
+/// does. Option syntax such as SAMPLES is checked when the command runs.
 pub fn queue_error(command: &[Vec<u8>]) -> Option<Vec<u8>> {
-    command[0]
-        .eq_ignore_ascii_case(b"OBJECT")
-        .then(|| object_error(command))
-        .flatten()
+    if command[0].eq_ignore_ascii_case(b"OBJECT") {
+        object_error(command)
+    } else if command[0].eq_ignore_ascii_case(b"MEMORY") {
+        memory_error(command)
+    } else {
+        None
+    }
 }
 
 fn object(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
@@ -229,6 +252,31 @@ fn object(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
         // Values are never shared between keys, so every key owns one reference.
         b":1\r\n".to_vec()
     }
+}
+
+fn memory(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
+    if let Some(error) = memory_error(command) {
+        return error;
+    }
+    // SAMPLES is validated for compatibility and then ignored: the estimator
+    // always walks the whole value instead of sampling nested elements.
+    for option in command[3..].chunks(2) {
+        if option.len() != 2 || !option[0].eq_ignore_ascii_case(b"SAMPLES") {
+            return protocol::error("syntax error");
+        }
+        match protocol::parse_int(&option[1]) {
+            Some(count) if count >= 0 => {}
+            Some(_) => return protocol::error("syntax error"),
+            None => return protocol::error("value is not an integer or out of range"),
+        }
+    }
+    let mut entries = store.entries.lock().unwrap();
+    remove_expired(&mut entries, &command[2]);
+    let Some(entry) = entries.get(&command[2]) else {
+        return b"$-1\r\n".to_vec();
+    };
+    // The same per-entry estimate that maxmemory accounting sums for the dataset.
+    format!(":{}\r\n", eviction::entry_bytes(&command[2], entry)).into_bytes()
 }
 
 fn scan(command: &[Vec<u8>], store: &Store) -> Vec<u8> {
@@ -361,6 +409,9 @@ fn expiry_arguments(command: &[Vec<u8>]) -> Result<(i64, i64, ExpiryConditions),
 pub fn execute(command: &[Vec<u8>], store: &Store) -> Option<Vec<u8>> {
     if command[0].eq_ignore_ascii_case(b"OBJECT") {
         return Some(object(command, store));
+    }
+    if command[0].eq_ignore_ascii_case(b"MEMORY") {
+        return Some(memory(command, store));
     }
     let valid = valid_arity(command)?;
     let name = &command[0];
