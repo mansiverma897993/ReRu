@@ -116,6 +116,7 @@ const COMMANDS: &[&str] = &[
     "lset",
     "ltrim",
     "lmpop",
+    "memory|usage",
     "mget",
     "migrate",
     "mset",
@@ -286,8 +287,8 @@ fn metadata(name: &str) -> Metadata {
         "restore" => -4,
         "zincrby" => 4,
         "client" | "config" | "acl" | "xgroup" | "xinfo" | "cluster" | "latency"
-        | "latency|reset" | "object" => -2,
-        "config|get" => -3,
+        | "latency|reset" | "object" | "memory" => -2,
+        "config|get" | "memory|usage" => -3,
         "config|set" => -4,
         "acl|whoami" => 2,
         "auth" | "pubsub" | "getex" | "lpop" | "rpop" | "hrandfield" | "spop" | "srandmember"
@@ -346,9 +347,8 @@ fn metadata(name: &str) -> Metadata {
         | "quit" | "randomkey" | "reset" | "save" | "scan" | "select" | "subscribe" | "time"
         | "unwatch" | "unsubscribe" | "xread" | "xreadgroup" | "latency" | "latency|history"
         | "latency|latest" | "latency|reset" | "xgroup" | "xinfo" | "lmpop" | "blmpop"
-        | "zmpop" | "bzmpop" | "sintercard" | "zintercard" | "zdiff" | "zinter" | "zunion" => {
-            (0, 0, 0)
-        }
+        | "zmpop" | "bzmpop" | "sintercard" | "zintercard" | "zdiff" | "zinter" | "zunion"
+        | "memory" => (0, 0, 0),
         "copy" | "rename" | "renamenx" | "smove" | "lmove" | "blmove" | "rpoplpush"
         | "brpoplpush" | "zrangestore" | "lcs" => (1, 2, 1),
         "geosearchstore" => (1, 2, 1),
@@ -368,7 +368,8 @@ fn metadata(name: &str) -> Metadata {
         | "xinfo|consumers"
         | "xinfo|stream"
         | "object|encoding"
-        | "object|refcount" => (2, 2, 1),
+        | "object|refcount"
+        | "memory|usage" => (2, 2, 1),
         _ => (1, 1, 1),
     };
 
@@ -467,7 +468,10 @@ pub(crate) fn queued_arity(command: &[Vec<u8>]) -> Option<bool> {
 /// Commands with dynamic key positions need their own argument parser.
 pub(crate) fn key_indices(command: &[Vec<u8>]) -> Option<Vec<usize>> {
     let root = String::from_utf8_lossy(command.first()?).to_ascii_lowercase();
-    let name = if matches!(root.as_str(), "xgroup" | "xinfo" | "cluster" | "object") {
+    let name = if matches!(
+        root.as_str(),
+        "xgroup" | "xinfo" | "cluster" | "object" | "memory"
+    ) {
         let subcommand = String::from_utf8_lossy(command.get(1)?).to_ascii_lowercase();
         format!("{root}|{subcommand}")
     } else {
@@ -651,6 +655,8 @@ mod tests {
             ("randomkey", (1, 0, 0, 0)),
             ("publish", (3, 0, 0, 0)),
             ("lcs", (-3, 1, 2, 1)),
+            ("memory", (-2, 0, 0, 0)),
+            ("memory|usage", (-3, 2, 2, 1)),
         ] {
             let actual = metadata(name);
             assert_eq!(
@@ -679,6 +685,7 @@ mod tests {
         check(&[b"LMPOP", b"2", b"a", b"b", b"LEFT"], &[2, 3]);
         check(&[b"ZUNIONSTORE", b"out", b"2", b"a", b"b"], &[1, 3, 4]);
         check(&[b"XGROUP", b"CREATE", b"stream", b"group", b"$"], &[2]);
+        check(&[b"MEMORY", b"USAGE", b"key", b"SAMPLES", b"5"], &[2]);
         check(&[b"CLUSTER", b"KEYSLOT", b"a"], &[]);
         check(&[b"LCS", b"a", b"b", b"IDX", b"WITHMATCHLEN"], &[1, 2]);
     }
