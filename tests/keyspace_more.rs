@@ -666,6 +666,118 @@ fn memory_usage_accepts_samples_and_leaves_the_key_unchanged() {
 }
 
 #[test]
+fn memory_usage_rejects_invalid_arguments() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"SET", b"key", b"value"]), ok());
+    assert_eq!(
+        client.call(&[b"MEMORY"]),
+        Reply::Error(b"ERR wrong number of arguments for 'memory' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE"]),
+        Reply::Error(b"ERR wrong number of arguments for 'memory|usage' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"memory", b"usage"]),
+        Reply::Error(b"ERR wrong number of arguments for 'memory|usage' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"FOO", b"key"]),
+        Reply::Error(b"ERR unknown subcommand 'FOO'. Try MEMORY HELP.".to_vec())
+    );
+    // Options are checked before the key is looked up, so a missing key
+    // reports the same errors as an existing one.
+    for key in [b"key".as_slice(), b"missing"] {
+        for options in [
+            &[b"SAMPLES".as_slice()] as &[&[u8]],
+            &[b"SAMPLES", b"-1"],
+            &[b"SAMPLES", b"5", b"extra"],
+            &[b"COUNT", b"5"],
+            &[b"extra"],
+        ] {
+            let mut command = vec![b"MEMORY".as_slice(), b"USAGE", key];
+            command.extend_from_slice(options);
+            assert_eq!(
+                client.call(&command),
+                Reply::Error(b"ERR syntax error".to_vec()),
+                "{command:?}"
+            );
+        }
+        for count in [b"abc".as_slice(), b"1.5", b"+5", b"9223372036854775808"] {
+            assert_eq!(
+                client.call(&[b"MEMORY", b"USAGE", key, b"SAMPLES", count]),
+                Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+            );
+        }
+    }
+    assert_eq!(client.call(&[b"GET", b"key"]), bulk(b"value"));
+}
+
+#[test]
+fn memory_usage_queue_errors_abort_the_transaction() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    for (command, error) in [
+        (
+            &[b"MEMORY".as_slice()] as &[&[u8]],
+            b"ERR wrong number of arguments for 'memory' command".as_slice(),
+        ),
+        (
+            &[b"MEMORY", b"USAGE"],
+            b"ERR wrong number of arguments for 'memory|usage' command",
+        ),
+        (
+            &[b"MEMORY", b"FOO", b"key"],
+            b"ERR unknown subcommand 'FOO'. Try MEMORY HELP.",
+        ),
+    ] {
+        assert_eq!(client.call(&[b"MULTI"]), ok());
+        assert_eq!(client.call(command), Reply::Error(error.to_vec()));
+        assert_eq!(
+            client.call(&[b"EXEC"]),
+            Reply::Error(b"EXECABORT Transaction discarded because of previous errors.".to_vec())
+        );
+    }
+
+    assert_eq!(client.call(&[b"MULTI"]), ok());
+    assert_eq!(
+        client.call(&[b"SET", b"queued", b"value"]),
+        client::queued()
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"queued"]),
+        client::queued()
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"queued", b"SAMPLES", b"5"]),
+        client::queued()
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"missing"]),
+        client::queued()
+    );
+    // MULTI checks the subcommand and its arity. Option syntax is reported by
+    // EXEC as that command's reply and does not abort the transaction.
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"queued", b"SAMPLES"]),
+        client::queued()
+    );
+    let replies = client.call(&[b"EXEC"]);
+    let expected = memory_usage(&mut client, b"queued");
+    assert_eq!(
+        replies,
+        client::array(vec![
+            ok(),
+            integer(expected),
+            integer(expected),
+            Reply::Bulk(None),
+            Reply::Error(b"ERR syntax error".to_vec()),
+        ])
+    );
+}
+
+#[test]
 fn copy_rejects_identical_source_and_destination() {
     let server = common::Server::start();
     let mut client = Client::new(&server);
