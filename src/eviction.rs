@@ -465,8 +465,9 @@ impl Eviction {
             || name.eq_ignore_ascii_case(b"FLUSHDB")
             || name.eq_ignore_ascii_case(b"FLUSHALL")
             || name.eq_ignore_ascii_case(b"CONFIG")
-            // OBJECT looks keys up without touching LRU or LFU state.
+            // OBJECT and MEMORY look keys up without touching LRU or LFU state.
             || name.eq_ignore_ascii_case(b"OBJECT")
+            || name.eq_ignore_ascii_case(b"MEMORY")
         {
             Vec::new()
         } else {
