@@ -778,6 +778,29 @@ fn memory_usage_queue_errors_abort_the_transaction() {
 }
 
 #[test]
+fn memory_usage_does_not_change_lru_order() {
+    let value = vec![b'v'; 100];
+    // The oldest key is evicted first. It must stay the oldest when MEMORY
+    // measures it, and when it merely shares its name with the subcommand.
+    for (oldest, measured) in [(b"a".as_slice(), b"a".as_slice()), (b"USAGE", b"b")] {
+        let server = common::Server::start_with(&[
+            "--maxmemory",
+            "400",
+            "--maxmemory-policy",
+            "allkeys-lru",
+        ]);
+        let mut client = Client::new(&server);
+        assert_eq!(client.call(&[b"SET", oldest, &value]), ok());
+        assert_eq!(client.call(&[b"SET", b"b", &value]), ok());
+        assert!(memory_usage(&mut client, measured) > 0);
+        assert_eq!(client.call(&[b"SET", b"c", &value]), ok());
+        assert_eq!(client.call(&[b"EXISTS", oldest]), integer(0));
+        assert_eq!(client.call(&[b"GET", b"b"]), bulk(&value));
+        assert_eq!(client.call(&[b"GET", b"c"]), bulk(&value));
+    }
+}
+
+#[test]
 fn copy_rejects_identical_source_and_destination() {
     let server = common::Server::start();
     let mut client = Client::new(&server);
