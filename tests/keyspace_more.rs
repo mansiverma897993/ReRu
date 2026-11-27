@@ -23,6 +23,24 @@ fn set_fields(client: &mut Client, key: &[u8], start: usize, end: usize, value: 
     }
 }
 
+fn memory_usage(client: &mut Client, key: &[u8]) -> i64 {
+    match client.call(&[b"MEMORY", b"USAGE", key]) {
+        Reply::Integer(bytes) => bytes,
+        other => panic!("MEMORY USAGE failed: {other:?}"),
+    }
+}
+
+fn used_memory(client: &mut Client) -> i64 {
+    let Reply::Bulk(Some(info)) = client.call(&[b"INFO", b"memory"]) else {
+        panic!("INFO memory should return a bulk string");
+    };
+    String::from_utf8(info)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("used_memory:")?.parse().ok())
+        .expect("INFO memory should report used_memory")
+}
+
 #[test]
 fn rename_copy_and_renamenx_preserve_source_expiry() {
     let server = common::Server::start();
@@ -531,6 +549,255 @@ fn object_encoding_reports_current_contents_after_in_place_writes() {
         client.call(&[b"OBJECT", b"ENCODING", b"ranged"]),
         bulk(b"embstr")
     );
+}
+
+#[test]
+fn memory_usage_grows_with_value_size_for_every_type() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    let mut total = 0;
+    for (key, create, grow) in [
+        (
+            b"string".as_slice(),
+            &[b"SET".as_slice(), b"string", b"value"] as &[&[u8]],
+            &[b"APPEND".as_slice(), b"string", b"-and-more"] as &[&[u8]],
+        ),
+        (
+            b"list",
+            &[b"RPUSH", b"list", b"a"],
+            &[b"RPUSH", b"list", b"b", b"c"],
+        ),
+        (
+            b"hash",
+            &[b"HSET", b"hash", b"field", b"value"],
+            &[b"HSET", b"hash", b"other", b"value"],
+        ),
+        (b"set", &[b"SADD", b"set", b"a"], &[b"SADD", b"set", b"b"]),
+        (
+            b"zset",
+            &[b"ZADD", b"zset", b"1", b"a"],
+            &[b"ZADD", b"zset", b"2", b"b"],
+        ),
+    ] {
+        assert!(!matches!(client.call(create), Reply::Error(_)));
+        let small = memory_usage(&mut client, key);
+        // The key name and the entry overhead are counted with the value.
+        assert!(small > key.len() as i64);
+        assert!(!matches!(client.call(grow), Reply::Error(_)));
+        let large = memory_usage(&mut client, key);
+        assert!(
+            large > small,
+            "{} did not grow: {small} then {large}",
+            String::from_utf8_lossy(key)
+        );
+        // INFO memory sums the same per-key estimate over the whole dataset.
+        total += large;
+        assert_eq!(used_memory(&mut client), total);
+    }
+}
+
+#[test]
+fn memory_usage_replies_nil_for_missing_and_expired_keys() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"missing"]),
+        Reply::Bulk(None)
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"missing", b"SAMPLES", b"5"]),
+        Reply::Bulk(None)
+    );
+    assert_eq!(
+        client.call(&[b"SET", b"expiring", b"value", b"PX", b"10"]),
+        ok()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(40));
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"expiring"]),
+        Reply::Bulk(None)
+    );
+}
+
+#[test]
+fn memory_usage_accepts_samples_and_leaves_the_key_unchanged() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    let mut watcher = Client::new(&server);
+    assert_eq!(
+        client.call(&[b"RPUSH", b"list", b"a", b"b", b"c"]),
+        integer(3)
+    );
+    assert_eq!(
+        client.call(&[b"SET", b"expiring", b"value", b"EX", b"100"]),
+        ok()
+    );
+    assert_eq!(watcher.call(&[b"WATCH", b"list", b"expiring"]), ok());
+    let expected = memory_usage(&mut client, b"list");
+    // SAMPLES is validated and ignored, so every count reports the same bytes.
+    for command in [
+        &[b"MEMORY".as_slice(), b"USAGE", b"list", b"SAMPLES", b"0"] as &[&[u8]],
+        &[b"MEMORY", b"USAGE", b"list", b"SAMPLES", b"5"],
+        &[
+            b"MEMORY",
+            b"USAGE",
+            b"list",
+            b"SAMPLES",
+            b"9223372036854775807",
+        ],
+        &[b"memory", b"usage", b"list"],
+        &[b"Memory", b"Usage", b"list", b"samples", b"1"],
+    ] {
+        assert_eq!(client.call(command), integer(expected));
+    }
+    assert!(memory_usage(&mut client, b"expiring") > 0);
+
+    // Reading the estimate is not a write: value, TTL and WATCH are untouched.
+    assert_eq!(
+        client.call(&[b"LRANGE", b"list", b"0", b"-1"]),
+        client::array(vec![bulk(b"a"), bulk(b"b"), bulk(b"c")])
+    );
+    assert_eq!(client.call(&[b"TTL", b"list"]), integer(-1));
+    assert_eq!(client.call(&[b"GET", b"expiring"]), bulk(b"value"));
+    assert!(matches!(client.call(&[b"TTL", b"expiring"]), Reply::Integer(ttl) if ttl > 0));
+    assert_eq!(watcher.call(&[b"MULTI"]), ok());
+    assert_eq!(watcher.call(&[b"LLEN", b"list"]), client::queued());
+    assert_eq!(watcher.call(&[b"EXEC"]), client::array(vec![integer(3)]));
+}
+
+#[test]
+fn memory_usage_rejects_invalid_arguments() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    assert_eq!(client.call(&[b"SET", b"key", b"value"]), ok());
+    assert_eq!(
+        client.call(&[b"MEMORY"]),
+        Reply::Error(b"ERR wrong number of arguments for 'memory' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE"]),
+        Reply::Error(b"ERR wrong number of arguments for 'memory|usage' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"memory", b"usage"]),
+        Reply::Error(b"ERR wrong number of arguments for 'memory|usage' command".to_vec())
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"FOO", b"key"]),
+        Reply::Error(b"ERR unknown subcommand 'FOO'. Try MEMORY HELP.".to_vec())
+    );
+    // Options are checked before the key is looked up, so a missing key
+    // reports the same errors as an existing one.
+    for key in [b"key".as_slice(), b"missing"] {
+        for options in [
+            &[b"SAMPLES".as_slice()] as &[&[u8]],
+            &[b"SAMPLES", b"-1"],
+            &[b"SAMPLES", b"5", b"extra"],
+            &[b"COUNT", b"5"],
+            &[b"extra"],
+        ] {
+            let mut command = vec![b"MEMORY".as_slice(), b"USAGE", key];
+            command.extend_from_slice(options);
+            assert_eq!(
+                client.call(&command),
+                Reply::Error(b"ERR syntax error".to_vec()),
+                "{command:?}"
+            );
+        }
+        for count in [b"abc".as_slice(), b"1.5", b"+5", b"9223372036854775808"] {
+            assert_eq!(
+                client.call(&[b"MEMORY", b"USAGE", key, b"SAMPLES", count]),
+                Reply::Error(b"ERR value is not an integer or out of range".to_vec())
+            );
+        }
+    }
+    assert_eq!(client.call(&[b"GET", b"key"]), bulk(b"value"));
+}
+
+#[test]
+fn memory_usage_queue_errors_abort_the_transaction() {
+    let server = common::Server::start();
+    let mut client = Client::new(&server);
+    for (command, error) in [
+        (
+            &[b"MEMORY".as_slice()] as &[&[u8]],
+            b"ERR wrong number of arguments for 'memory' command".as_slice(),
+        ),
+        (
+            &[b"MEMORY", b"USAGE"],
+            b"ERR wrong number of arguments for 'memory|usage' command",
+        ),
+        (
+            &[b"MEMORY", b"FOO", b"key"],
+            b"ERR unknown subcommand 'FOO'. Try MEMORY HELP.",
+        ),
+    ] {
+        assert_eq!(client.call(&[b"MULTI"]), ok());
+        assert_eq!(client.call(command), Reply::Error(error.to_vec()));
+        assert_eq!(
+            client.call(&[b"EXEC"]),
+            Reply::Error(b"EXECABORT Transaction discarded because of previous errors.".to_vec())
+        );
+    }
+
+    assert_eq!(client.call(&[b"MULTI"]), ok());
+    assert_eq!(
+        client.call(&[b"SET", b"queued", b"value"]),
+        client::queued()
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"queued"]),
+        client::queued()
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"queued", b"SAMPLES", b"5"]),
+        client::queued()
+    );
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"missing"]),
+        client::queued()
+    );
+    // MULTI checks the subcommand and its arity. Option syntax is reported by
+    // EXEC as that command's reply and does not abort the transaction.
+    assert_eq!(
+        client.call(&[b"MEMORY", b"USAGE", b"queued", b"SAMPLES"]),
+        client::queued()
+    );
+    let replies = client.call(&[b"EXEC"]);
+    let expected = memory_usage(&mut client, b"queued");
+    assert_eq!(
+        replies,
+        client::array(vec![
+            ok(),
+            integer(expected),
+            integer(expected),
+            Reply::Bulk(None),
+            Reply::Error(b"ERR syntax error".to_vec()),
+        ])
+    );
+}
+
+#[test]
+fn memory_usage_does_not_change_lru_order() {
+    let value = vec![b'v'; 100];
+    // The oldest key is evicted first. It must stay the oldest when MEMORY
+    // measures it, and when it merely shares its name with the subcommand.
+    for (oldest, measured) in [(b"a".as_slice(), b"a".as_slice()), (b"USAGE", b"b")] {
+        let server = common::Server::start_with(&[
+            "--maxmemory",
+            "400",
+            "--maxmemory-policy",
+            "allkeys-lru",
+        ]);
+        let mut client = Client::new(&server);
+        assert_eq!(client.call(&[b"SET", oldest, &value]), ok());
+        assert_eq!(client.call(&[b"SET", b"b", &value]), ok());
+        assert!(memory_usage(&mut client, measured) > 0);
+        assert_eq!(client.call(&[b"SET", b"c", &value]), ok());
+        assert_eq!(client.call(&[b"EXISTS", oldest]), integer(0));
+        assert_eq!(client.call(&[b"GET", b"b"]), bulk(&value));
+        assert_eq!(client.call(&[b"GET", b"c"]), bulk(&value));
+    }
 }
 
 #[test]

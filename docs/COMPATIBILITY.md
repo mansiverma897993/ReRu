@@ -18,7 +18,7 @@ tests; it does not certify complete compatibility with Redis.
 | Bitmaps | `SETBIT`, `GETBIT`, `BITCOUNT`, `BITOP`, `BITPOS`, `BITFIELD`, `BITFIELD_RO` | Bitmaps stored as strings, byte/bit count ranges, AND/OR/XOR/NOT; bitfield GET/SET/INCRBY, signed/unsigned widths, `#` offsets and WRAP/SAT/FAIL overflow modes |
 | HyperLogLog | `PFADD`, `PFCOUNT`, `PFMERGE` | Approximate distinct counts, multi-key unions, binary members, Redis dense/sparse interchange, cached cardinality |
 | Geospatial | `GEOADD`, `GEOPOS`, `GEOHASH`, `GEODIST`, `GEOSEARCH`, `GEOSEARCHSTORE` | Geo points use sorted-set scores; NX/XX/CH, positions and distances, radius/box search, sort/count, decorated results, and destination storing |
-| Keyspace | `TYPE`, `DEL`, `UNLINK`, `EXISTS`, `TOUCH`, `DBSIZE`, `KEYS`, `SCAN`, `RANDOMKEY`, `COPY`, `RENAME`, `RENAMENX`, `TTL`, `PTTL`, `EXPIRE`, `PEXPIRE`, `EXPIREAT`, `PEXPIREAT`, `EXPIRETIME`, `PEXPIRETIME`, `PERSIST`, `OBJECT ENCODING`, `OBJECT REFCOUNT`, `FLUSHDB`, `FLUSHALL` | Multiple keys, glob and type filtered scanning, rename/copy with TTL, relative/absolute expiry conditions with `EXPIRETIME` rounding half up and `PEXPIRETIME` exact for absolute deadlines, advisory encoding labels with Redis 8 thresholds, constant reference counts, whole-database flush |
+| Keyspace | `TYPE`, `DEL`, `UNLINK`, `EXISTS`, `TOUCH`, `DBSIZE`, `KEYS`, `SCAN`, `RANDOMKEY`, `COPY`, `RENAME`, `RENAMENX`, `TTL`, `PTTL`, `EXPIRE`, `PEXPIRE`, `EXPIREAT`, `PEXPIREAT`, `EXPIRETIME`, `PEXPIRETIME`, `PERSIST`, `OBJECT ENCODING`, `OBJECT REFCOUNT`, `MEMORY USAGE`, `FLUSHDB`, `FLUSHALL` | Multiple keys, glob and type filtered scanning, rename/copy with TTL, relative/absolute expiry conditions with `EXPIRETIME` rounding half up and `PEXPIRETIME` exact for absolute deadlines, advisory encoding labels with Redis 8 thresholds, constant reference counts, logical per-key memory estimates, whole-database flush |
 | Transactions | `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` | Queuing, atomic execution relative to other commands, runtime errors, optimistic locking |
 | Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `PUBSUB` | Binary channels/messages, glob patterns, RESP2 subscribed mode, CHANNELS/NUMSUB/NUMPAT; local process only. Each subscriber has its own output buffer and writer thread; frames are queued whole, a publish never waits for a slow reader or skips a live listener, and a subscriber is dropped only above 32 MiB of buffered output or after staying above 8 MiB for 60 seconds. `UNSUBSCRIBE`/`PUNSUBSCRIBE` without names replies in sorted order where Redis uses hash order |
 | Connection close | `QUIT` | Ignores extra arguments, replies OK, and closes the connection |
@@ -157,6 +157,19 @@ keeps `listpackex` for the life of the hash once any field TTL was set; ReRu
 returns to `listpack` when the last deadline is cleared, deleted, or expires.
 `OBJECT REFCOUNT` always returns `1` because values are never shared between
 keys. `OBJECT FREQ`, `OBJECT IDLETIME`, and `OBJECT HELP` are not implemented.
+
+`MEMORY USAGE key [SAMPLES count]` returns the estimated bytes for one key, or
+nil when the key is missing or expired. The number is that key's share of the
+logical dataset estimate used for `maxmemory` and `INFO memory`: the key name,
+a per-type value estimate, and fixed per-entry overhead. It is **not** Redis
+allocator memory or process RSS, and it does not match the number Redis reports
+for the same value. `SAMPLES` is accepted but ignored, because the estimate
+always covers the whole value; the count must still be a non-negative integer,
+and a missing or negative count or any other option returns `ERR syntax error`.
+The lookup does not change LRU or LFU state. `MEMORY DOCTOR`, `MEMORY HELP`,
+`MEMORY MALLOC-STATS`, `MEMORY PURGE`, and `MEMORY STATS` are not implemented.
+Redis documents
+[MEMORY USAGE](https://redis.io/docs/latest/commands/memory-usage/).
 
 AOF replay rewrites one key per batch. Collection keys are split by argument
 count and a 32 MiB payload budget. String values larger than that budget are

@@ -465,8 +465,9 @@ impl Eviction {
             || name.eq_ignore_ascii_case(b"FLUSHDB")
             || name.eq_ignore_ascii_case(b"FLUSHALL")
             || name.eq_ignore_ascii_case(b"CONFIG")
-            // OBJECT looks keys up without touching LRU or LFU state.
+            // OBJECT and MEMORY look keys up without touching LRU or LFU state.
             || name.eq_ignore_ascii_case(b"OBJECT")
+            || name.eq_ignore_ascii_case(b"MEMORY")
         {
             Vec::new()
         } else {
@@ -575,7 +576,7 @@ impl Eviction {
     }
 }
 
-fn entry_bytes(key: &[u8], entry: &Entry) -> usize {
+pub(crate) fn entry_bytes(key: &[u8], entry: &Entry) -> usize {
     let content = match &entry.value {
         Value::String(bytes) => bytes.len(),
         Value::List(items) => items.iter().map(|item| item.len() + 16).sum(),
