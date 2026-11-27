@@ -10,6 +10,10 @@ Because ReRu is pre-1.0, minor versions may include breaking changes.
 
 ### Added
 
+- Added `MEMORY USAGE key [SAMPLES count]`, which reports ReRu's logical
+  per-key estimate (key name, value and entry overhead) rather than allocator
+  memory or process RSS. `SAMPLES` is validated and ignored.
+
 - Added connection-local `CLIENT REPLY ON|OFF|SKIP` with raw RESP reply
   suppression, pipeline and transaction handling, and RESET recovery.
 

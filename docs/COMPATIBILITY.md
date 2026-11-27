@@ -158,6 +158,19 @@ returns to `listpack` when the last deadline is cleared, deleted, or expires.
 `OBJECT REFCOUNT` always returns `1` because values are never shared between
 keys. `OBJECT FREQ`, `OBJECT IDLETIME`, and `OBJECT HELP` are not implemented.
 
+`MEMORY USAGE key [SAMPLES count]` returns the estimated bytes for one key, or
+nil when the key is missing or expired. The number is that key's share of the
+logical dataset estimate used for `maxmemory` and `INFO memory`: the key name,
+a per-type value estimate, and fixed per-entry overhead. It is **not** Redis
+allocator memory or process RSS, and it does not match the number Redis reports
+for the same value. `SAMPLES` is accepted but ignored, because the estimate
+always covers the whole value; the count must still be a non-negative integer,
+and a missing or negative count or any other option returns `ERR syntax error`.
+The lookup does not change LRU or LFU state. `MEMORY DOCTOR`, `MEMORY HELP`,
+`MEMORY MALLOC-STATS`, `MEMORY PURGE`, and `MEMORY STATS` are not implemented.
+Redis documents
+[MEMORY USAGE](https://redis.io/docs/latest/commands/memory-usage/).
+
 AOF replay rewrites one key per batch. Collection keys are split by argument
 count and a 32 MiB payload budget. String values larger than that budget are
 written as a SET followed by APPEND chunks, so a string grown past the 256 MiB
